@@ -15,7 +15,14 @@ import com.nuvio.app.features.home.HeroDiscoveryBadgeTarget
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.cacheKey
 import com.nuvio.app.features.home.PosterShape
-import com.nuvio.app.features.mdblist.MdbListSettingsRepository
+import com.nuvio.app.features.posterservice.CustomPosterKeys
+import com.nuvio.app.features.posterservice.CustomPosterSettings
+import com.nuvio.app.features.posterservice.CustomPosterScreen
+import com.nuvio.app.features.posterservice.CustomPosterSettingsRepository
+import com.nuvio.app.features.posterservice.cacheToken
+import com.nuvio.app.features.posterservice.customPosterTemplateNeedsImdbId
+import com.nuvio.app.features.posterservice.resolveCustomPosterIds
+import com.nuvio.app.features.posterservice.withCustomPosters
 import com.nuvio.app.features.watchprogress.CurrentDateProvider
 import com.nuvio.app.features.watchprogress.WatchProgressClock
 import com.nuvio.app.features.watchprogress.preferPreciseReleaseDate
@@ -333,7 +340,8 @@ object TmdbMetadataService {
         if (!settings.enabled || !settings.hasApiKey) return@withContext null
         val language = normalizeTmdbLanguage(settings.language)
         val normalizedSourceType = normalizeEntitySourceType(sourceType)
-        val cacheKey = "${entityKind.routeValue}:$entityId:$normalizedSourceType:$language:${entityPosterCacheKey(settings)}"
+        val cacheKey = "${entityKind.routeValue}:$entityId:$normalizedSourceType:$language:" +
+            entityPosterCacheKey(CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Details))
         entityBrowseCache[cacheKey]?.let { return@withContext it }
 
         val (header, rails) = coroutineScope {
@@ -404,7 +412,7 @@ object TmdbMetadataService {
             return TmdbEntityRailPageResult(items = emptyList(), hasMore = false)
         }
 
-        val posterSettings = TmdbSettingsRepository.snapshot()
+        val posterSettings = CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Details)
         val cacheKey = "${entityKind.routeValue}:$entityId:${mediaType.value}:${railType.value}:$language:" +
             "${entityPosterCacheKey(posterSettings)}:page:$page"
         entityRailCache[cacheKey]?.let { return it }
@@ -604,7 +612,7 @@ object TmdbMetadataService {
         language: String,
         page: Int,
     ): TmdbEntityRailPageResult {
-        val posterSettings = TmdbSettingsRepository.snapshot()
+        val posterSettings = CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Details)
         val cacheKey = "${target.cacheKey()}:${mediaType.value}:${railType.value}:$language:" +
             "${entityPosterCacheKey(posterSettings)}:page:$page"
         badgeRailCache[cacheKey]?.let { return it }
@@ -636,7 +644,7 @@ object TmdbMetadataService {
         mediaType: TmdbEntityMediaType,
         language: String,
         page: Int,
-        posterSettings: TmdbSettings,
+        posterSettings: CustomPosterSettings,
     ): TmdbEntityRailPageResult {
         val ids = HeroDiscoveryAwards.browseIds(
             award = target.award,
@@ -667,7 +675,7 @@ object TmdbMetadataService {
 
     private suspend fun fetchTrendingRail(
         mediaType: TmdbEntityMediaType,
-        posterSettings: TmdbSettings,
+        posterSettings: CustomPosterSettings,
     ): TmdbEntityRailPageResult {
         val results = TmdbService.fetchTrending(mediaType.value)
         val items = coroutineScope {
@@ -695,7 +703,7 @@ object TmdbMetadataService {
         railType: TmdbEntityRailType,
         language: String,
         page: Int,
-        posterSettings: TmdbSettings,
+        posterSettings: CustomPosterSettings,
     ): TmdbEntityRailPageResult {
         val requiredStatus = when (target) {
             HeroDiscoveryBadgeTarget.NowPlaying -> "Cinema"
@@ -746,7 +754,7 @@ object TmdbMetadataService {
         railType: TmdbEntityRailType,
         language: String,
         page: Int,
-        posterSettings: TmdbSettings,
+        posterSettings: CustomPosterSettings,
         requiredStatus: String,
     ): TmdbEntityRailPageResult {
         val firstSourcePage = (page - 1) * RELEASE_STATUS_SOURCE_PAGES_PER_RAIL_PAGE + 1
@@ -922,7 +930,7 @@ object TmdbMetadataService {
     private suspend fun mapEntityDiscoverResult(
         result: TmdbDiscoverResult,
         mediaType: TmdbEntityMediaType,
-        posterSettings: TmdbSettings,
+        posterSettings: CustomPosterSettings,
     ): MetaPreview? = buildEntityPreview(
         tmdbId = result.id,
         title = result.title?.takeIf { it.isNotBlank() }
@@ -943,7 +951,7 @@ object TmdbMetadataService {
     private suspend fun mapEntitySearchResult(
         result: TmdbSearchResult,
         mediaType: TmdbEntityMediaType,
-        posterSettings: TmdbSettings,
+        posterSettings: CustomPosterSettings,
     ): MetaPreview? = buildEntityPreview(
         tmdbId = result.id,
         title = result.title?.takeIf { it.isNotBlank() } ?: result.name?.takeIf { it.isNotBlank() },
@@ -970,7 +978,7 @@ object TmdbMetadataService {
         overview: String?,
         date: String?,
         mediaType: TmdbEntityMediaType,
-        posterSettings: TmdbSettings,
+        posterSettings: CustomPosterSettings,
     ): MetaPreview? {
         if (tmdbId <= 0 || title.isNullOrBlank()) return null
         val poster = buildImageUrl(posterPath, "w500")
@@ -987,36 +995,29 @@ object TmdbMetadataService {
             description = overview?.takeIf { it.isNotBlank() },
             releaseInfo = date?.take(4),
         )
-        val mdbListApiKey = MdbListSettingsRepository.snapshot().apiKey
-        var styled = base.withCustomLibraryPoster(
-            settings = posterSettings,
-            imdbId = null,
-            tmdbId = tmdbId,
-            mdbListApiKey = mdbListApiKey,
-        )
-        if (styled === base && posterSettings.customPosterTemplateNeedsImdbId()) {
-            val posterIds = resolveCustomPosterIds(
+        if (!posterSettings.isActive) return base
+        val keys = CustomPosterKeys.snapshot()
+        // Only pay for the /find call when a template actually names {imdb_id}; TmdbService caches
+        // and single-flights it, so the cost is one request per title ever.
+        val imdbId = if (posterSettings.customPosterTemplateNeedsImdbId()) {
+            resolveCustomPosterIds(
                 settings = posterSettings,
                 imdbId = null,
                 tmdbId = tmdbId,
                 type = type,
-            )
-            styled = base.withCustomLibraryPoster(
-                settings = posterSettings,
-                imdbId = posterIds.imdbId,
-                tmdbId = posterIds.tmdbId ?: tmdbId,
-                mdbListApiKey = mdbListApiKey,
-            )
+            ).imdbId
+        } else {
+            null
         }
-        return styled
+        return base.withCustomPosters(
+            settings = posterSettings,
+            imdbId = imdbId,
+            tmdbId = tmdbId,
+            keys = keys,
+        )
     }
 
-    private fun entityPosterCacheKey(settings: TmdbSettings): String =
-        if (settings.libraryPosterEnabled && settings.libraryPosterUrlTemplate.isNotBlank()) {
-            "poster:${settings.libraryPosterUrlTemplate.hashCode()}"
-        } else {
-            "poster:off"
-        }
+    private fun entityPosterCacheKey(settings: CustomPosterSettings): String = settings.cacheToken()
 
     private fun buildEntityMediaOrder(
         entityKind: TmdbEntityKind,
@@ -1411,10 +1412,19 @@ object TmdbMetadataService {
                 )
             }
             val credits = async {
-                fetch<TmdbCreditsResponse>(
-                    endpoint = "$mediaType/$numericId/credits",
-                    query = mapOf("language" to normalizedLanguage),
-                )
+                // A series' /credits is only its latest season's cast, so anyone who left earlier
+                // was missing. aggregate_credits covers every season.
+                if (mediaType == "tv") {
+                    fetch<TmdbAggregateCreditsResponse>(
+                        endpoint = "tv/$numericId/aggregate_credits",
+                        query = mapOf("language" to normalizedLanguage),
+                    )?.toStandard()
+                } else {
+                    fetch<TmdbCreditsResponse>(
+                        endpoint = "$mediaType/$numericId/credits",
+                        query = mapOf("language" to normalizedLanguage),
+                    )
+                }
             }
             val images = async {
                 fetch<TmdbImagesResponse>(
@@ -1652,7 +1662,7 @@ object TmdbMetadataService {
         ) ?: return null to emptyList()
 
         val items = response.parts
-            .sortedBy { it.releaseDate ?: "9999" }
+            .sortedBy { it.releaseDate?.takeIf(String::isNotBlank) ?: "9999" }
             .mapNotNull { part ->
                 val title = part.title?.trim()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
                 MetaPreview(
@@ -2218,6 +2228,78 @@ private data class TmdbCreator(
 private data class TmdbCreditsResponse(
     val cast: List<TmdbCastMember> = emptyList(),
     val crew: List<TmdbCrewMember> = emptyList(),
+)
+
+/** Most people a series keeps from aggregate_credits, by episode count; long runs list over a thousand. */
+private const val AGGREGATE_CAST_LIMIT = 60
+private const val AGGREGATE_CREW_LIMIT = 60
+
+@Serializable
+private data class TmdbAggregateCreditsResponse(
+    val cast: List<TmdbAggregateCastMember> = emptyList(),
+    val crew: List<TmdbAggregateCrewMember> = emptyList(),
+) {
+    /**
+     * Folds the per-role lists into the plain credits shape the rest of this file reads. Each
+     * person is ranked by how many episodes they appear in, so series regulars lead and the
+     * one-episode guests are what the limit cuts; a person's character is their longest-running role.
+     */
+    fun toStandard(): TmdbCreditsResponse = TmdbCreditsResponse(
+        cast = cast
+            .sortedByDescending { it.totalEpisodeCount ?: it.roles.sumOf { role -> role.episodeCount ?: 0 } }
+            .take(AGGREGATE_CAST_LIMIT)
+            .map { member ->
+                TmdbCastMember(
+                    id = member.id,
+                    name = member.name,
+                    character = member.roles.maxByOrNull { it.episodeCount ?: 0 }?.character,
+                    profilePath = member.profilePath,
+                )
+            },
+        crew = crew
+            .sortedByDescending { it.totalEpisodeCount ?: it.jobs.sumOf { job -> job.episodeCount ?: 0 } }
+            .take(AGGREGATE_CREW_LIMIT)
+            .flatMap { member ->
+                member.jobs.map { job ->
+                    TmdbCrewMember(
+                        id = member.id,
+                        name = member.name,
+                        job = job.job,
+                        profilePath = member.profilePath,
+                    )
+                }
+            },
+    )
+}
+
+@Serializable
+private data class TmdbAggregateCastMember(
+    val id: Int? = null,
+    val name: String? = null,
+    val roles: List<TmdbAggregateRole> = emptyList(),
+    @SerialName("total_episode_count") val totalEpisodeCount: Int? = null,
+    @SerialName("profile_path") val profilePath: String? = null,
+)
+
+@Serializable
+private data class TmdbAggregateRole(
+    val character: String? = null,
+    @SerialName("episode_count") val episodeCount: Int? = null,
+)
+
+@Serializable
+private data class TmdbAggregateCrewMember(
+    val id: Int? = null,
+    val name: String? = null,
+    val jobs: List<TmdbAggregateJob> = emptyList(),
+    @SerialName("total_episode_count") val totalEpisodeCount: Int? = null,
+    @SerialName("profile_path") val profilePath: String? = null,
+)
+
+@Serializable
+private data class TmdbAggregateJob(
+    val job: String? = null,
+    @SerialName("episode_count") val episodeCount: Int? = null,
 )
 
 @Serializable

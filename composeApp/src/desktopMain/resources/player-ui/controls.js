@@ -21,6 +21,8 @@ const seekThumbnailChapter = document.getElementById("seekThumbnailChapter");
 const seekThumbnailTime = document.getElementById("seekThumbnailTime");
 const positionLabel = document.getElementById("position");
 const durationLabel = document.getElementById("duration");
+const minimalTime = document.getElementById("minimalTime");
+const minimalTimeSeparator = document.getElementById("minimalTimeSeparator");
 const bufferingStatus = document.getElementById("bufferingStatus");
 const playbackError = document.getElementById("playbackError");
 const playbackErrorTitle = document.getElementById("playbackErrorTitle");
@@ -51,10 +53,14 @@ const speedLabel = document.getElementById("speedLabel");
 const speedButton = document.getElementById("speedButton");
 const playerVolumeSlider = document.getElementById("playerVolumeSlider");
 const playerVolumeIcon = document.getElementById("playerVolumeIcon");
+const playerVolumeControl = document.getElementById("playerVolumeControl");
+const volumeMuteButton = document.getElementById("volumeMuteButton");
 const controlTooltip = document.getElementById("controlTooltip");
 const actionRow = document.querySelector(".action-row");
 const actionOverflowButton = document.getElementById("actionOverflowButton");
 const actionOverflowMenu = document.getElementById("actionOverflowMenu");
+const ultraMenuVolume = document.getElementById("ultraMenuVolume");
+const ultraMenuActions = document.getElementById("ultraMenuActions");
 let actionOverflowOpen = false;
 const subtitlesLabel = document.getElementById("subtitlesLabel");
 const audioLabel = document.getElementById("audioLabel");
@@ -90,7 +96,6 @@ const openingMessage = document.getElementById("openingMessage");
 const openingProgressTrack = document.getElementById("openingProgressTrack");
 const openingProgressBar = document.getElementById("openingProgressBar");
 const parentalGuide = document.getElementById("parentalGuide");
-const parentalGuideLine = document.getElementById("parentalGuideLine");
 const parentalGuideList = document.getElementById("parentalGuideList");
 const volumePill = document.getElementById("volumePill");
 const volumePillIcon = document.getElementById("volumePillIcon");
@@ -98,6 +103,11 @@ const volumePillLabel = document.getElementById("volumePillLabel");
 const skipPrompt = document.getElementById("skipPrompt");
 const skipPromptLabel = document.getElementById("skipPromptLabel");
 const skipPromptProgress = document.getElementById("skipPromptProgress");
+const skipSubmitToast = document.getElementById("skipSubmitToast");
+const skipSubmitToastTitle = document.getElementById("skipSubmitToastTitle");
+const skipSubmitToastDetail = document.getElementById("skipSubmitToastDetail");
+const skipSubmitToastHint = document.getElementById("skipSubmitToastHint");
+const skipSubmitToastProgress = document.getElementById("skipSubmitToastProgress");
 const nextEpisodeCard = document.getElementById("nextEpisodeCard");
 const nextEpisodeThumb = document.getElementById("nextEpisodeThumb");
 const nextEpisodeHeader = document.getElementById("nextEpisodeHeader");
@@ -350,6 +360,12 @@ let state = {
   controlsVisible: true,
   mouseMoveRevealsControlsEnabled: false,
   legacyHudEnabled: false,
+  minimalHudEnabled: false,
+  minimalHudPillsEnabled: false,
+  ultraHudEnabled: false,
+  officialHudEnabled: false,
+  seekHandleEnabled: true,
+  hudVignetteEnabled: true,
   alwaysShowClock: false,
   playbackInfoPanelEnabled: false,
   activeSubtitleLabel: "",
@@ -374,6 +390,16 @@ let state = {
   skipPromptStartMs: 0,
   skipPromptEndMs: 0,
   skipPromptDismissed: false,
+  skipKeyAction: "",
+  skipIntervalKeyLabel: "Tab",
+  skipSubmitToastVisible: false,
+  skipSubmitToastPhase: "",
+  skipSubmitToastTitle: "",
+  skipSubmitToastDetail: "",
+  skipSubmitToastHint: "",
+  skipSubmitToastAccepted: false,
+  skipSubmitToastKey: "",
+  skipSubmitToastDismissible: false,
   nextEpisodeVisible: false,
   nextEpisodeHeaderLabel: "Next episode",
   nextEpisodeTitle: "",
@@ -505,6 +531,7 @@ let skipPromptWasDismissed = false;
 let skipPromptAutoHidden = false;
 let skipPromptAutoHideTimer = 0;
 let skipPromptAutoHideActive = false;
+let skipSubmitToastKey = "";
 let pauseMetadataReady = false;
 let pauseMetadataTimer = 0;
 let pauseMetadataEligibilityKey = "";
@@ -679,12 +706,6 @@ const hideParentalGuide = () => {
 
 const renderParentalGuideRows = warnings => {
   parentalGuideList.innerHTML = "";
-  const rowHeight = 18;
-  const rowGap = 2;
-  const totalHeight = warnings.length > 0
-    ? (rowHeight * warnings.length) + (rowGap * (warnings.length - 1))
-    : 0;
-  parentalGuideLine.style.height = `${totalHeight}px`;
 
   warnings.forEach(warning => {
     const row = document.createElement("div");
@@ -790,12 +811,15 @@ const applyTheme = () => {
   setColor("--theme-accent", state.themeAccentColor, "#2f6fed");
   setColor("--theme-accent-strong", state.themeAccentStrongColor, "#3c7bff");
   // A paint, not a colour: cssColorOrFallback would reject the gradient form.
-  style.setProperty(
-    "--theme-accent-fill",
-    typeof state.themeAccentFill === "string" && state.themeAccentFill.trim()
-      ? state.themeAccentFill.trim()
-      : "var(--theme-accent)",
-  );
+  const accentFill = typeof state.themeAccentFill === "string" ? state.themeAccentFill.trim() : "";
+  style.setProperty("--theme-accent-fill", accentFill || "var(--theme-accent)");
+  // The same paint again, but only when it really is a gradient. The official layout's seek fill
+  // falls back to the plain timeline colour on a flat theme, as it does upstream.
+  if (accentFill.includes("gradient(")) {
+    style.setProperty("--theme-accent-gradient", accentFill);
+  } else {
+    style.removeProperty("--theme-accent-gradient");
+  }
   setColor("--theme-on-accent", state.themeOnAccentColor, "#fff");
   setColor("--theme-focus", state.themeFocusColor, "#9ecaff");
   setColor("--theme-selected-surface", state.themeSelectedSurfaceColor, "#26384f");
@@ -866,6 +890,50 @@ durationLabel.addEventListener("click", event => {
   applyDurationLabel();
 });
 
+/**
+ * The minimal layout (user setting; unrelated to the width tier class `hud-minimal`) reads the
+ * time as one "position / duration" readout beside the volume instead of flanking the seek bar.
+ * The two labels are MOVED rather than mirrored so the remaining-time toggle, its title and
+ * [setProgress] keep working on the same elements. Reverting puts them back around #timeline in
+ * authored order.
+ */
+let appliedMinimalHudTime = false;
+const applyMinimalHudTimeLayout = enabled => {
+  if (!minimalTime || !minimalTimeSeparator || enabled === appliedMinimalHudTime) return;
+  appliedMinimalHudTime = enabled;
+  if (enabled) {
+    minimalTime.insertBefore(positionLabel, minimalTimeSeparator);
+    minimalTime.appendChild(durationLabel);
+    minimalTime.setAttribute("aria-hidden", "false");
+    return;
+  }
+  const timelineRow = timeline.parentElement;
+  timelineRow.insertBefore(positionLabel, timeline);
+  timelineRow.appendChild(durationLabel);
+  minimalTime.setAttribute("aria-hidden", "true");
+};
+
+/**
+ * The ultra layout has no volume control in the bar; the mute button + slider live in the gear
+ * popover's header row instead. Moved, like the minimal time labels, so the drag/mute/pill wiring
+ * on #playerVolumeControl keeps working untouched. Reverting puts it back at the head of
+ * .time-cluster (before #minimalTime) in authored order.
+ */
+let appliedUltraHudVolume = false;
+const applyUltraHudLayout = enabled => {
+  if (!ultraMenuVolume || !playerVolumeControl || !minimalTime || enabled === appliedUltraHudVolume) return;
+  appliedUltraHudVolume = enabled;
+  if (enabled) {
+    ultraMenuVolume.appendChild(playerVolumeControl);
+  } else {
+    minimalTime.parentElement.insertBefore(playerVolumeControl, minimalTime);
+  }
+  // The same toggle is "the rest of the icons" everywhere else and "the options" here.
+  if (actionOverflowButton) actionOverflowButton.dataset.tooltip = enabled ? "Options" : "More controls";
+  // The fold rule changes with the layout (everything folds in ultra), so re-measure.
+  invalidateActionRowOverflow();
+};
+
 const setProgress = (positionMs, durationMs) => {
   const percent = durationMs > 0 ? Math.max(0, Math.min(100, positionMs / durationMs * 100)) : 0;
   seek.value = Math.round(percent * 10);
@@ -924,6 +992,7 @@ const hideChapterTooltip = () => {
   chapterTooltip.textContent = "";
 };
 
+const SEEK_THUMBNAIL_SETTLE_MS = 220;
 const seekThumbnailCache = new Map();
 let seekThumbnailRequestTimer = 0;
 let pendingSeekThumbnailPosition = -1;
@@ -973,9 +1042,13 @@ const showSeekThumbnailAt = event => {
   if (pendingSeekThumbnailPosition === thumbnailPositionMs) return;
   pendingSeekThumbnailPosition = thumbnailPositionMs;
   window.clearTimeout(seekThumbnailRequestTimer);
+  // Each request is a fresh HTTP range open on the preview stream, against the same host as the
+  // main player. Only ask once the pointer has settled on a spot: sweeping across the bar used to
+  // fire a request per 5 s bucket crossed, enough to trip a debrid CDN's open-rate limit and make
+  // the *next real seek* fail with a 429.
   seekThumbnailRequestTimer = window.setTimeout(() => {
     send("seekThumbnail", thumbnailPositionMs);
-  }, 24);
+  }, SEEK_THUMBNAIL_SETTLE_MS);
 };
 
 window.nuvioSeekThumbnailReady = (positionMs, dataUrl) => {
@@ -1127,6 +1200,17 @@ const setImageSource = (element, source, options) => {
   return url;
 };
 
+/**
+ * A logo whose fetch failed counts as no logo, so the caller falls back to the title text instead
+ * of leaving an empty slot -- or, on the pause overlay, Chrome's broken-image glyph: that <img>
+ * has CSS dimensions, so a failed load paints as a bordered box. The error lands after the render
+ * that set the src, hence the re-render on exhaustion (single-shot: no retry schedule).
+ */
+const usableLogoSource = (element, source) => {
+  const url = setImageSource(element, source, { onExhausted: () => renderChrome() });
+  return url && !element.classList.contains("image-error") ? url : "";
+};
+
 const resetPauseMetadataTimer = () => {
   window.clearTimeout(pauseMetadataTimer);
   pauseMetadataTimer = 0;
@@ -1161,7 +1245,7 @@ const syncPauseMetadataTimer = showOpening => {
 const renderPauseMetadataOverlay = showOpening => {
   syncPauseMetadataTimer(showOpening);
 
-  const logoUrl = setImageSource(pauseLogo, state.pauseOverlayLogo);
+  const logoUrl = usableLogoSource(pauseLogo, state.pauseOverlayLogo);
   const titleText = String(state.title || "").trim();
   const episodeInfo = String(state.pauseOverlayEpisodeInfo || "").trim();
   const episodeTitleText = String(state.pauseOverlayEpisodeTitle || "").trim();
@@ -1478,6 +1562,29 @@ for (let pct = 50; pct >= -50; pct -= 10) {
   });
 }
 
+// Player Controls Layout, mirrored from Settings > Playback so layouts can be compared without
+// leaving playback. Index = DesktopHudLayout.entries order; the checkmark reads the four HUD flags
+// the page already receives (hudLayoutValue below), so it tracks whichever side changed it.
+const hudLayoutItems = [
+  ["standard", "Standard"],
+  ["legacy", "Legacy"],
+  ["minimal", "Minimal"],
+  ["ultra", "Ultra Minimal"],
+  ["official", "Official Nuvio"],
+].map(([value, label], index) => ({
+  label,
+  action: `hudLayout:${index}`,
+  selectedField: "hudLayoutValue",
+  selectedValue: value,
+}));
+const currentHudLayoutValue = () => {
+  if (state.officialHudEnabled) return "official";
+  if (state.ultraHudEnabled) return "ultra";
+  if (state.minimalHudEnabled) return "minimal";
+  if (state.legacyHudEnabled) return "legacy";
+  return "standard";
+};
+
 const contextMenuItems = [
   {
     label: "Playback",
@@ -1595,6 +1702,7 @@ const contextMenuItems = [
       { label: "SVP interpolation", action: "send:keyboardCycleAnimeSvp", toggleKey: "desktopAnimeSvpEnabled" },
       { label: "Advanced (mpv)", dynamicKey: "mpvOptions", children: [] },
       { label: "UI scale", children: uiScalePresetItems },
+      { label: "Controls layout", children: hudLayoutItems },
     ],
   },
   {
@@ -1664,6 +1772,7 @@ const contextMenuValue = key => {
   if (key === "mpvDiagnosticsEnabled") return mpvDiagnosticsEnabled;
   if (key === "closeMenuOnSelect") return closeMenuOnSelect;
   if (key === "uiScalePercentValue") return String(Number(state.uiScalePercent) || 0);
+  if (key === "hudLayoutValue") return currentHudLayoutValue();
   if (key === "playbackSpeedValue") return parsedPlaybackSpeed().toFixed(1);
   if (key === "outlineEnabled" || key === "shadowEnabled" || key === "bold" || key === "italic") {
     return Boolean(state.subtitleStyle && state.subtitleStyle[key]);
@@ -1996,6 +2105,24 @@ const executeContextAction = action => {
     refreshContextMenuIndicators();
     window.nuvioShowPresetPill("UI scale", `${clamped > 0 ? "+" : ""}${clamped}%`);
     send("setDesktopUiScalePercent", clamped);
+    return;
+  }
+  if (kind === "hudLayout") {
+    const index = Math.max(0, Math.min(hudLayoutItems.length - 1, Number(parts.shift() || 0)));
+    const value = hudLayoutItems[index].selectedValue;
+    // Flip the flags locally so the bar re-lays out this frame; the setting round-trips back
+    // through the controls payload with the same values.
+    state = {
+      ...state,
+      legacyHudEnabled: value === "legacy",
+      minimalHudEnabled: value === "minimal",
+      ultraHudEnabled: value === "ultra",
+      officialHudEnabled: value === "official",
+    };
+    renderChrome();
+    refreshContextMenuIndicators();
+    window.nuvioShowPresetPill("Controls layout", hudLayoutItems[index].label);
+    send("selectDesktopHudLayout", index);
     return;
   }
   if (kind === "speed") {
@@ -3380,6 +3507,15 @@ const appendEpisodeRow = (container, item, keyboardIndex) => {
     chip.textContent = state.playingLabel || "Playing";
     top.appendChild(chip);
   }
+  // Same tick the details page puts on a watched episode card; the state has always been sent,
+  // it was just never drawn here.
+  if (item.isWatched) {
+    const watched = document.createElement("span");
+    watched.className = "episode-watched";
+    watched.setAttribute("aria-label", "Watched");
+    watched.appendChild(buildCheckIcon());
+    top.appendChild(watched);
+  }
   row.appendChild(top);
   const copy = document.createElement("span");
   copy.className = "episode-copy";
@@ -3727,7 +3863,7 @@ const trackListSignature = tracks =>
 const renderOpeningOverlay = suppress => {
   const progress = normalizedOpeningProgress();
   const artworkUrl = setImageSource(openingArtwork, state.openingArtwork);
-  const logoUrl = setImageSource(openingLogoBase, state.openingLogo);
+  const logoUrl = usableLogoSource(openingLogoBase, state.openingLogo);
   setImageSource(openingLogoFill, state.openingLogo);
 
   const hasProgress = progress !== null;
@@ -3805,6 +3941,64 @@ const startSkipPromptAutoHide = () => {
   }, prefersReducedMotion ? 1 : 10000);
 };
 
+// Timed phases (the post-skip offer, a result) drain a bar so the window is visible; Kotlin owns
+// the actual timeout and clears the toast, the bar only mirrors it. Durations match
+// SKIP_SUBMIT_OFFER_TIMEOUT_MS / SKIP_SUBMIT_RESULT_TIMEOUT_MS.
+const SkipSubmitToastPhaseDurationsMs = { offer: 10000, result: 5000 };
+
+// "{key}" in the copy is the skip key's current label, which only the shortcut table knows.
+const renderSkipSubmitHint = text => {
+  skipSubmitToastHint.textContent = "";
+  const keyLabel = String(state.skipIntervalKeyLabel || "Tab");
+  String(text || "").split(/(\{key\}|Esc)/).forEach(part => {
+    if (!part) return;
+    if (part === "{key}" || part === "Esc") {
+      const kbd = document.createElement("kbd");
+      kbd.textContent = part === "{key}" ? keyLabel : part;
+      skipSubmitToastHint.appendChild(kbd);
+    } else {
+      skipSubmitToastHint.appendChild(document.createTextNode(part));
+    }
+  });
+};
+
+const renderSkipSubmitToast = () => {
+  // Shares the skip prompt's corner, and the prompt owns the key while it is up (a capture in
+  // progress is dropped by the skip), so it yields to the prompt rather than stacking under it.
+  const promptShown = Boolean(state.skipPromptVisible && !state.skipPromptDismissed);
+  const show = Boolean(state.skipSubmitToastVisible) && !promptShown;
+  const phase = String(state.skipSubmitToastPhase || "");
+  const key = String(state.skipSubmitToastKey || "");
+  skipSubmitToastTitle.textContent = state.skipSubmitToastTitle || "";
+  skipSubmitToastDetail.textContent = state.skipSubmitToastDetail || "";
+  renderSkipSubmitHint(state.skipSubmitToastHint);
+  skipSubmitToast.className = "skip-submit-toast";
+  if (show) skipSubmitToast.classList.add("visible");
+  if (phase) skipSubmitToast.classList.add(`phase-${phase}`);
+  if (state.skipSubmitToastAccepted) skipSubmitToast.classList.add("accepted");
+  skipSubmitToast.setAttribute("aria-hidden", show ? "false" : "true");
+  skipSubmitToast.setAttribute("aria-label", `${state.skipSubmitToastTitle || ""} ${state.skipSubmitToastDetail || ""}`.trim());
+
+  const durationMs = SkipSubmitToastPhaseDurationsMs[phase] || 0;
+  const restart = show && durationMs > 0 && key !== skipSubmitToastKey;
+  skipSubmitToastKey = show ? key : "";
+  skipSubmitToast.classList.toggle("show-progress", show && durationMs > 0);
+  if (restart) {
+    skipSubmitToastProgress.style.transition = "none";
+    skipSubmitToastProgress.style.width = "100%";
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (skipSubmitToastKey !== key) return;
+        skipSubmitToastProgress.style.transition = `width ${prefersReducedMotion ? 1 : durationMs}ms linear`;
+        skipSubmitToastProgress.style.width = "0%";
+      });
+    });
+  } else if (!show || durationMs <= 0) {
+    skipSubmitToastProgress.style.transition = "none";
+    skipSubmitToastProgress.style.width = "100%";
+  }
+};
+
 const renderNativePlaybackPrompts = () => {
   const nextSkipKey = [
     state.skipPromptStartMs || 0,
@@ -3832,6 +4026,8 @@ const renderNativePlaybackPrompts = () => {
   window.clearTimeout(skipPromptAutoHideTimer);
   skipPromptAutoHideTimer = 0;
   skipPromptAutoHideActive = false;
+
+  renderSkipSubmitToast();
 
   const showNextEpisode = Boolean(state.nextEpisodeVisible);
   // Same treatment as the episode strip: the next-episode card is the other place a lost still
@@ -3991,7 +4187,24 @@ const renderChrome = () => {
   root.classList.toggle("locked", Boolean(state.isLocked));
   root.classList.toggle("episode-panel-open", activeModal === "episodes");
   root.classList.toggle("source-panel-open", activeModal === "sources");
-  root.classList.toggle("legacy-hud", Boolean(state.legacyHudEnabled));
+  // The layouts are exclusive; the repository never sets two at once, but the HUD must not depend
+  // on it, and a stale payload mid-switch would otherwise stack two rule sets for a frame.
+  const officialHud = Boolean(state.officialHudEnabled);
+  const ultraHud = Boolean(state.ultraHudEnabled) && !officialHud;
+  const minimalHud = Boolean(state.minimalHudEnabled) && !ultraHud && !officialHud;
+  root.classList.toggle(
+    "legacy-hud",
+    Boolean(state.legacyHudEnabled) && !minimalHud && !ultraHud && !officialHud,
+  );
+  root.classList.toggle("minimal-hud", minimalHud);
+  root.classList.toggle("minimal-pills", minimalHud && Boolean(state.minimalHudPillsEnabled));
+  root.classList.toggle("ultra-hud", ultraHud);
+  root.classList.toggle("official-hud", officialHud);
+  root.classList.toggle("seek-handle-hidden", state.seekHandleEnabled === false);
+  root.classList.toggle("vignette-hidden", state.hudVignetteEnabled === false);
+  // The official bar also reads the time as one "position / duration" readout, right-aligned.
+  applyMinimalHudTimeLayout(minimalHud || officialHud);
+  applyUltraHudLayout(ultraHud);
   root.classList.toggle("clock-always-visible", Boolean(state.alwaysShowClock));
   root.classList.toggle("mpv-diagnostics", Boolean(mpvDiagnosticsEnabled));
   const posterHighlightMode = ["white", "accent", "shine"].includes(
@@ -4015,6 +4228,7 @@ const renderChrome = () => {
     lastCursorHidden = isChromeHidden;
     send("cursorVisibility", isChromeHidden ? 0 : 1);
   }
+  syncHudSubtitleClearance(isChromeHidden);
   root.classList.toggle("source-visible", Boolean(!showError && !isPlaying && !state.isLoading && (state.streamTitle || state.providerName)));
   const showOpening = renderOpeningOverlay(showError);
   renderPauseMetadataOverlay(showOpening || showError);
@@ -4088,6 +4302,8 @@ const renderChrome = () => {
   if (showError) {
     skipPrompt.classList.remove("visible", "show-progress");
     skipPrompt.setAttribute("aria-hidden", "true");
+    skipSubmitToast.classList.remove("visible", "show-progress");
+    skipSubmitToast.setAttribute("aria-hidden", "true");
     nextEpisodeCard.classList.remove("visible");
     nextEpisodeCard.setAttribute("aria-hidden", "true");
   } else {
@@ -4411,6 +4627,30 @@ const shortcutCommandForEvent = event => {
 
 let volumePillHideTimer = null;
 let lastCursorHidden = null;
+// Where the HUD's visible chrome begins while it is up -- the seek track's top edge less a small
+// breathing gap -- as a percentage of the window height from the top, so the app can keep
+// subtitles just clear of it and no higher. The seek input spans the whole touch area, so the
+// visible track is measured from its centre. 0 while hidden. Tenths of a percent, because sub-pos
+// is an integer percent that the app floors: whole percents here would round the text up to a
+// full percent higher than needed. Sent only on change: renderChrome runs on every position tick.
+let lastHudSubtitleClearance = null;
+const syncHudSubtitleClearance = isChromeHidden => {
+  let clearance = 0;
+  if (!isChromeHidden && !isHeroTrailerSurface && !state.heroTrailerMode && seek) {
+    const rect = seek.getBoundingClientRect();
+    const height = window.innerHeight || root.clientHeight || 0;
+    if (height > 0 && rect.height > 0) {
+      const scale = appliedCombinedUserScale || 1;
+      const trackTop = rect.top + rect.height / 2 - 2 * scale;
+      const line = Math.max(0, Math.min(height, trackTop - 10 * scale));
+      clearance = Math.round(line / height * 1000) / 10;
+    }
+  }
+  if (clearance !== lastHudSubtitleClearance) {
+    lastHudSubtitleClearance = clearance;
+    send("hudSubtitleClearance", clearance);
+  }
+};
 
 const volumeIconHref = () => {
   // Volume can exceed 100% (up to 200%), so the wave count is scaled for that range:
@@ -4424,8 +4664,15 @@ const volumeIconHref = () => {
 const syncPlayerVolumeControl = () => {
   if (playerVolumeSlider) {
     playerVolumeSlider.value = String(Math.round(localVolume));
+    // Fill width for the layouts that paint the played part of the track (the official bar).
+    playerVolumeSlider.style.setProperty("--volume-position", `${Math.max(0, Math.min(100, localVolume / 2))}%`);
   }
   playerVolumeIcon?.setAttribute("href", volumeIconHref());
+  if (volumeMuteButton) {
+    const label = localMuted ? "Unmute" : "Mute";
+    volumeMuteButton.setAttribute("aria-label", label);
+    volumeMuteButton.title = label;
+  }
 };
 
 const showVolumePill = () => {
@@ -4600,8 +4847,11 @@ const showControlTooltip = button => {
   const tooltipScale = appliedCombinedUserScale || (1 + (appliedUiScalePercent || 0) / 100);
   // A folded icon has no room for the live value its row button shows, so fold it into the
   // tooltip instead: "Aspect ratio - Fit".
-  const beside = Boolean(actionOverflowMenu && actionOverflowMenu.contains(button));
-  const value = beside ? actionValueLabel(button) : "";
+  const folded = Boolean(actionOverflowMenu && actionOverflowMenu.contains(button));
+  // The ultra popover lays the folded icons out in a row, so the overhead placement works there;
+  // only the vertical strip needs the beside variant.
+  const beside = folded && !root.classList.contains("ultra-hud");
+  const value = folded ? actionValueLabel(button) : "";
   controlTooltip.classList.toggle("tooltip-beside", beside);
   controlTooltip.textContent = value ? `${label} - ${value}` : label;
   if (beside) {
@@ -4676,6 +4926,8 @@ const setActionOverflowOpen = open => {
   actionOverflowMenu.hidden = !next;
   actionOverflowButton.setAttribute("aria-expanded", next ? "true" : "false");
   actionOverflowButton.classList.toggle("selected", next);
+  // The ultra layout fades its seek row out under the open popover (controls.css).
+  root.classList.toggle("action-overflow-open", next);
   if (!next) hideControlTooltip();
   // Mirrors setColorGradePanelOpen: the menu suppressed chrome auto-hide while open, so restart
   // the inactivity timer on the way out instead of leaving the controls pinned.
@@ -4708,11 +4960,13 @@ function syncActionRowOverflow() {
     return;
   }
 
-  // The 1fr track is content-independent, so this width is stable across the fold below and can
-  // be read before any button moves.
-  const available = actionRow.clientWidth;
+  // Read before any button moves so the cache key describes the row as it stands. It is NOT the
+  // width the fold is decided against (see below): in the minimal-pills layout the row hugs its
+  // content, so with the tools still parked in the ultra popover this reads as the bare toggle,
+  // and deciding on it folded everything into a one-icon strip on every ultra -> minimal switch.
+  const availableBefore = actionRow.clientWidth;
   const signature = [
-    Math.round(available),
+    Math.round(availableBefore),
     appliedCombinedUserScale,
     root.className,
     overflowCapableActions.map(button => (button.hidden ? "0" : "1")).join(""),
@@ -4724,12 +4978,23 @@ function syncActionRowOverflow() {
   // Measured at its natural width; hidden again below if nothing needs to fold.
   actionOverflowButton.hidden = false;
 
+  // The space the row can actually have with everything in it: the 1fr grid track is
+  // content-independent so this equals availableBefore there, while a hugging pill row now reads
+  // its natural width, or the squeezed width when the window is too narrow for it.
+  const available = actionRow.clientWidth;
   const gap = parseFloat(window.getComputedStyle(actionRow).columnGap) || 0;
   // offsetParent covers #episodesButton, which base CSS keeps display:none outside legacy.
   const items = overflowCapableActions.filter(button => !button.hidden && button.offsetParent);
   const widths = new Map(items.map(button => [button, button.offsetWidth]));
   const natural = items.reduce((total, button) => total + widths.get(button), 0)
     + gap * Math.max(0, items.length - 1);
+
+  // Ultra layout: the toggle is the options button, so every tool folds behind it regardless of
+  // how much room the row has. The popover is what the user opens on purpose, not a spill-over.
+  if (root.classList.contains("ultra-hud")) {
+    items.forEach(button => (ultraMenuActions || actionOverflowMenu).appendChild(button));
+    return;
+  }
 
   if (natural <= available) {
     setActionOverflowOpen(false);
@@ -4928,6 +5193,14 @@ document.querySelectorAll("[data-command]").forEach(button => {
       sourceFilterId = "";
       openPlayerModal("sources");
       send("sources", 0);
+      return;
+    }
+    if (command === "keyboardToggleMute") {
+      // Flip the glyph now; native answers with nuvioShowVolumePill carrying mpv's real state.
+      localMuted = !localMuted;
+      syncPlayerVolumeControl();
+      refreshContextMenuIndicators();
+      send(command, 0);
       return;
     }
     if (command === "episodes") {
@@ -5323,6 +5596,22 @@ skipPrompt.addEventListener("contextmenu", event => {
   send("dismissSkipInterval", 0);
 });
 
+// A click is the same press as the skip key, so it reads the same resolved action — but only
+// while that action belongs to the toast; a click on a result does nothing.
+const SkipSubmitToastClickActions = new Set(["skipSubmitOffer", "skipCaptureMarkEnd", "skipCaptureSubmit"]);
+skipSubmitToast.addEventListener("click", event => {
+  event.stopPropagation();
+  focusShortcutRoot();
+  const action = String(state.skipKeyAction || "");
+  if (SkipSubmitToastClickActions.has(action)) send(action, 0);
+});
+skipSubmitToast.addEventListener("contextmenu", event => {
+  event.preventDefault();
+  event.stopPropagation();
+  focusShortcutRoot();
+  if (state.skipSubmitToastDismissible) send("skipSubmitDismiss", 0);
+});
+
 nextEpisodeCard.addEventListener("click", event => {
   event.stopPropagation();
   if (state.nextEpisodePlayable) {
@@ -5387,6 +5676,9 @@ episodeList.addEventListener("pointerenter", () => {
   focusShortcutRoot();
 });
 episodeNotch.addEventListener("pointerenter", () => {
+  // Same switch as the Sources notch: the top edge is crossed just as often on the way to a
+  // display above, and an Episodes rail sliding down each time is the same nuisance.
+  if (!sourceNotchHoverOpens) return;
   if (activeModal !== "episodes") episodeNotch.click();
 });
 sourceNotch.addEventListener("pointerenter", () => {
@@ -5504,10 +5796,20 @@ speedButton.addEventListener("contextmenu", event => {
 playerVolumeSlider.addEventListener("input", event => {
   event.stopPropagation();
   localVolume = Math.max(0, Math.min(200, Number(playerVolumeSlider.value) || 0));
+  // Keep the glyph's wave count in step with the drag, as the keyboard path already does.
+  syncPlayerVolumeControl();
   send("volumeSet", localVolume);
   noteChromeActivity(true);
 });
 playerVolumeSlider.addEventListener("click", event => event.stopPropagation());
+// The minimal layout only reveals the slider on hover; a drag that wanders off the control must
+// not collapse it mid-gesture, so the pointer's hold is mirrored as a class the CSS also honours.
+playerVolumeSlider.addEventListener("pointerdown", () => {
+  playerVolumeControl?.classList.add("dragging");
+});
+["pointerup", "pointercancel"].forEach(type => window.addEventListener(type, () => {
+  playerVolumeControl?.classList.remove("dragging");
+}));
 
 timeline.addEventListener("pointermove", showSeekThumbnailAt);
 timeline.addEventListener("pointerleave", () => {
@@ -5816,11 +6118,10 @@ document.addEventListener("keydown", event => {
     window.nuvioOpenKeyboardPanel("episodes");
     return;
   } else if (command === "keyboardSkipInterval") {
-    if (skipPrompt.classList.contains("visible")) {
-      send("skipInterval", 0);
-    } else if (state.nextEpisodeVisible && state.nextEpisodePlayable) {
-      send("playNextEpisode", 0);
-    }
+    // Kotlin resolved what the skip key means right now (skip, next episode, or a step of the
+    // SkipDB submission toast); the AWT dispatcher reads the same field.
+    const action = String(state.skipKeyAction || "");
+    if (action) send(action, 0);
     return;
   } else if (command === "keyboardToggleMpvDiagnostics") {
     window.nuvioToggleMpvDiagnostics();

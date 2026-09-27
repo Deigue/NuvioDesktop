@@ -81,6 +81,7 @@ private data class StoredPosterCardStylePreferences(
     val depthCast: Boolean = true,
     val depthTrailers: Boolean = true,
     val zoomActionPreviewEnabled: Boolean = true,
+    val watchlistBadgeEnabled: Boolean = false,
 )
 
 data class PosterCardStyleUiState(
@@ -106,6 +107,7 @@ data class PosterCardStyleUiState(
     val depthCast: Boolean = true,
     val depthTrailers: Boolean = true,
     val zoomActionPreviewEnabled: Boolean = true,
+    val watchlistBadgeEnabled: Boolean = false,
 )
 
 object PosterCardStyleRepository {
@@ -231,10 +233,46 @@ object PosterCardStyleRepository {
         persist()
     }
 
+    /** Every card depth value at once, for [CardDepthSync]: one publish and one write. */
+    internal fun applyDepth(
+        enabled: Boolean,
+        edgeStrength: Int,
+        sheenStrength: Int,
+        edgeCoverage: Int,
+        posters: Boolean,
+        continueWatching: Boolean,
+        episodes: Boolean,
+        cast: Boolean,
+        trailers: Boolean,
+    ) {
+        ensureLoaded()
+        val next = _uiState.value.copy(
+            depthEnabled = enabled,
+            depthEdgeStrength = edgeStrength.coerceIn(0, 100),
+            depthSheenStrength = sheenStrength.coerceIn(0, 100),
+            depthEdgeCoverage = edgeCoverage.coerceIn(0, 100),
+            depthPosters = posters,
+            depthContinueWatching = continueWatching,
+            depthEpisodes = episodes,
+            depthCast = cast,
+            depthTrailers = trailers,
+        )
+        if (next == _uiState.value) return
+        _uiState.value = next
+        persist()
+    }
+
     fun setZoomActionPreviewEnabled(enabled: Boolean) {
         ensureLoaded()
         if (_uiState.value.zoomActionPreviewEnabled == enabled) return
         _uiState.value = _uiState.value.copy(zoomActionPreviewEnabled = enabled)
+        persist()
+    }
+
+    fun setWatchlistBadgeEnabled(enabled: Boolean) {
+        ensureLoaded()
+        if (_uiState.value.watchlistBadgeEnabled == enabled) return
+        _uiState.value = _uiState.value.copy(watchlistBadgeEnabled = enabled)
         persist()
     }
 
@@ -291,6 +329,7 @@ object PosterCardStyleRepository {
                 depthCast = stored.depthCast,
                 depthTrailers = stored.depthTrailers,
                 zoomActionPreviewEnabled = stored.zoomActionPreviewEnabled,
+                watchlistBadgeEnabled = stored.watchlistBadgeEnabled,
             )
         } else {
             PosterCardStyleUiState()
@@ -320,6 +359,7 @@ object PosterCardStyleRepository {
                     depthCast = _uiState.value.depthCast,
                     depthTrailers = _uiState.value.depthTrailers,
                     zoomActionPreviewEnabled = _uiState.value.zoomActionPreviewEnabled,
+                    watchlistBadgeEnabled = _uiState.value.watchlistBadgeEnabled,
                 ),
             ),
         )

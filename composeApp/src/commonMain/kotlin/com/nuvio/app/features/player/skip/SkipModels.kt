@@ -96,15 +96,25 @@ enum class NextEpisodeThresholdMode {
 
 // --- IntroDb API response models ---
 
-// IntroDb's /intro endpoint returns a single flat intro segment, e.g.:
-// {"imdb_id":"tt..","season":2,"episode":1,"start_sec":0,"end_sec":31,
-//  "start_ms":0,"end_ms":31000,"confidence":1,"submission_count":1,"updated_at":".."}
-// (a missing entry returns {"error":"Not found."}, which parses to all-null timings.)
+// IntroDb's /segments endpoint answers with every kind it knows for one episode or film, e.g.:
+// {"imdb_id":"tt0944947","media_type":"tv","is_movie":false,"season":1,"episode":1,
+//  "intro":{"start_sec":437,"end_sec":531,"start_ms":437000,"end_ms":531000,"confidence":1,..},
+//  "recap":null,"outro":{..},"post_credits":null}
+// For a film (`is_movie=true`) the outro is the end credits and `post_credits` is a scene inside
+// or after them. An unknown title answers with every segment null.
 @Serializable
 data class IntroDbSegmentsResponse(
     @SerialName("imdb_id") val imdbId: String? = null,
     @SerialName("season") val season: Int? = null,
     @SerialName("episode") val episode: Int? = null,
+    @SerialName("intro") val intro: IntroDbSegment? = null,
+    @SerialName("recap") val recap: IntroDbSegment? = null,
+    @SerialName("outro") val outro: IntroDbSegment? = null,
+    @SerialName("post_credits") val postCredits: IntroDbSegment? = null,
+)
+
+@Serializable
+data class IntroDbSegment(
     @SerialName("start_sec") val startSec: Double? = null,
     @SerialName("end_sec") val endSec: Double? = null,
     @SerialName("start_ms") val startMs: Long? = null,
@@ -113,6 +123,40 @@ data class IntroDbSegmentsResponse(
     @SerialName("submission_count") val submissionCount: Int? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
 )
+
+internal const val INTRODB_PROVIDER = "introdb"
+
+internal fun IntroDbSegmentsResponse.toEpisodeSkipIntervals(): List<SkipInterval> = listOfNotNull(
+    intro.toSkipInterval("intro"),
+    recap.toSkipInterval("recap"),
+    outro.toSkipInterval("outro"),
+)
+
+/**
+ * A film's credits and post-credits scene. The credits are cut short where a scene starts inside
+ * them, so skipping the credits can never jump over the scene they contain.
+ */
+internal fun IntroDbSegmentsResponse.toMovieSkipIntervals(): List<SkipInterval> {
+    val credits = outro.toSkipInterval("outro")
+    val scene = postCredits.toSkipInterval(POST_CREDITS_SKIP_TYPE)
+    val safeCredits = if (
+        credits != null && scene != null &&
+        scene.startTime > credits.startTime && scene.startTime < credits.endTime
+    ) {
+        credits.copy(endTime = scene.startTime)
+    } else {
+        credits
+    }
+    return listOfNotNull(safeCredits, scene)
+}
+
+private fun IntroDbSegment?.toSkipInterval(type: String): SkipInterval? {
+    val segment = this ?: return null
+    val start = segment.startSec ?: segment.startMs?.let { it / 1000.0 } ?: return null
+    val end = segment.endSec ?: segment.endMs?.let { it / 1000.0 } ?: return null
+    if (!start.isFinite() || !end.isFinite() || start < 0.0 || end <= start) return null
+    return SkipInterval(startTime = start, endTime = end, type = type, provider = INTRODB_PROVIDER)
+}
 
 // --- SkipDB API response models ---
 
@@ -235,6 +279,94 @@ internal const val SKIPDB_PROVIDER = "skipdb"
 
 /** Segment kinds SkipDB accepts, in the order the pickers show them. */
 val SKIP_SEGMENT_TYPES: List<String> = listOf("intro", "recap", "outro", "preview")
+
+/**
+ * Where a skip-key press ("Tab" by default, Start on a pad) goes. One resolution shared by every
+ * input path so the key means the same thing whichever surface saw it, resolved in priority order
+ * by [PlayerScreenRuntime.resolveSkipKeyAction]. Empty string = nothing to do, key not consumed.
+ */
+object SkipKeyActions {
+    const val SKIP_INTERVAL = "skipInterval"
+    const val PLAY_NEXT_EPISODE = "playNextEpisode"
+    /** Sends the offered chapter timings (see [SkipSubmitOffer]) to SkipDB. */
+    const val SUBMIT_OFFER = "skipSubmitOffer"
+    /** Starts a capture session at the current position. */
+    const val CAPTURE_START = "skipCaptureStart"
+    /** Marks the end of the running capture session at the current position. */
+    const val CAPTURE_MARK_END = "skipCaptureMarkEnd"
+    /** Submits the marked capture session. */
+    const val CAPTURE_SUBMIT = "skipCaptureSubmit"
+}
+
+/** Phase of the single HUD toast that fronts both the post-skip offer and capture mode. */
+enum class SkipSubmitToastPhase { OFFER, CAPTURING, CAPTURED, SUBMITTING, RESULT }
+
+/**
+ * A chapter-sourced skip that just landed, held for a few seconds so the viewer can send those
+ * timings to SkipDB with one more press. Only chapter intervals are ever offered: a community
+ * interval either came from SkipDB (nothing to add) or from another database (not ours to
+ * forward), and the merge already drops the chapter copy whenever a community one exists, so a
+ * chapter prompt on screen means SkipDB genuinely has nothing for this kind of segment.
+ */
+data class SkipSubmitOffer(
+    val interval: SkipInterval,
+    val phase: SkipSubmitToastPhase = SkipSubmitToastPhase.OFFER,
+    val resultMessage: String = "",
+    val resultAccepted: Boolean = false,
+    /** Set once playback has been seen at the segment end. The seek that made the offer is
+     *  asynchronous, so until then the reported position is still inside the segment and must not
+     *  be read as "seeked back into it". */
+    val landed: Boolean = false,
+)
+
+/**
+ * Capture mode: press once to mark where a segment starts, again where it ends, a third time to
+ * submit. [endSec] is null while the segment is still being marked. The kind is inferred from
+ * where the marks fall (see [inferCapturedSegmentType]); recaps and previews still go through the
+ * Submit Timestamps panel, which is the only place they can be named.
+ */
+data class SkipCaptureSession(
+    val startSec: Double,
+    val endSec: Double? = null,
+    val phase: SkipSubmitToastPhase = SkipSubmitToastPhase.CAPTURING,
+    val resultMessage: String = "",
+    val resultAccepted: Boolean = false,
+    /** Kind inferred when the end mark landed, with the runtime known; null while still marking. */
+    val segmentType: String? = null,
+)
+
+/** How long the post-skip offer stays actionable. Matches the skip prompt's own auto-hide. */
+const val SKIP_SUBMIT_OFFER_TIMEOUT_MS = 10_000L
+/** How long a submission result (accepted or rejected) stays readable before the toast clears. */
+const val SKIP_SUBMIT_RESULT_TIMEOUT_MS = 5_000L
+/** A capture left open this long was forgotten, not paused: outros run minutes, not tens of them. */
+const val SKIP_CAPTURE_MAX_OPEN_MS = 15 * 60_000L
+/**
+ * The offer is tied to the landing point. A seek back into the segment — because the skip landed
+ * wrong — or a jump well past it means the viewer has moved on, and the offer goes with them.
+ * Backwards is tight (a wrong landing is the very thing being judged); forwards is loose enough
+ * that ordinary playback at any speed never trips it before the timeout does.
+ */
+const val SKIP_SUBMIT_OFFER_BACKWARD_TOLERANCE_SEC = 3.0
+const val SKIP_SUBMIT_OFFER_FORWARD_TOLERANCE_SEC = 60.0
+/** Shortest span capture mode will close; matches the chapter detector's minimum intro. */
+const val SKIP_CAPTURE_MIN_SPAN_SEC = 2.0
+
+/** Kinds a post-skip offer is made for. Outros are excluded: skipping one seeks to the end, where
+ *  the next-episode card owns the same key and the landing point cannot be judged anyway. */
+internal fun String.isOfferableSkipKind(): Boolean = skipIntervalKind() in setOf("intro", "recap")
+
+/**
+ * Segment kind for a captured span, from where it starts — the same outro threshold
+ * [ChapterSkipDetector] trusts for chapter labels. A span starting in the last 40% of the runtime
+ * is an outro; anything else, including every span of a file whose runtime is unknown, is called
+ * an intro. That is the common case, and the Submit Timestamps panel remains for the rest.
+ */
+internal fun inferCapturedSegmentType(startSec: Double, durationSec: Double?): String {
+    val validDuration = durationSec?.takeIf { it.isFinite() && it > 0.0 }
+    if (validDuration != null && startSec >= validDuration * 0.60) return "outro"
+    return "intro"
+}
 
 /**
  * Flattens one SkipDB answer into the intervals worth showing. Kinds SkipDB has nothing for come

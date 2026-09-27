@@ -143,14 +143,25 @@ internal object ImageDiskCacheStrategy : CacheStrategy {
      * response that says nothing at all gets the [DEFAULT_FRESHNESS_SECONDS] backstop — long,
      * because artwork under a stable URL rarely changes and this cache exists to avoid
      * re-fetching it; finite, because "never" is the bug this whole file is about.
+     *
+     * The backstop counts only the time *we* have held the entry. `Age` is the origin's statement
+     * of how much of its own lifetime a CDN has used up, so it belongs against a declared `max-age`
+     * and nothing else: `artworks.thetvdb.com` declares nothing and arrives through CloudFront with
+     * an `Age` of months, and measuring the backstop from that made half the TVDB artwork on disk
+     * stale the instant it was written — and stale again after every 304, because the 304 carried
+     * the same `Age` — so each disk lookup cost a revalidation round trip.
      */
     private fun NetworkResponse.remainingFreshnessMillis(directives: List<String>, now: Long): Long {
         if (directives.contains(IMMUTABLE)) return Long.MAX_VALUE - now
-        val lifetimeSeconds = when {
+        val declaredSeconds = when {
             directives.contains(NO_STORE) || directives.contains(NO_CACHE) -> 0L
-            else -> directives.directiveSeconds(MAX_AGE) ?: DEFAULT_FRESHNESS_SECONDS
+            else -> directives.directiveSeconds(MAX_AGE)
         }
-        return (lifetimeSeconds - ageSeconds(now)) * 1000L
+        val remainingSeconds = when (declaredSeconds) {
+            null -> DEFAULT_FRESHNESS_SECONDS - heldSeconds(now)
+            else -> declaredSeconds - storedAgeSeconds() - heldSeconds(now)
+        }
+        return remainingSeconds * 1000L
     }
 
     /**
@@ -176,16 +187,16 @@ internal object ImageDiskCacheStrategy : CacheStrategy {
         )
     }
 
+    /** The age the origin reported when we stored the entry. */
+    private fun NetworkResponse.storedAgeSeconds(): Long =
+        headers[AGE]?.trim()?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+
     /**
-     * How stale the cached entry is now: the age the origin reported when we stored it, plus the
-     * time we have been holding it. `responseMillis` is stamped by [write] from the same clock
-     * [now] comes from, so the two are never compared across clocks.
+     * How long we have been holding the entry. `responseMillis` is stamped by [write] from the same
+     * clock [now] comes from, so the two are never compared across clocks.
      */
-    private fun NetworkResponse.ageSeconds(now: Long): Long {
-        val storedAgeSeconds = headers[AGE]?.trim()?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
-        val heldMillis = (now - responseMillis).coerceAtLeast(0L)
-        return storedAgeSeconds + heldMillis / 1000L
-    }
+    private fun NetworkResponse.heldSeconds(now: Long): Long =
+        (now - responseMillis).coerceAtLeast(0L) / 1000L
 
     private fun conditionalRequestOrNull(
         request: NetworkRequest,

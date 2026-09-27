@@ -55,6 +55,7 @@ class GameLibraryController(
             _rows.value = ensureDefaultGameRows(data.rows)
             _lastExecutableDirectory.value = data.settings.lastExecutableDirectory
             _loading.value = false
+            backfillSteamCovers(data.games)
             refreshMetadata(data.games, settings)
         }
         // Entering credentials for the first time should fill in the artwork that could not be
@@ -168,6 +169,37 @@ class GameLibraryController(
                 }
             }
         }.awaitAll()
+        repository.saveGames(_games.value)
+    }
+
+    /**
+     * A cover for every entry that is tied to a Steam app id but has none.
+     *
+     * These are the games whose art the CDN probes never found because it is filed under the
+     * hashed layout (see [SteamArtworkClient]); they were reconciled and ratcheted before the
+     * manifest lookup existed, so [refreshMetadata] will not look at them again. One manifest
+     * request per such game, and a game the store genuinely has no cover for is asked about again
+     * next launch — there are very few of those, and the manifest is a single cheap request.
+     */
+    private suspend fun backfillSteamCovers(entries: List<GameEntry>) = coroutineScope {
+        val gate = Semaphore(STEAM_ARTWORK_PARALLELISM)
+        val missing = entries.filter { it.steamAppId != null && it.coverUrl.isNullOrBlank() }
+        if (missing.isEmpty()) return@coroutineScope
+        val found = missing.map { entry ->
+            async {
+                gate.withPermit {
+                    val cover = runCatching { steamArtworkClient.coverFor(entry.steamAppId!!) }.getOrNull()
+                    cover?.let { entry.id to it }
+                }
+            }
+        }.awaitAll().filterNotNull().toMap()
+        if (found.isEmpty()) return@coroutineScope
+        _games.update { games ->
+            games.map { stored ->
+                val cover = found[stored.id]
+                if (cover != null && stored.coverUrl.isNullOrBlank()) stored.copy(coverUrl = cover) else stored
+            }
+        }
         repository.saveGames(_games.value)
     }
 

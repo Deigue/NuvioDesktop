@@ -1,9 +1,6 @@
 package com.nuvio.app.features.streams
 
 import com.nuvio.app.core.build.AppFeaturePolicy
-import kotlinx.coroutines.runBlocking
-import nuvio.composeapp.generated.resources.*
-import org.jetbrains.compose.resources.getString
 
 data class StreamItem(
     val name: String? = null,
@@ -56,7 +53,9 @@ data class StreamItem(
     val badges: List<StreamBadge> = emptyList(),
 ) {
     val streamLabel: String
-        get() = name ?: runBlocking { getString(Res.string.stream_default_name) }
+        // Read from composition for every row of a stream list, so it must not block: the resource
+        // lookup this used to do ran `runBlocking` on the UI thread while scrapers held the pool.
+        get() = name?.takeIf { it.isNotBlank() } ?: "Stream"
 
     val streamSubtitle: String?
         get() = description

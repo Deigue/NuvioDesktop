@@ -8,6 +8,7 @@ import com.nuvio.app.core.ui.NuvioPosterHoverTooltip
 import com.nuvio.app.core.ui.NuvioPosterShape
 import com.nuvio.app.core.ui.PosterRatingBadgeScale
 import com.nuvio.app.core.ui.rememberHomePosterCardStyleUiState
+import com.nuvio.app.core.ui.rememberPosterWatchlistMembership
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.PosterShape
 import com.nuvio.app.features.home.randomPlayCategoryOrNull
@@ -24,6 +25,7 @@ fun HomePosterCard(
     onLongClick: (() -> Unit)? = null,
 ) {
     val posterCardStyle = rememberHomePosterCardStyleUiState()
+    val watchlist = rememberPosterWatchlistMembership()
     val isLandscapeMode = useLandscapeBackdropMode || posterCardStyle.catalogLandscapeModeEnabled
     val titleOverlay = landscapeCardTitleOverlay(
         isLandscapeMode = isLandscapeMode,
@@ -88,6 +90,7 @@ fun HomePosterCard(
                     null
                 },
                 isWatched = isWatched,
+                isInWatchlist = watchlist.contains(item),
                 onClick = onClick,
                 onLongClick = onLongClick,
             )

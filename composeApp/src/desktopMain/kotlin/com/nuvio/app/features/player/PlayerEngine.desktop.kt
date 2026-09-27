@@ -37,12 +37,21 @@ import com.nuvio.app.features.screensaver.DesktopScreensaver
 import com.nuvio.app.features.player.desktop.NativePlayerHost
 import com.nuvio.app.features.player.desktop.PlaybackRedirectResolution
 import com.nuvio.app.features.player.desktop.PlaybackRedirectResolver
+import com.nuvio.app.features.player.desktop.SeekRateLimitRecovery
+import com.nuvio.app.features.player.desktop.SeekThumbnailRateLimitGate
+import com.nuvio.app.features.player.desktop.TorBoxNodeHop
+import com.nuvio.app.features.player.desktop.DESKTOP_PLAYBACK_FALLBACK_USER_AGENT
 import com.nuvio.app.features.player.desktop.desktopAppFullscreenState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.drop
 import java.awt.KeyEventDispatcher
+import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.player_error_debrid_rate_limited
+import nuvio.composeapp.generated.resources.player_rate_limit_reconnecting
+import nuvio.composeapp.generated.resources.player_rate_limit_switching_server
+import org.jetbrains.compose.resources.getString
 import java.awt.KeyboardFocusManager
 import java.awt.event.KeyEvent
 import javax.swing.text.JTextComponent
@@ -157,11 +166,18 @@ private fun NativePlayerSurface(
     val redirectResolutions = remember { mutableMapOf<String, PlaybackRedirectResolution>() }
     // Last real playhead this surface reported, for resuming after a pinned link is re-resolved.
     val lastKnownPositionMs = remember { mutableStateOf(0L) }
+    // Its duration, so a rate-limit reopen can refuse a resume target at the very end.
+    val lastKnownDurationMs = remember { mutableStateOf(0L) }
     val surfaceScope = rememberCoroutineScope()
     LaunchedEffect(playbackAttemptId, sourceUrl) {
         DesktopPlayerLaunchShield.showForActiveWindow()
     }
     val playbackHeaders = remember(sourceHeaders) { sanitizePlaybackHeaders(sourceHeaders) }
+    // What mpv will send, so a TorBox node probe looks like the player it is standing in for.
+    val playbackUserAgent = remember(playbackHeaders) {
+        playbackHeaders.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value
+            ?: DESKTOP_PLAYBACK_FALLBACK_USER_AGENT
+    }
     val playerSettings by PlayerSettingsRepository.uiState.collectAsState()
     val initialAnimeSvpRequested = playerSettings.desktopAnimeSvpEnabled &&
         playerSettings.desktopMpvConfigMode != DesktopMpvConfigMode.Full &&
@@ -332,6 +348,12 @@ private fun NativePlayerSurface(
                 event.consume()
                 return@KeyEventDispatcher true
             }
+            if (event.keyCode == AppShortcutsRepository.keyCode(AppShortcutAction.DismissOverlay) &&
+                controller.dismissSkipSubmitToastIfShown()
+            ) {
+                event.consume()
+                return@KeyEventDispatcher true
+            }
             // Directional controls stay fixed so keyboard/panel navigation remains recoverable.
             val fixedType = when (event.keyCode) {
                 KeyEvent.VK_LEFT -> "keyboardSeekBack"
@@ -419,9 +441,28 @@ private fun NativePlayerSurface(
         // Follow the addon's redirect chain once here rather than letting FFmpeg re-walk it on
         // every seek (see PlaybackRedirectResolver). The source URL stays the stream's identity;
         // only what mpv opens changes.
-        val resolution = redirectResolutions[sourceUrl]
+        var resolution = redirectResolutions[sourceUrl]
             ?: PlaybackRedirectResolver.resolve(sourceUrl, playbackHeaders)
                 .also { redirectResolutions[sourceUrl] = it }
+        // A TorBox node that rate-limited us earlier this session keeps refusing our IP for over
+        // an hour, and addons hand back their cached link on that same node. Start on another
+        // node instead of opening straight into the ban.
+        if (TorBoxNodeHop.isBanned(resolution.playbackUrl)) {
+            TorBoxNodeHop.findAlternative(resolution.playbackUrl, playbackUserAgent)?.let { hopped ->
+                BingeAdvanceLog.i {
+                    "desktop TorBox node avoided at attach attemptId=$playbackAttemptId" +
+                        " from=${PlaybackRedirectResolver.hostOf(resolution.playbackUrl)}" +
+                        " to=${PlaybackRedirectResolver.hostOf(hopped)}"
+                }
+                resolution = PlaybackRedirectResolution(
+                    sourceUrl,
+                    hopped,
+                    resolution.hops,
+                    PlaybackRedirectResolution.Outcome.Pinned,
+                )
+                redirectResolutions[sourceUrl] = resolution
+            }
+        }
         PlaybackStartTrace.mark("redirect:${resolution.outcome.name.lowercase()}")
         // Logged so a binge/next-episode stall can be diagnosed: if the common layer reports it
         // set a new activeSourceUrl (see BingeAdvance "switchToEpisodeStream" log) but this line
@@ -477,10 +518,31 @@ private fun NativePlayerSurface(
         // A pinned CDN link can outlive its token where the resolver's own hop would have been
         // re-resolved by FFmpeg for free. On the first 401/403/404/410 from a pinned attach,
         // resolve again and re-attach at the last playhead instead of surfacing the error; a
-        // second failure, or anything else (429 included), goes to the common layer as before.
+        // second failure, or anything else, goes to the common layer as before. A 429 on a
+        // surface that was already playing is handled first, by recoverFromRateLimit.
         var pinnedLinkRefreshUsed = false
+        var rateLimitRecoveriesUsed = 0
+        var lastRateLimitRecoveryAtMs = 0L
+        var lastRateLimitResumeMs: Long? = null
+        // Set when Prefer Failover handed the incident back because failover had nothing to try;
+        // the rest of that incident stays with reconnect instead of re-running an empty failover.
+        var reconnectingForFailover = false
         val onSurfaceError = object : (String?) -> Unit {
             override fun invoke(message: String?) {
+                if (SeekRateLimitRecovery.isRateLimited(message)) {
+                    // Whatever happens next, previews must not keep opening ranges at a host
+                    // that has just refused one.
+                    SeekThumbnailRateLimitGate.onRateLimited()
+                    TorBoxNodeHop.markBanned(redirectResolutions[sourceUrl]?.playbackUrl ?: sourceUrl)
+                    val settings = PlayerSettingsRepository.uiState.value
+                    val inRecentIncident = System.currentTimeMillis() - lastRateLimitRecoveryAtMs <
+                        SeekRateLimitRecovery.EPISODE_WINDOW_MS
+                    val reconnect = SeekRateLimitRecovery.shouldReconnect(
+                        settings.desktopRateLimitRecoveryMode,
+                        settings.streamFailoverEnabled,
+                    ) || (reconnectingForFailover && inRecentIncident)
+                    if (reconnect && tryStartReconnect(message.orEmpty())) return
+                }
                 val current = redirectResolutions[sourceUrl]
                 val refreshable = message != null &&
                     current?.pinned == true &&
@@ -514,7 +576,176 @@ private fun NativePlayerSurface(
                     )
                 }
             }
+
+            /**
+             * Starts one reconnect for a mid-playback 429 when the budget and a sane resume point
+             * allow it. Only for a surface that has shown frames of this attempt: a 429 on the
+             * initial open stays with the common layer's provider-scoped failover.
+             */
+            fun tryStartReconnect(message: String): Boolean {
+                val nowMs = System.currentTimeMillis()
+                // A separate incident much later in the file gets a fresh budget; a failure of
+                // the reopen itself spends the remaining one.
+                if (nowMs - lastRateLimitRecoveryAtMs >= SeekRateLimitRecovery.EPISODE_WINDOW_MS) {
+                    rateLimitRecoveriesUsed = 0
+                    lastRateLimitResumeMs = null
+                    reconnectingForFailover = false
+                }
+                // A reopen that fails at open reports no seek target (the attach cleared it), so
+                // keep heading for the first incident's target.
+                val resumeMs = SeekRateLimitRecovery.safeResumeMs(
+                    seekTargetMs = controller.lastSeekFailureTargetMs ?: lastRateLimitResumeMs,
+                    lastKnownPositionMs = lastKnownPositionMs.value,
+                    durationMs = lastKnownDurationMs.value,
+                ) ?: return false
+                if (startedAttemptId.value != playbackAttemptId ||
+                    attachedAttemptId.value != playbackAttemptId ||
+                    rateLimitRecoveriesUsed >= SeekRateLimitRecovery.MAX_ATTEMPTS
+                ) {
+                    return false
+                }
+                val settings = PlayerSettingsRepository.uiState.value
+                val waitSeconds = if (rateLimitRecoveriesUsed == 0) {
+                    settings.desktopRateLimitReconnectFirstDelaySeconds
+                } else {
+                    settings.desktopRateLimitReconnectSecondDelaySeconds
+                }
+                rateLimitRecoveriesUsed += 1
+                lastRateLimitRecoveryAtMs = nowMs
+                lastRateLimitResumeMs = resumeMs
+                val failedUrl = redirectResolutions[sourceUrl]?.playbackUrl ?: sourceUrl
+                recoverFromRateLimit(message, failedUrl, waitSeconds * 1000L, resumeMs, this)
+                return true
+            }
+
+            /**
+             * Prefer Failover's fallback: the common layer calls this when failover after a 429
+             * found nothing to switch to (a single source, or only the throttled provider's).
+             * Off still exits, and Prefer Reconnect has already spent its reconnects before
+             * failover ran, so only Prefer Failover reconnects here.
+             */
+            fun reconnectAsFailoverFallback(message: String): Boolean {
+                val mode = PlayerSettingsRepository.uiState.value.desktopRateLimitRecoveryMode
+                if (mode != DesktopRateLimitRecoveryMode.PreferFailover) return false
+                if (!tryStartReconnect(message)) return false
+                reconnectingForFailover = true
+                BingeAdvanceLog.i {
+                    "desktop rate-limit reconnect after failover found no source attemptId=$playbackAttemptId"
+                }
+                return true
+            }
+
+            /**
+             * A host throttled a mid-playback range open (see [SeekRateLimitRecovery]). The bridge
+             * has already stopped the dead demuxer, so nothing counts as ended while this runs.
+             *
+             * TorBox: the node has banned our IP for over an hour, so waiting is pointless — reopen
+             * the same link through another node right away ([TorBoxNodeHop]); when no node
+             * answers, go straight on to failover / exit.
+             *
+             * Anything else: wait [waitMs], then reopen at the seek target. A resolver that is
+             * still answering with its status clip is never opened (the clip would "finish" the
+             * title from the resume position); once the budget runs out the error reaches the
+             * common layer (failover / exit), exactly as before.
+             */
+            private fun recoverFromRateLimit(
+                message: String,
+                failedUrl: String,
+                waitMs: Long,
+                resumeMs: Long,
+                handler: (String?) -> Unit,
+            ) {
+                surfaceScope.launch {
+                    val rateLimitedTitle = runCatching {
+                        getString(Res.string.player_error_debrid_rate_limited)
+                    }.getOrDefault("Debrid Rate Limited")
+                    if (TorBoxNodeHop.isTorBoxNode(failedUrl)) {
+                        BingeAdvanceLog.i {
+                            "desktop rate-limit recovery attemptId=$playbackAttemptId" +
+                                " try=$rateLimitRecoveriesUsed/${SeekRateLimitRecovery.MAX_ATTEMPTS}" +
+                                " torboxHopFrom=${PlaybackRedirectResolver.hostOf(failedUrl)}" +
+                                " resumeMs=$resumeMs after: $message"
+                        }
+                        runCatching {
+                            controller.showPresetPill(
+                                rateLimitedTitle,
+                                getString(Res.string.player_rate_limit_switching_server),
+                                durationMs = 3000,
+                            )
+                        }
+                        val hopped = TorBoxNodeHop.findAlternative(failedUrl, playbackUserAgent)
+                        if (attachedAttemptId.value != playbackAttemptId) return@launch
+                        if (hopped == null) {
+                            BingeAdvanceLog.i {
+                                "desktop TorBox hop found no working node attemptId=$playbackAttemptId"
+                            }
+                            // Nothing to reconnect to: spend the budget so the handler hands the
+                            // error straight to failover / exit instead of waiting on a ban.
+                            rateLimitRecoveriesUsed = SeekRateLimitRecovery.MAX_ATTEMPTS
+                            handler(message)
+                            return@launch
+                        }
+                        BingeAdvanceLog.i {
+                            "desktop TorBox hop attemptId=$playbackAttemptId" +
+                                " to=${PlaybackRedirectResolver.hostOf(hopped)} resumeMs=$resumeMs"
+                        }
+                        redirectResolutions[sourceUrl] = PlaybackRedirectResolution(
+                            sourceUrl,
+                            hopped,
+                            redirectResolutions[sourceUrl]?.hops ?: 0,
+                            PlaybackRedirectResolution.Outcome.Pinned,
+                        )
+                        attachWith(
+                            playbackUrl = hopped,
+                            positionMs = resumeMs,
+                            progressFraction = 0f,
+                            tracePlaybackStart = false,
+                            onError = handler,
+                        )
+                        return@launch
+                    }
+                    BingeAdvanceLog.i {
+                        "desktop rate-limit recovery attemptId=$playbackAttemptId" +
+                            " try=$rateLimitRecoveriesUsed/${SeekRateLimitRecovery.MAX_ATTEMPTS}" +
+                            " waitMs=$waitMs resumeMs=$resumeMs after: $message"
+                    }
+                    runCatching {
+                        controller.showPresetPill(
+                            rateLimitedTitle,
+                            getString(Res.string.player_rate_limit_reconnecting, (waitMs / 1000L).toInt()),
+                            durationMs = waitMs.toInt(),
+                        )
+                    }
+                    delay(waitMs)
+                    if (attachedAttemptId.value != playbackAttemptId) return@launch
+                    // A resolver or proxy in front is asked what it answers now; for AIOStreams
+                    // that re-runs its failover chain, which is exactly the retry it is built for.
+                    val reopen = redirectResolutions[sourceUrl]
+                        ?.takeIf(SeekRateLimitRecovery::canReopenWithoutProbe)
+                        ?: PlaybackRedirectResolver.resolve(sourceUrl, playbackHeaders, forceProbe = true)
+                    if (attachedAttemptId.value != playbackAttemptId) return@launch
+                    if (!SeekRateLimitRecovery.isReopenable(reopen)) {
+                        BingeAdvanceLog.i {
+                            "desktop rate-limit recovery not reopening attemptId=$playbackAttemptId" +
+                                " redirect=${reopen.outcome.name.lowercase()}"
+                        }
+                        // Feed the same error back through the handler: with budget left it waits
+                        // again, otherwise it reaches the common layer as before.
+                        handler(message)
+                        return@launch
+                    }
+                    redirectResolutions[sourceUrl] = reopen
+                    attachWith(
+                        playbackUrl = reopen.playbackUrl,
+                        positionMs = resumeMs,
+                        progressFraction = 0f,
+                        tracePlaybackStart = false,
+                        onError = handler,
+                    )
+                }
+            }
         }
+        controller.rateLimitFailoverFallback = onSurfaceError::reconnectAsFailoverFallback
         attachWith(
             playbackUrl = resolution.playbackUrl,
             positionMs = initialPositionMs,
@@ -729,6 +960,7 @@ private fun NativePlayerSurface(
             }
             if (!snapshot.isLoading && snapshot.positionMs > 0L && !snapshot.isEnded) {
                 lastKnownPositionMs.value = snapshot.positionMs
+                if (snapshot.durationMs > 0L) lastKnownDurationMs.value = snapshot.durationMs
             }
             latestOnSnapshot.value(snapshot)
             delay(500L)

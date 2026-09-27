@@ -19,6 +19,12 @@ data class ThemeColorPalette(
     val background: Color = Color(0xFF0D0D0D),
     val backgroundElevated: Color = Color(0xFF1A1A1A),
     val backgroundCard: Color = Color(0xFF242424),
+    /**
+     * Label colour for a selected/hovered menu item when the accent is too close to the text colour
+     * to mark it (see `selectionTextColor`). Null falls back to [onSecondary], which is only right
+     * when that contrasts with the menu surface — it does not for a near-white accent.
+     */
+    val selectionTextFallback: Color? = null,
 )
 
 /**
@@ -131,6 +137,9 @@ object ThemeColors {
         background = Color(0xFF0D0D0D),
         backgroundElevated = Color(0xFF1A1A1A),
         backgroundCard = Color(0xFF222222),
+        // The white accent cannot mark a white label, and its onSecondary is near-black on a dark
+        // menu. Gold makes it a black, white and gold theme.
+        selectionTextFallback = Color(0xFFD4AF37),
     )
 
     val Custom = customPalette(

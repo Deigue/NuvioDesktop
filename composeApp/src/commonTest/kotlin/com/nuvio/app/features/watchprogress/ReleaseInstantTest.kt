@@ -35,6 +35,84 @@ class ReleaseInstantTest {
     }
 
     @Test
+    fun `noon-utc placeholder is read as the network's date with no time of day`() {
+        // AIOMetadata pins the date to 12:00Z when it cannot resolve the origin timezone (every UK
+        // show, via TVDB's `gbr`). Counting down to it put a 9pm BST premiere at 8am ET.
+        for (raw in listOf("2026-09-17T12:00:00.000Z", "2026-09-17T12:00:00Z")) {
+            val resolved = resolveReleaseInstant(raw)
+
+            assertEquals("2026-09-17", resolved?.localIsoDate, raw)
+            assertEquals(false, resolved?.hasTimeOfDay, raw)
+            assertEquals(CurrentDateProvider.startOfLocalDayEpochMs("2026-09-17"), resolved?.epochMs, raw)
+        }
+    }
+
+    @Test
+    fun `noon in an offset form or off by a second is a real air time`() {
+        assertEquals(true, resolveReleaseInstant("2026-09-17T13:00:00+01:00")?.hasTimeOfDay)
+        assertEquals(true, resolveReleaseInstant("2026-09-17T12:00:01.000Z")?.hasTimeOfDay)
+        assertEquals(true, resolveReleaseInstant("2026-09-17T12:30:00.000Z")?.hasTimeOfDay)
+    }
+
+    @Test
+    fun `tmdb air date wins over the noon-utc placeholder`() {
+        assertEquals(
+            "2026-09-17",
+            preferPreciseReleaseDate(
+                addonReleased = "2026-09-17T12:00:00.000Z",
+                tmdbAirDate = "2026-09-17",
+            ),
+        )
+    }
+
+    @Test
+    fun `placeholder is rebuilt from the tvdb slot in the origin country's zone`() {
+        // All Creatures Great & Small: Channel 5, Thursdays 21:00, TVDB country "gbr". Sept is BST.
+        assertEquals(
+            "2026-09-17T20:00:00Z",
+            repairPlaceholderAirTime("2026-09-17T12:00:00.000Z", airsTime = "21:00", originCountry = "gbr"),
+        )
+        // Same slot in January is GMT.
+        assertEquals(
+            "2026-01-15T21:00:00Z",
+            repairPlaceholderAirTime("2026-01-15T12:00:00.000Z", airsTime = "21:00", originCountry = "GBR"),
+        )
+        // A US slot crosses midnight UTC, and the calendar date is the network's, not UTC's.
+        assertEquals(
+            "2026-09-18T01:00:00Z",
+            repairPlaceholderAirTime("2026-09-17T12:00:00.000Z", airsTime = "9:00 PM", originCountry = "usa"),
+        )
+        assertEquals(true, resolveReleaseInstant("2026-09-17T20:00:00Z")?.hasTimeOfDay)
+    }
+
+    @Test
+    fun `placeholder stays when tvdb cannot place the slot`() {
+        assertNull(repairPlaceholderAirTime("2026-09-17T12:00:00.000Z", airsTime = null, originCountry = "gbr"))
+        assertNull(repairPlaceholderAirTime("2026-09-17T12:00:00.000Z", airsTime = "", originCountry = "gbr"))
+        assertNull(repairPlaceholderAirTime("2026-09-17T12:00:00.000Z", airsTime = "21:00", originCountry = null))
+        assertNull(repairPlaceholderAirTime("2026-09-17T12:00:00.000Z", airsTime = "21:00", originCountry = "xyz"))
+        // Only the placeholder is ever touched — a real timestamp or a bare date is left alone.
+        assertNull(repairPlaceholderAirTime("2026-09-17T20:00:00.000Z", airsTime = "21:00", originCountry = "gbr"))
+        assertNull(repairPlaceholderAirTime("2026-09-17", airsTime = "21:00", originCountry = "gbr"))
+        assertNull(repairPlaceholderAirTime(null, airsTime = "21:00", originCountry = "gbr"))
+    }
+
+    @Test
+    fun `tvdb airsTime spellings`() {
+        assertEquals(21 to 0, parseAirsTime("21:00"))
+        assertEquals(21 to 0, parseAirsTime("9:00 PM"))
+        assertEquals(21 to 30, parseAirsTime("9:30pm"))
+        assertEquals(0 to 0, parseAirsTime("12:00 AM"))
+        assertEquals(12 to 0, parseAirsTime("12:00 PM"))
+        assertEquals(8 to 5, parseAirsTime("08:05"))
+        assertNull(parseAirsTime(null))
+        assertNull(parseAirsTime(""))
+        assertNull(parseAirsTime("25:00"))
+        assertNull(parseAirsTime("13:00 PM"))
+        assertNull(parseAirsTime("evening"))
+    }
+
+    @Test
     fun `unusable values resolve to nothing`() {
         assertNull(resolveReleaseInstant(null))
         assertNull(resolveReleaseInstant("   "))

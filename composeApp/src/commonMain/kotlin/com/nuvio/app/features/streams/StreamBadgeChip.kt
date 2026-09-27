@@ -10,6 +10,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -20,13 +22,41 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.core.ui.NuvioAsyncImage as AsyncImage
-import com.nuvio.app.core.i18n.localizedByteUnit
 import com.nuvio.app.core.ui.NuvioTokens
 import com.nuvio.app.core.ui.nuvio
 import kotlin.math.round
 import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.streams_size
+import nuvio.composeapp.generated.resources.unit_bytes_gb
+import nuvio.composeapp.generated.resources.unit_bytes_mb
 import org.jetbrains.compose.resources.stringResource
+
+private const val STREAM_SIZE_PLACEHOLDER = ""
+
+/**
+ * Formats a file size into the badge text ("SIZE 4.2 GB"). Stream lists resolve it once and provide
+ * it here, so a list of two hundred rows does not look the same three resources up once per row —
+ * on desktop each lookup is a blocking read of the packaged resource file.
+ */
+internal val LocalStreamSizeLabelFormat = staticCompositionLocalOf<((Long) -> String)?> { null }
+
+@Composable
+internal fun rememberStreamSizeLabelFormat(): (Long) -> String {
+    val template = stringResource(Res.string.streams_size, STREAM_SIZE_PLACEHOLDER)
+    val gbUnit = stringResource(Res.string.unit_bytes_gb)
+    val mbUnit = stringResource(Res.string.unit_bytes_mb)
+    return remember(template, gbUnit, mbUnit) {
+        { bytes ->
+            val gib = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+            val sizeLabel = if (gib >= 1.0) {
+                "${round(gib * 10.0) / 10.0} $gbUnit"
+            } else {
+                "${round(bytes.toDouble() / (1024.0 * 1024.0)).toInt()} $mbUnit"
+            }
+            template.replace(STREAM_SIZE_PLACEHOLDER, sizeLabel)
+        }
+    }
+}
 
 internal object StreamBadgeChipDefaults {
     val shape = RoundedCornerShape(NuvioTokens.Radius.sm)
@@ -123,14 +153,7 @@ internal fun StreamBadgeImage(
 internal fun StreamFileSizeBadge(stream: StreamItem) {
     val tokens = MaterialTheme.nuvio
     val bytes = stream.behaviorHints.videoSize ?: return
-    val gib = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
-    val sizeLabel = if (gib >= 1.0) {
-        val roundedGiB = round(gib * 10.0) / 10.0
-        "$roundedGiB ${localizedByteUnit("GB")}"
-    } else {
-        val mib = bytes.toDouble() / (1024.0 * 1024.0)
-        "${round(mib).toInt()} ${localizedByteUnit("MB")}"
-    }
+    val formatSize = LocalStreamSizeLabelFormat.current ?: rememberStreamSizeLabelFormat()
 
     val badgeShape = StreamBadgeChipDefaults.shape
     Box(
@@ -143,7 +166,7 @@ internal fun StreamFileSizeBadge(stream: StreamItem) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = stringResource(Res.string.streams_size, sizeLabel),
+            text = formatSize(bytes),
             style = MaterialTheme.typography.labelSmall.copy(
                 fontSize = StreamBadgeChipDefaults.fileSizeFontSize,
                 lineHeight = StreamBadgeChipDefaults.fileSizeLineHeight,

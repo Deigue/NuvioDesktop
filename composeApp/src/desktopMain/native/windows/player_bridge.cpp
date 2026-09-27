@@ -4521,6 +4521,25 @@ private:
                             ? lastHttpPlaybackError + "; " + message
                             : "Playback seek failed: " + message;
                         nuvioBridgeLog("definitive seek failure reported: " + failureMessage);
+                        // Where the user was going, sent ahead of the error so a recovery can
+                        // resume there. Taken from the seek we issued, never from time-pos: by
+                        // the time FFmpeg logs the failure the demuxer has usually hit EOF and
+                        // time-pos already reads the file's duration (2026-09-26: a recovery
+                        // aimed at 22:46 of a 22:46 episode). Only a recent seek counts — a
+                        // failed background read long after the last seek has no target, and
+                        // the engine falls back to the last real playhead.
+                        double seekTargetSeconds = -1.0;
+                        {
+                            std::lock_guard<std::mutex> lock(mpvMutex);
+                            if (pendingSeekTargetSeconds >= 0.0 &&
+                                std::chrono::steady_clock::now() - pendingSeekIssuedAt <
+                                    std::chrono::seconds(15)) {
+                                seekTargetSeconds = pendingSeekTargetSeconds;
+                            }
+                        }
+                        if (fileLoadedForCurrentSource && seekTargetSeconds >= 0.0) {
+                            sendPlayerEvent("seekFailureTargetMs", seekTargetSeconds * 1000.0);
+                        }
                         sendPlayerEvent("mpvPlaybackError:" + failureMessage, 0.0);
                         const char *stopCommand[] = {"stop", nullptr};
                         mpvApi().command(mpv, stopCommand);

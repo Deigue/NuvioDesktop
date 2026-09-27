@@ -4,12 +4,14 @@ import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.PosterShape
 import com.nuvio.app.features.locallibrary.LocalMediaItem
-import com.nuvio.app.features.mdblist.MdbListSettingsRepository
 import com.nuvio.app.features.metadata.AnimeIdMappingRepository
 import com.nuvio.app.features.metadata.isAnimeNativeId
-import com.nuvio.app.features.tmdb.TmdbSettingsRepository
-import com.nuvio.app.features.tmdb.customPosterTemplateUsesNativeAnimeId
-import com.nuvio.app.features.tmdb.customPosterUrl
+import com.nuvio.app.features.posterservice.CustomPosterKeys
+import com.nuvio.app.features.posterservice.CustomPosterScreen
+import com.nuvio.app.features.posterservice.CustomPosterSettingsRepository
+import com.nuvio.app.features.posterservice.CustomPosterShape
+import com.nuvio.app.features.posterservice.customPosterTemplateUsesNativeAnimeId
+import com.nuvio.app.features.posterservice.customPosterUrl
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -66,7 +68,15 @@ data class LibraryUiState(
     val isLoaded: Boolean = false,
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
-)
+    // `type:id` of every saved title, so a shelf of posters can ask about each card with a set
+    // lookup rather than a scan of [items] or a provider call per card.
+    val savedKeys: Set<String> = emptySet(),
+) {
+    fun contains(id: String, type: String): Boolean = libraryItemKey(id, type) in savedKeys
+}
+
+internal fun Collection<LibraryItem>.toSavedKeys(): Set<String> =
+    mapTo(HashSet(size * 2)) { libraryItemKey(it.id, it.type) }
 
 fun MetaDetails.toLibraryItem(savedAtEpochMs: Long): LibraryItem =
     LibraryItem(
@@ -133,6 +143,8 @@ fun LibraryItem.toMetaPreview(): MetaPreview {
         name = name,
         poster = resolvedPoster,
         posterFallback = if (resolvedPoster != resolvedFallback) resolvedFallback else null,
+        landscapePoster = resolveLibraryPosterServiceUrl(CustomPosterShape.Landscape)
+            .withPosterRefreshToken(posterRefreshToken),
         // Metahub is a guess — a URL built from the IMDb id that may or may not resolve — so art
         // the item actually carries from a metadata provider (the local library's TMDB backdrop)
         // outranks it. Anything else keeps metahub as the id-derived fallback.
@@ -179,28 +191,30 @@ private fun String?.takeIfProviderArt(): String? = this?.takeIf { url ->
  * and receive values such as `kitsu:395`; the older split AniList/Kitsu/MAL placeholders remain
  * supported for other poster services.
  */
-private fun LibraryItem.resolveLibraryPosterUrl(): String? {
-    val settings = TmdbSettingsRepository.snapshot()
-    val custom = if (id.isAnimeNativeId() && !settings.customPosterTemplateUsesNativeAnimeId()) {
-        null
-    } else {
-        customPosterUrl(
-            settings = settings,
-            imdbId = imdbId?.takeIf { it.isNotBlank() } ?: id.takeIf { it.startsWith("tt") },
-            tmdbId = tmdbId?.toString()
-                ?: id.takeIf { it.startsWith("tmdb:") }?.removePrefix("tmdb:")?.substringBefore(":"),
-            type = type,
-            stremioId = id,
-            anilistId = anilistId?.toString()
-                ?: id.takeIf { it.startsWith("anilist:") }?.removePrefix("anilist:")?.substringBefore(":"),
-            kitsuId = kitsuId?.toString()
-                ?: id.takeIf { it.startsWith("kitsu:") }?.removePrefix("kitsu:")?.substringBefore(":"),
-            malId = malId?.toString()
-                ?: id.takeIf { it.startsWith("mal:") }?.removePrefix("mal:")?.substringBefore(":"),
-            mdbListApiKey = MdbListSettingsRepository.snapshot().apiKey,
-        )
-    }
-    return (custom ?: poster).withPosterRefreshToken(posterRefreshToken)
+private fun LibraryItem.resolveLibraryPosterUrl(): String? =
+    (resolveLibraryPosterServiceUrl(CustomPosterShape.Portrait) ?: poster).withPosterRefreshToken(posterRefreshToken)
+
+/** The poster service's URL for this item in the given shape, or null when it does not apply. */
+private fun LibraryItem.resolveLibraryPosterServiceUrl(shape: CustomPosterShape): String? {
+    val settings = CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Library)
+    if (!settings.isActive(shape)) return null
+    if (id.isAnimeNativeId() && !settings.customPosterTemplateUsesNativeAnimeId()) return null
+    return customPosterUrl(
+        settings = settings,
+        imdbId = imdbId?.takeIf { it.isNotBlank() } ?: id.takeIf { it.startsWith("tt") },
+        tmdbId = tmdbId?.toString()
+            ?: id.takeIf { it.startsWith("tmdb:") }?.removePrefix("tmdb:")?.substringBefore(":"),
+        type = type,
+        stremioId = id,
+        anilistId = anilistId?.toString()
+            ?: id.takeIf { it.startsWith("anilist:") }?.removePrefix("anilist:")?.substringBefore(":"),
+        kitsuId = kitsuId?.toString()
+            ?: id.takeIf { it.startsWith("kitsu:") }?.removePrefix("kitsu:")?.substringBefore(":"),
+        malId = malId?.toString()
+            ?: id.takeIf { it.startsWith("mal:") }?.removePrefix("mal:")?.substringBefore(":"),
+        shape = shape,
+        keys = CustomPosterKeys.snapshot(),
+    )
 }
 
 /**

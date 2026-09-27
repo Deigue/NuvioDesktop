@@ -69,6 +69,15 @@ data class PlayerSettingsUiState(
     val defaultPlaybackSpeed: Float = 1f,
     val mouseMoveRevealsControlsEnabled: Boolean = true,
     val desktopLegacyHudEnabled: Boolean = false,
+    val desktopMinimalHudEnabled: Boolean = false,
+    val desktopUltraHudEnabled: Boolean = false,
+    val desktopOfficialHudEnabled: Boolean = false,
+    // Minimal layout only: each control group sits on its own translucent pill.
+    val desktopMinimalHudPillsEnabled: Boolean = false,
+    // Draw the round handle on the seek bar; off leaves the coloured fill edge as the marker.
+    val desktopSeekHandleEnabled: Boolean = true,
+    // The dark top/bottom edge gradients that fade in with the HUD so its controls stay legible.
+    val desktopHudVignetteEnabled: Boolean = true,
     val desktopAlwaysShowClockEnabled: Boolean = false,
     // Adds the playing source (release name + provider) as the bottom row of the paused metadata
     // overlay. Off by default: the raw release strings are noisy, and only some viewers want them.
@@ -108,6 +117,10 @@ data class PlayerSettingsUiState(
     val preferredSubtitleTrackKind: SubtitleTrackKind = SubtitleTrackKind.DEFAULT,
     val subtitleStyle: SubtitleStyleState = SubtitleStyleState.DEFAULT,
     val addonSubtitleStartupMode: AddonSubtitleStartupMode = AddonSubtitleStartupMode.ALL_SUBTITLES,
+    // Automatic selection reaches for a matching addon subtitle before the video's own tracks;
+    // embedded tracks are only auto-selected when no addon subtitle matches. Off keeps the
+    // historical order (built-in wins, addons fill the gap).
+    val preferAddonSubtitles: Boolean = false,
     // Track kinds ruled out by name — signs/songs/karaoke/forced subtitles, commentary and
     // audio-description tracks. Rejected tracks are hidden from the player's lists and never
     // selected automatically. See PlayerTrackRejectKeywords.kt.
@@ -131,6 +144,8 @@ data class PlayerSettingsUiState(
     val streamAutoPlayTimeoutSeconds: Int = 3,
     val skipIntroEnabled: Boolean = true,
     val skipAutoAcceptMode: SkipAutoAcceptMode = SkipAutoAcceptMode.MANUAL,
+    val skipMovieCreditsToPostCredits: Boolean = false,
+    val stripSdhSubtitles: Boolean = false,
     val animeSkipEnabled: Boolean = false,
     val animeSkipClientId: String = "",
     val introDbApiKey: String = "",
@@ -143,7 +158,7 @@ data class PlayerSettingsUiState(
     // default install does at every episode boundary.
     val streamAutoPlayManualNextEpisode: Boolean = false,
     val streamAutoPlayPreferBingeGroup: Boolean = true,
-    val streamAutoPlayReuseBingeGroup: Boolean = true,
+    val streamAutoPlayReuseBingeGroup: Boolean = false,
     // If a stream fails (playback error or never starts within the timeout), automatically try the
     // next stream in the source list instead of exiting. Opt-in.
     val streamFailoverEnabled: Boolean = false,
@@ -207,10 +222,11 @@ data class PlayerSettingsUiState(
     val desktopCustomShaderSelectedPath: String = "",
     // Bitstream/passthrough of compressed audio (AC3/DTS/E-AC3/TrueHD/DTS-HD) to a receiver.
     val desktopAudioPassthroughEnabled: Boolean = false,
-    // Seek-bar hover previews. They come from a second libmpv instance that opens the same stream
-    // and issues a byte-range request per hovered position, so a remote source pays for them in
-    // connection opens — the currency debrid CDNs rate-limit. Off is the escape hatch for that.
-    val desktopSeekThumbnailsEnabled: Boolean = true,
+    // Seek-bar hover previews; see DesktopSeekThumbnailMode for why Local exists.
+    val desktopSeekThumbnailMode: DesktopSeekThumbnailMode = DesktopSeekThumbnailMode.Streaming,
+    val desktopRateLimitRecoveryMode: DesktopRateLimitRecoveryMode = DesktopRateLimitRecoveryMode.PreferFailover,
+    val desktopRateLimitReconnectFirstDelaySeconds: Int = RATE_LIMIT_RECONNECT_FIRST_DEFAULT_SECONDS,
+    val desktopRateLimitReconnectSecondDelaySeconds: Int = RATE_LIMIT_RECONNECT_SECOND_DEFAULT_SECONDS,
     val desktopMpvConfigMode: DesktopMpvConfigMode = DesktopMpvConfigMode.Off,
     // Free-form mpv options, one `key=value` per line, applied just before mpv_initialize so a
     // power user can override any of Nuvio's built-in options.
@@ -223,7 +239,16 @@ data class PlayerSettingsUiState(
     val heroTvTrailerSoundEnabled: Boolean = false,
     val heroTvTrailerFullscreen: Boolean = false,
     val heroTvTrailerSearchEnabled: Boolean = true,
-)
+) {
+    val desktopHudLayout: DesktopHudLayout
+        get() = when {
+            desktopOfficialHudEnabled -> DesktopHudLayout.Official
+            desktopUltraHudEnabled -> DesktopHudLayout.Ultra
+            desktopMinimalHudEnabled -> DesktopHudLayout.Minimal
+            desktopLegacyHudEnabled -> DesktopHudLayout.Legacy
+            else -> DesktopHudLayout.Standard
+        }
+}
 
 object PlayerSettingsRepository {
     private val _uiState = MutableStateFlow(PlayerSettingsUiState())
@@ -235,6 +260,12 @@ object PlayerSettingsRepository {
     private var defaultPlaybackSpeed = 1f
     private var mouseMoveRevealsControlsEnabled = true
     private var desktopLegacyHudEnabled = false
+    private var desktopMinimalHudEnabled = false
+    private var desktopUltraHudEnabled = false
+    private var desktopOfficialHudEnabled = false
+    private var desktopMinimalHudPillsEnabled = false
+    private var desktopSeekHandleEnabled = true
+    private var desktopHudVignetteEnabled = true
     private var desktopAlwaysShowClockEnabled = false
     private var desktopPauseOverlaySourceEnabled = false
     private var desktopPlaybackSpeedFineIncrementsEnabled = false
@@ -258,6 +289,7 @@ object PlayerSettingsRepository {
     private var preferredSubtitleTrackKind = SubtitleTrackKind.DEFAULT
     private var subtitleStyle = SubtitleStyleState.DEFAULT
     private var addonSubtitleStartupMode = AddonSubtitleStartupMode.ALL_SUBTITLES
+    private var preferAddonSubtitles = false
     private var rejectedSubtitleKeywords: Set<SubtitleRejectKeyword> = emptySet()
     private var rejectedAudioKeywords: Set<AudioRejectKeyword> = emptySet()
     private var streamReuseLastLinkEnabled = false
@@ -278,6 +310,8 @@ object PlayerSettingsRepository {
     private var streamAutoPlayTimeoutSeconds = 3
     private var skipIntroEnabled = true
     private var skipAutoAcceptMode = SkipAutoAcceptMode.MANUAL
+    private var skipMovieCreditsToPostCredits = false
+    private var stripSdhSubtitles = false
     private var animeSkipEnabled = false
     private var animeSkipClientId = ""
     private var introDbApiKey = ""
@@ -286,7 +320,7 @@ object PlayerSettingsRepository {
     private var streamAutoPlayNextEpisodeEnabled = false
     private var streamAutoPlayManualNextEpisode = false
     private var streamAutoPlayPreferBingeGroup = true
-    private var streamAutoPlayReuseBingeGroup = true
+    private var streamAutoPlayReuseBingeGroup = false
     private var streamFailoverEnabled = false
     private var streamFailoverTimeoutSeconds = STREAM_FAILOVER_DEFAULT_TIMEOUT_SECONDS
     private var nextEpisodeThresholdMode = NextEpisodeThresholdMode.PERCENTAGE
@@ -332,7 +366,10 @@ object PlayerSettingsRepository {
     private var desktopCustomShaderPaths = ""
     private var desktopCustomShaderSelectedPath = ""
     private var desktopAudioPassthroughEnabled = false
-    private var desktopSeekThumbnailsEnabled = true
+    private var desktopSeekThumbnailMode = DesktopSeekThumbnailMode.Streaming
+    private var desktopRateLimitRecoveryMode = DesktopRateLimitRecoveryMode.PreferFailover
+    private var desktopRateLimitReconnectFirstDelaySeconds = RATE_LIMIT_RECONNECT_FIRST_DEFAULT_SECONDS
+    private var desktopRateLimitReconnectSecondDelaySeconds = RATE_LIMIT_RECONNECT_SECOND_DEFAULT_SECONDS
     private var desktopMpvConfigMode = DesktopMpvConfigMode.Off
     private var desktopCustomMpvOptions = ""
     private var desktopMpvPropertyOverrides: Map<String, String> = emptyMap()
@@ -362,6 +399,12 @@ object PlayerSettingsRepository {
         defaultPlaybackSpeed = 1f
         mouseMoveRevealsControlsEnabled = true
         desktopLegacyHudEnabled = false
+        desktopMinimalHudEnabled = false
+        desktopUltraHudEnabled = false
+        desktopOfficialHudEnabled = false
+        desktopMinimalHudPillsEnabled = false
+        desktopSeekHandleEnabled = true
+        desktopHudVignetteEnabled = true
         desktopAlwaysShowClockEnabled = false
         desktopPauseOverlaySourceEnabled = false
         desktopPlaybackSpeedFineIncrementsEnabled = false
@@ -385,6 +428,7 @@ object PlayerSettingsRepository {
         preferredSubtitleTrackKind = SubtitleTrackKind.DEFAULT
         subtitleStyle = SubtitleStyleState.DEFAULT
         addonSubtitleStartupMode = AddonSubtitleStartupMode.ALL_SUBTITLES
+        preferAddonSubtitles = false
         rejectedSubtitleKeywords = emptySet()
         rejectedAudioKeywords = emptySet()
         streamReuseLastLinkEnabled = false
@@ -405,6 +449,8 @@ object PlayerSettingsRepository {
         streamAutoPlayTimeoutSeconds = 3
         skipIntroEnabled = true
         skipAutoAcceptMode = SkipAutoAcceptMode.MANUAL
+        skipMovieCreditsToPostCredits = false
+        stripSdhSubtitles = false
         animeSkipEnabled = false
         animeSkipClientId = ""
         introDbApiKey = ""
@@ -413,7 +459,7 @@ object PlayerSettingsRepository {
         streamAutoPlayNextEpisodeEnabled = false
         streamAutoPlayManualNextEpisode = false
         streamAutoPlayPreferBingeGroup = true
-        streamAutoPlayReuseBingeGroup = true
+        streamAutoPlayReuseBingeGroup = false
         streamFailoverEnabled = false
         streamFailoverTimeoutSeconds = STREAM_FAILOVER_DEFAULT_TIMEOUT_SECONDS
         nextEpisodeThresholdMode = NextEpisodeThresholdMode.PERCENTAGE
@@ -458,7 +504,10 @@ object PlayerSettingsRepository {
         desktopCustomShaderPaths = ""
         desktopCustomShaderSelectedPath = ""
         desktopAudioPassthroughEnabled = false
-        desktopSeekThumbnailsEnabled = true
+        desktopSeekThumbnailMode = DesktopSeekThumbnailMode.Streaming
+        desktopRateLimitRecoveryMode = DesktopRateLimitRecoveryMode.PreferFailover
+        desktopRateLimitReconnectFirstDelaySeconds = RATE_LIMIT_RECONNECT_FIRST_DEFAULT_SECONDS
+        desktopRateLimitReconnectSecondDelaySeconds = RATE_LIMIT_RECONNECT_SECOND_DEFAULT_SECONDS
         desktopMpvConfigMode = DesktopMpvConfigMode.Off
         desktopCustomMpvOptions = ""
         desktopMpvPropertyOverrides = emptyMap()
@@ -479,6 +528,19 @@ object PlayerSettingsRepository {
         defaultPlaybackSpeed = PlayerSettingsStorage.loadDefaultPlaybackSpeed() ?: 1f
         mouseMoveRevealsControlsEnabled = PlayerSettingsStorage.loadMouseMoveRevealsControlsEnabled() ?: true
         desktopLegacyHudEnabled = PlayerSettingsStorage.loadDesktopLegacyHudEnabled() ?: false
+        desktopMinimalHudEnabled = PlayerSettingsStorage.loadDesktopMinimalHudEnabled() ?: false
+        desktopUltraHudEnabled = PlayerSettingsStorage.loadDesktopUltraHudEnabled() ?: false
+        desktopOfficialHudEnabled = PlayerSettingsStorage.loadDesktopOfficialHudEnabled() ?: false
+        desktopMinimalHudPillsEnabled = PlayerSettingsStorage.loadDesktopMinimalHudPillsEnabled() ?: false
+        desktopSeekHandleEnabled = PlayerSettingsStorage.loadDesktopSeekHandleEnabled() ?: true
+        desktopHudVignetteEnabled = PlayerSettingsStorage.loadDesktopHudVignetteEnabled() ?: true
+        // Four stored flags, one layout: official beats ultra beats minimal beats legacy if several
+        // were ever set.
+        if (desktopOfficialHudEnabled) desktopUltraHudEnabled = false
+        if (desktopOfficialHudEnabled || desktopUltraHudEnabled) desktopMinimalHudEnabled = false
+        if (desktopOfficialHudEnabled || desktopMinimalHudEnabled || desktopUltraHudEnabled) {
+            desktopLegacyHudEnabled = false
+        }
         desktopAlwaysShowClockEnabled = PlayerSettingsStorage.loadDesktopAlwaysShowClockEnabled() ?: false
         desktopPauseOverlaySourceEnabled = PlayerSettingsStorage.loadDesktopPauseOverlaySourceEnabled() ?: false
         desktopPlaybackSpeedFineIncrementsEnabled =
@@ -560,6 +622,7 @@ object PlayerSettingsRepository {
         addonSubtitleStartupMode = PlayerSettingsStorage.loadAddonSubtitleStartupMode()
             ?.let { runCatching { AddonSubtitleStartupMode.valueOf(it) }.getOrNull() }
             ?: AddonSubtitleStartupMode.ALL_SUBTITLES
+        preferAddonSubtitles = PlayerSettingsStorage.loadPreferAddonSubtitles() ?: false
         rejectedSubtitleKeywords =
             parseSubtitleRejectKeywords(PlayerSettingsStorage.loadRejectedSubtitleKeywords())
         rejectedAudioKeywords =
@@ -612,6 +675,8 @@ object PlayerSettingsRepository {
         skipAutoAcceptMode = PlayerSettingsStorage.loadSkipAutoAcceptMode()
             ?.let { runCatching { SkipAutoAcceptMode.valueOf(it) }.getOrNull() }
             ?: SkipAutoAcceptMode.MANUAL
+        skipMovieCreditsToPostCredits = PlayerSettingsStorage.loadSkipMovieCreditsToPostCredits() ?: false
+        stripSdhSubtitles = PlayerSettingsStorage.loadStripSdhSubtitles() ?: false
         animeSkipEnabled = PlayerSettingsStorage.loadAnimeSkipEnabled() ?: false
         animeSkipClientId = PlayerSettingsStorage.loadAnimeSkipClientId() ?: ""
         introDbApiKey = PlayerSettingsStorage.loadIntroDbApiKey() ?: ""
@@ -620,7 +685,7 @@ object PlayerSettingsRepository {
         streamAutoPlayNextEpisodeEnabled = PlayerSettingsStorage.loadStreamAutoPlayNextEpisodeEnabled() ?: false
         streamAutoPlayManualNextEpisode = PlayerSettingsStorage.loadStreamAutoPlayManualNextEpisode() ?: false
         streamAutoPlayPreferBingeGroup = PlayerSettingsStorage.loadStreamAutoPlayPreferBingeGroup() ?: true
-        streamAutoPlayReuseBingeGroup = PlayerSettingsStorage.loadStreamAutoPlayReuseBingeGroup() ?: true
+        streamAutoPlayReuseBingeGroup = PlayerSettingsStorage.loadStreamAutoPlayReuseBingeGroup() ?: false
         streamFailoverEnabled = PlayerSettingsStorage.loadStreamFailoverEnabled() ?: false
         streamFailoverTimeoutSeconds =
             (PlayerSettingsStorage.loadStreamFailoverTimeoutSeconds() ?: STREAM_FAILOVER_DEFAULT_TIMEOUT_SECONDS)
@@ -713,7 +778,24 @@ object PlayerSettingsRepository {
             PlayerSettingsStorage.saveDesktopAnimeMode(DesktopAnimeMode.CustomShader.name)
         }
         desktopAudioPassthroughEnabled = PlayerSettingsStorage.loadDesktopAudioPassthroughEnabled() ?: false
-        desktopSeekThumbnailsEnabled = PlayerSettingsStorage.loadDesktopSeekThumbnailsEnabled() ?: true
+        desktopSeekThumbnailMode = PlayerSettingsStorage.loadDesktopSeekThumbnailMode()
+            ?.let { runCatching { DesktopSeekThumbnailMode.valueOf(it) }.getOrNull() }
+            // Before the mode existed this was an On/Off switch: Off stays Off, On meant every source.
+            ?: when (PlayerSettingsStorage.loadDesktopSeekThumbnailsEnabled()) {
+                false -> DesktopSeekThumbnailMode.Off
+                else -> DesktopSeekThumbnailMode.Streaming
+            }
+        desktopRateLimitRecoveryMode = PlayerSettingsStorage.loadDesktopRateLimitRecoveryMode()
+            ?.let { runCatching { DesktopRateLimitRecoveryMode.valueOf(it) }.getOrNull() }
+            ?: DesktopRateLimitRecoveryMode.PreferFailover
+        desktopRateLimitReconnectFirstDelaySeconds =
+            PlayerSettingsStorage.loadDesktopRateLimitReconnectFirstDelaySeconds()
+                ?.takeIf { it in RATE_LIMIT_RECONNECT_DELAY_VALUES }
+                ?: RATE_LIMIT_RECONNECT_FIRST_DEFAULT_SECONDS
+        desktopRateLimitReconnectSecondDelaySeconds =
+            PlayerSettingsStorage.loadDesktopRateLimitReconnectSecondDelaySeconds()
+                ?.takeIf { it in RATE_LIMIT_RECONNECT_DELAY_VALUES }
+                ?: RATE_LIMIT_RECONNECT_SECOND_DEFAULT_SECONDS
         desktopCustomMpvOptions = PlayerSettingsStorage.loadDesktopCustomMpvOptions().orEmpty()
         desktopMpvConfigMode = PlayerSettingsStorage.loadDesktopMpvConfigMode()
             ?.let { runCatching { DesktopMpvConfigMode.valueOf(it) }.getOrNull() }
@@ -762,12 +844,53 @@ object PlayerSettingsRepository {
         PlayerSettingsStorage.saveMouseMoveRevealsControlsEnabled(enabled)
     }
 
-    fun setDesktopLegacyHudEnabled(enabled: Boolean) {
+    fun setDesktopMinimalHudPillsEnabled(enabled: Boolean) {
         ensureLoaded()
-        if (desktopLegacyHudEnabled == enabled) return
-        desktopLegacyHudEnabled = enabled
+        if (desktopMinimalHudPillsEnabled == enabled) return
+        desktopMinimalHudPillsEnabled = enabled
         publish()
-        PlayerSettingsStorage.saveDesktopLegacyHudEnabled(enabled)
+        PlayerSettingsStorage.saveDesktopMinimalHudPillsEnabled(enabled)
+    }
+
+    fun setDesktopSeekHandleEnabled(enabled: Boolean) {
+        ensureLoaded()
+        if (desktopSeekHandleEnabled == enabled) return
+        desktopSeekHandleEnabled = enabled
+        publish()
+        PlayerSettingsStorage.saveDesktopSeekHandleEnabled(enabled)
+    }
+
+    fun setDesktopHudVignetteEnabled(enabled: Boolean) {
+        ensureLoaded()
+        if (desktopHudVignetteEnabled == enabled) return
+        desktopHudVignetteEnabled = enabled
+        publish()
+        PlayerSettingsStorage.saveDesktopHudVignetteEnabled(enabled)
+    }
+
+    fun setDesktopHudLayout(layout: DesktopHudLayout) {
+        ensureLoaded()
+        val legacy = layout == DesktopHudLayout.Legacy
+        val minimal = layout == DesktopHudLayout.Minimal
+        val ultra = layout == DesktopHudLayout.Ultra
+        val official = layout == DesktopHudLayout.Official
+        if (
+            desktopLegacyHudEnabled == legacy &&
+            desktopMinimalHudEnabled == minimal &&
+            desktopUltraHudEnabled == ultra &&
+            desktopOfficialHudEnabled == official
+        ) {
+            return
+        }
+        desktopLegacyHudEnabled = legacy
+        desktopMinimalHudEnabled = minimal
+        desktopUltraHudEnabled = ultra
+        desktopOfficialHudEnabled = official
+        publish()
+        PlayerSettingsStorage.saveDesktopLegacyHudEnabled(legacy)
+        PlayerSettingsStorage.saveDesktopMinimalHudEnabled(minimal)
+        PlayerSettingsStorage.saveDesktopUltraHudEnabled(ultra)
+        PlayerSettingsStorage.saveDesktopOfficialHudEnabled(official)
     }
 
     fun setDesktopAlwaysShowClockEnabled(enabled: Boolean) {
@@ -1024,6 +1147,14 @@ object PlayerSettingsRepository {
         PlayerSettingsStorage.saveAddonSubtitleStartupMode(mode.name)
     }
 
+    fun setPreferAddonSubtitles(enabled: Boolean) {
+        ensureLoaded()
+        if (preferAddonSubtitles == enabled) return
+        preferAddonSubtitles = enabled
+        publish()
+        PlayerSettingsStorage.savePreferAddonSubtitles(enabled)
+    }
+
     fun setRejectedSubtitleKeywords(keywords: Set<SubtitleRejectKeyword>) {
         ensureLoaded()
         if (rejectedSubtitleKeywords == keywords) return
@@ -1187,6 +1318,22 @@ object PlayerSettingsRepository {
         skipAutoAcceptMode = mode
         publish()
         PlayerSettingsStorage.saveSkipAutoAcceptMode(mode.name)
+    }
+
+    fun setSkipMovieCreditsToPostCredits(enabled: Boolean) {
+        ensureLoaded()
+        if (skipMovieCreditsToPostCredits == enabled) return
+        skipMovieCreditsToPostCredits = enabled
+        publish()
+        PlayerSettingsStorage.saveSkipMovieCreditsToPostCredits(enabled)
+    }
+
+    fun setStripSdhSubtitles(enabled: Boolean) {
+        ensureLoaded()
+        if (stripSdhSubtitles == enabled) return
+        stripSdhSubtitles = enabled
+        publish()
+        PlayerSettingsStorage.saveStripSdhSubtitles(enabled)
     }
 
     fun setAnimeSkipEnabled(enabled: Boolean) {
@@ -1490,6 +1637,12 @@ object PlayerSettingsRepository {
             defaultPlaybackSpeed = defaultPlaybackSpeed,
             mouseMoveRevealsControlsEnabled = mouseMoveRevealsControlsEnabled,
             desktopLegacyHudEnabled = desktopLegacyHudEnabled,
+            desktopMinimalHudEnabled = desktopMinimalHudEnabled,
+            desktopUltraHudEnabled = desktopUltraHudEnabled,
+            desktopOfficialHudEnabled = desktopOfficialHudEnabled,
+            desktopMinimalHudPillsEnabled = desktopMinimalHudPillsEnabled,
+            desktopSeekHandleEnabled = desktopSeekHandleEnabled,
+            desktopHudVignetteEnabled = desktopHudVignetteEnabled,
             desktopAlwaysShowClockEnabled = desktopAlwaysShowClockEnabled,
             desktopPauseOverlaySourceEnabled = desktopPauseOverlaySourceEnabled,
             desktopPlaybackSpeedFineIncrementsEnabled = desktopPlaybackSpeedFineIncrementsEnabled,
@@ -1513,6 +1666,7 @@ object PlayerSettingsRepository {
             preferredSubtitleTrackKind = preferredSubtitleTrackKind,
             subtitleStyle = subtitleStyle,
             addonSubtitleStartupMode = addonSubtitleStartupMode,
+            preferAddonSubtitles = preferAddonSubtitles,
             rejectedSubtitleKeywords = rejectedSubtitleKeywords,
             rejectedAudioKeywords = rejectedAudioKeywords,
             streamReuseLastLinkEnabled = streamReuseLastLinkEnabled,
@@ -1533,6 +1687,8 @@ object PlayerSettingsRepository {
             streamAutoPlayTimeoutSeconds = streamAutoPlayTimeoutSeconds,
             skipIntroEnabled = skipIntroEnabled,
             skipAutoAcceptMode = skipAutoAcceptMode,
+            skipMovieCreditsToPostCredits = skipMovieCreditsToPostCredits,
+            stripSdhSubtitles = stripSdhSubtitles,
             animeSkipEnabled = animeSkipEnabled,
             animeSkipClientId = animeSkipClientId,
             introDbApiKey = introDbApiKey,
@@ -1586,7 +1742,10 @@ object PlayerSettingsRepository {
             desktopCustomShaderPaths = desktopCustomShaderPaths,
             desktopCustomShaderSelectedPath = desktopCustomShaderSelectedPath,
             desktopAudioPassthroughEnabled = desktopAudioPassthroughEnabled,
-            desktopSeekThumbnailsEnabled = desktopSeekThumbnailsEnabled,
+            desktopSeekThumbnailMode = desktopSeekThumbnailMode,
+            desktopRateLimitRecoveryMode = desktopRateLimitRecoveryMode,
+            desktopRateLimitReconnectFirstDelaySeconds = desktopRateLimitReconnectFirstDelaySeconds,
+            desktopRateLimitReconnectSecondDelaySeconds = desktopRateLimitReconnectSecondDelaySeconds,
             desktopMpvConfigMode = desktopMpvConfigMode,
             desktopCustomMpvOptions = desktopCustomMpvOptions,
             desktopMpvPropertyOverrides = desktopMpvPropertyOverrides,
@@ -1812,12 +1971,40 @@ object PlayerSettingsRepository {
         PlayerSettingsStorage.saveDesktopAudioPassthroughEnabled(enabled)
     }
 
-    fun setDesktopSeekThumbnailsEnabled(enabled: Boolean) {
+    fun setDesktopSeekThumbnailMode(mode: DesktopSeekThumbnailMode) {
         ensureLoaded()
-        if (desktopSeekThumbnailsEnabled == enabled) return
-        desktopSeekThumbnailsEnabled = enabled
+        if (desktopSeekThumbnailMode == mode) return
+        desktopSeekThumbnailMode = mode
         publish()
-        PlayerSettingsStorage.saveDesktopSeekThumbnailsEnabled(enabled)
+        PlayerSettingsStorage.saveDesktopSeekThumbnailMode(mode.name)
+    }
+
+    fun setDesktopRateLimitRecoveryMode(mode: DesktopRateLimitRecoveryMode) {
+        ensureLoaded()
+        if (desktopRateLimitRecoveryMode == mode) return
+        desktopRateLimitRecoveryMode = mode
+        publish()
+        PlayerSettingsStorage.saveDesktopRateLimitRecoveryMode(mode.name)
+    }
+
+    fun setDesktopRateLimitReconnectFirstDelaySeconds(seconds: Int) {
+        ensureLoaded()
+        val snapped = seconds.takeIf { it in RATE_LIMIT_RECONNECT_DELAY_VALUES }
+            ?: RATE_LIMIT_RECONNECT_FIRST_DEFAULT_SECONDS
+        if (desktopRateLimitReconnectFirstDelaySeconds == snapped) return
+        desktopRateLimitReconnectFirstDelaySeconds = snapped
+        publish()
+        PlayerSettingsStorage.saveDesktopRateLimitReconnectFirstDelaySeconds(snapped)
+    }
+
+    fun setDesktopRateLimitReconnectSecondDelaySeconds(seconds: Int) {
+        ensureLoaded()
+        val snapped = seconds.takeIf { it in RATE_LIMIT_RECONNECT_DELAY_VALUES }
+            ?: RATE_LIMIT_RECONNECT_SECOND_DEFAULT_SECONDS
+        if (desktopRateLimitReconnectSecondDelaySeconds == snapped) return
+        desktopRateLimitReconnectSecondDelaySeconds = snapped
+        publish()
+        PlayerSettingsStorage.saveDesktopRateLimitReconnectSecondDelaySeconds(snapped)
     }
 
     fun setDesktopCustomMpvOptions(options: String) {

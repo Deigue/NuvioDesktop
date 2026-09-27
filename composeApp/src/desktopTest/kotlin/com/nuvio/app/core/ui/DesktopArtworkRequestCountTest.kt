@@ -100,7 +100,7 @@ class DesktopArtworkRequestCountTest {
             runOnIdle { cardWidth.value = 420 }
             waitUntil(timeoutMillis = 10_000) { successes.get() >= 2 }
             println("NUVIO-PROBE-RESIZE decoded=$decoded")
-            assertEquals(listOf("224x336", "440x660"), decoded.toList())
+            assertEquals(listOf("210x315", "420x630"), decoded.toList())
         } finally {
             file.delete()
         }

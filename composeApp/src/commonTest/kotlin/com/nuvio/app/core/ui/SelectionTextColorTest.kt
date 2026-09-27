@@ -16,26 +16,39 @@ class SelectionTextColorTest {
         accent: Color,
         onAccent: Color = Color(0xFF111111),
         gradientEnd: Color? = null,
+        selectionFallback: Color? = null,
     ) = defaultNuvioThemeTokens(
         palette = ThemeColors.White.copy(
             secondary = accent,
             onSecondary = onAccent,
             accentGradientEnd = gradientEnd,
+            selectionTextFallback = selectionFallback,
         ),
         amoled = false,
         colorScheme = null,
     ).colors
 
     /**
-     * The White theme's accent is `#F5F5F5` and its body text `#F5F7F8`. Painting a selected label
-     * in that accent leaves it identical to every unselected one, so the mark has to come from the
-     * other end of the palette instead.
+     * An accent too close to the body text to mark a label falls back to on-accent, unless the
+     * palette names a fallback of its own.
      */
     @Test
     fun `a near-white accent falls back to on-accent`() {
         val colors = tokens(accent = Color(0xFFF5F5F5))
 
         assertEquals(colors.onAccent, colors.selectionTextColor())
+    }
+
+    /**
+     * The White theme's accent is `#F5F5F5` and its body text `#F5F7F8`, and its on-accent is
+     * near-black — unreadable on a dark menu. It marks selections in gold instead.
+     */
+    @Test
+    fun `the white theme marks selections in gold`() {
+        val colors = defaultNuvioThemeTokens(palette = ThemeColors.White, amoled = false, colorScheme = null).colors
+
+        assertEquals(Color(0xFFD4AF37), colors.selectionTextColor())
+        assertNull(colors.selectionTextBrush())
     }
 
     @Test

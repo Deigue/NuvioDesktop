@@ -102,24 +102,32 @@ private fun ContinueWatchingItem.continueWatchingArtworkUrls(
 ): List<String> = when {
     isNextUp && useEpisodeThumbnails -> artworkChain(
         episodeThumbnail,
+        customPoster,
         poster,
+        customLandscape,
         background,
         imageUrl,
     )
     isNextUp -> artworkChain(
+        customPoster,
         poster,
+        customLandscape,
         background,
         episodeThumbnail,
         imageUrl,
     )
     useEpisodeThumbnails -> artworkChain(
         episodeThumbnail,
+        customPoster,
         poster,
+        customLandscape,
         background,
         imageUrl,
     )
     else -> artworkChain(
+        customPoster,
         poster,
+        customLandscape,
         background,
         episodeThumbnail,
         imageUrl,
@@ -139,7 +147,9 @@ private fun ContinueWatchingItem.continueWatchingPosterArtworkUrls(
         ?.takeIf { it.isNotBlank() && it != normalizedEpisodeThumbnail }
 
     return artworkChain(
+        customPoster,
         poster,
+        customLandscape,
         background,
         nonEpisodeImageUrl,
         if (useEpisodeThumbnails) episodeThumbnail else null,
@@ -152,35 +162,63 @@ private fun ContinueWatchingItem.continueWatchingCardArtworkUrls(
     preferBackdropForNextUp: Boolean,
 ): List<String> = when {
     isNextUp && preferBackdropForNextUp -> artworkChain(
+        customLandscape,
         background,
+        customPoster,
         poster,
         episodeThumbnail,
         imageUrl,
     )
     isNextUp && useEpisodeThumbnails -> artworkChain(
         episodeThumbnail,
+        customLandscape,
         background,
+        customPoster,
         poster,
         imageUrl,
     )
     isNextUp -> artworkChain(
+        customLandscape,
         background,
+        customPoster,
         poster,
         episodeThumbnail,
         imageUrl,
     )
     useEpisodeThumbnails -> artworkChain(
         episodeThumbnail,
+        customLandscape,
         background,
+        customPoster,
         poster,
         imageUrl,
     )
     else -> artworkChain(
+        customLandscape,
         background,
+        customPoster,
         poster,
         episodeThumbnail,
         imageUrl,
     )
+}
+
+/**
+ * The poster service's Continue Watching "All": custom art ahead of everything, the episode still
+ * included, which stays in the chain as the fallback. Otherwise the chain is left as built.
+ */
+/** The card is showing poster-service art rather than an episode still (spoiler blur skips it). */
+private fun ContinueWatchingItem.isShowingCustomArt(url: String?): Boolean =
+    url != null && (url == customPoster?.trim() || url == customLandscape?.trim())
+
+private fun List<String>.withCustomArtFirst(item: ContinueWatchingItem, landscape: Boolean): List<String> {
+    if (!item.customArtFirst) return this
+    val lead = if (landscape) {
+        listOf(item.customLandscape, item.customPoster)
+    } else {
+        listOf(item.customPoster, item.customLandscape)
+    }
+    return (lead.mapNotNull { it?.trim()?.takeIf(String::isNotBlank) } + this).distinct()
 }
 
 /**
@@ -749,9 +787,10 @@ private fun ContinueWatchingCard(
         item.continueWatchingCardArtworkUrls(
             useEpisodeThumbnails = useEpisodeThumbnails,
             preferBackdropForNextUp = preferBackdropForNextUp,
-        ),
+        ).withCustomArtFirst(item, landscape = true),
     )
-    val shouldBlurArtwork = blurNextUp && useEpisodeThumbnails && item.isNextUp
+    val shouldBlurArtwork = blurNextUp && useEpisodeThumbnails && item.isNextUp &&
+        !item.isShowingCustomArt(imageUrl)
     val episodeCode = if (item.seasonNumber != null && item.episodeNumber != null) {
         stringResource(Res.string.streams_episode_badge, item.seasonNumber, item.episodeNumber)
     } else {
@@ -952,7 +991,7 @@ private fun ContinueWatchingWideCard(
     onLongClick: (() -> Unit)?,
 ) {
     val (artworkUrl, onArtworkLoadFailed) = rememberContinueWatchingArtwork(
-        item.continueWatchingArtworkUrls(useEpisodeThumbnails),
+        item.continueWatchingArtworkUrls(useEpisodeThumbnails).withCustomArtFirst(item, landscape = false),
     )
     Row(
         modifier = Modifier
@@ -973,7 +1012,8 @@ private fun ContinueWatchingWideCard(
                 zoomCornerRadius = layout.cardRadius,
             ),
     ) {
-        val shouldBlurArtwork = blurNextUp && useEpisodeThumbnails && item.isNextUp
+        val shouldBlurArtwork = blurNextUp && useEpisodeThumbnails && item.isNextUp &&
+            !item.isShowingCustomArt(artworkUrl)
         ArtworkPanel(
             imageUrl = artworkUrl,
             width = layout.widePosterStripWidth,
@@ -1083,7 +1123,7 @@ private fun ContinueWatchingPosterCard(
     onLongClick: (() -> Unit)?,
 ) {
     val (posterArtworkUrl, onArtworkLoadFailed) = rememberContinueWatchingArtwork(
-        item.continueWatchingPosterArtworkUrls(useEpisodeThumbnails),
+        item.continueWatchingPosterArtworkUrls(useEpisodeThumbnails).withCustomArtFirst(item, landscape = false),
     )
     Column(
         modifier = Modifier.width(layout.posterCardWidth),

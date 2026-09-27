@@ -8,8 +8,8 @@ import com.nuvio.app.features.tmdb.TmdbEntityKind
 import com.nuvio.app.features.tmdb.TmdbEntityMediaType
 import com.nuvio.app.features.tmdb.TmdbEntityRail
 import com.nuvio.app.features.tmdb.TmdbEntityRailType
-import com.nuvio.app.features.tmdb.TmdbSettings
-import com.nuvio.app.features.tmdb.withCustomLibraryPoster
+import com.nuvio.app.features.posterservice.CustomPosterSettings
+import com.nuvio.app.features.posterservice.withCustomPosters
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -108,10 +108,10 @@ class TmdbEntityBrowseCatalogTest {
             poster = "https://image.tmdb.org/t/p/w500/plain.jpg",
         )
 
-        val styled = preview.withCustomLibraryPoster(
-            settings = TmdbSettings(
-                libraryPosterEnabled = true,
-                libraryPosterUrlTemplate = "https://posters.example/{type}/{tmdb_id}",
+        val styled = preview.withCustomPosters(
+            settings = CustomPosterSettings(
+                enabled = true,
+                posterUrlTemplate = "https://posters.example/{type}/{tmdb_id}",
             ),
             imdbId = null,
             tmdbId = 1399,
@@ -130,10 +130,10 @@ class TmdbEntityBrowseCatalogTest {
             poster = "plain-poster",
         )
 
-        val styled = preview.withCustomLibraryPoster(
-            settings = TmdbSettings(
-                libraryPosterEnabled = false,
-                libraryPosterUrlTemplate = "https://posters.example/{tmdb_id}",
+        val styled = preview.withCustomPosters(
+            settings = CustomPosterSettings(
+                enabled = false,
+                posterUrlTemplate = "https://posters.example/{tmdb_id}",
             ),
             imdbId = null,
             tmdbId = 1399,

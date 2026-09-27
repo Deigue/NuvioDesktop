@@ -37,6 +37,7 @@ object TmdbService {
      * the row fetches of TMDB permits for 25 seconds. Loaded once, lazily, on the first external-id
      * lookup rather than at startup — nothing may be added to the startup path (§8).
      */
+    @Volatile
     private var externalIdCacheHydrated = false
 
     /** Set when a new mapping is learned, cleared by the writer. Guarded by [cacheMutex]. */
@@ -209,6 +210,58 @@ object TmdbService {
             if (learned) scheduleExternalIdCacheWrite()
             imdbId
         }
+    }
+
+    /**
+     * Non-suspending, best-effort read of the TMDB→IMDb cache — null when the mapping is not in
+     * memory yet, or when the lock is momentarily held by a writer.
+     *
+     * The "hide watched" filters run inside synchronous publish paths (Home rows, catalog pages)
+     * where a suspending lookup has no place, and the watch history is IMDb-keyed. Rows addressed
+     * as `tmdb:` therefore only get filtered once their IMDb id has been learned by someone else —
+     * the Discover prune pass, the custom-poster path, the details page — and persisted. A miss
+     * here is never fetched: that was the async-warm-and-hope pattern, and it is a known dead end.
+     */
+    fun peekTmdbToImdb(tmdbId: Int, mediaType: String): String? {
+        if (!cacheMutex.tryLock()) return null
+        return try {
+            tmdbToImdbCache["$tmdbId:${normalizeMediaType(mediaType)}"]
+        } finally {
+            cacheMutex.unlock()
+        }
+    }
+
+    /** [peekTmdbToImdb]'s mirror image: the cached TMDB id for an IMDb id, never fetched. */
+    fun peekImdbToTmdb(imdbId: String, mediaType: String): String? {
+        if (!cacheMutex.tryLock()) return null
+        return try {
+            imdbToTmdbCache["$imdbId:${normalizeMediaType(mediaType)}"]
+        } finally {
+            cacheMutex.unlock()
+        }
+    }
+
+    /**
+     * Loads the persisted external-id cache in the background so [peekTmdbToImdb] has something to
+     * read. Idempotent and off the UI thread; the filters that need it call this the first time
+     * they run, rather than at startup (§8).
+     */
+    fun hydrateExternalIdCacheAsync() {
+        if (externalIdCacheHydrated) return
+        cacheScope.launch { hydrateExternalIdCache() }
+    }
+
+    /** Test seam: a TMDB->IMDb mapping as if some other path had just learned it. */
+    internal fun rememberTmdbToImdbForTest(tmdbId: Int, mediaType: String, imdbId: String) {
+        kotlinx.coroutines.runBlocking {
+            cacheMutex.withLock { tmdbToImdbCache["$tmdbId:${normalizeMediaType(mediaType)}"] = imdbId }
+        }
+    }
+
+    /** Suspending form of [hydrateExternalIdCacheAsync], for load paths that filter right after. */
+    suspend fun ensureExternalIdCacheLoaded() {
+        if (externalIdCacheHydrated) return
+        hydrateExternalIdCache()
     }
 
     suspend fun fetchMovieReleaseStatus(

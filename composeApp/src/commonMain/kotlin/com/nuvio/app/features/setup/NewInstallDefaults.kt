@@ -15,6 +15,7 @@ import com.nuvio.app.features.player.DesktopColorProfile
 import com.nuvio.app.features.player.PlayerSettingsRepository
 import com.nuvio.app.features.updater.AppUpdaterPlatform
 import com.nuvio.app.features.updater.UpdateChannel
+import com.nuvio.app.features.watchprogress.ContinueWatchingPreferencesRepository
 import com.nuvio.app.isDesktop
 
 private const val HERO_TRAILER_DELAY_SECONDS = 5
@@ -53,6 +54,9 @@ internal object NewInstallDefaults {
         HomeCatalogSettingsRepository.setCatalogRowShuffleEnabled(true)
         HomeCatalogSettingsRepository.setDiscoverBecauseYouWatchedRows(DISCOVER_BECAUSE_ROWS_RANGE.last)
         HomeCatalogSettingsRepository.setDiscoverTrendingGenreRows(DISCOVER_TRENDING_GENRE_ROWS_RANGE.last)
+
+        // Continue Watching: Up Next gets its own row rather than being mixed into resume items.
+        ContinueWatchingPreferencesRepository.setSeparateNextUpRow(true)
 
         // Home hero trailer. In the hero rather than full screen, because the default display mode
         // is TV Mode; Adaptive Ambient is the mode whose trailers want the whole window.

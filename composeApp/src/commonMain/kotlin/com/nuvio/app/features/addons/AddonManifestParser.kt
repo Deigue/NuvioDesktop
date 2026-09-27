@@ -72,18 +72,35 @@ internal object AddonManifestParser {
                 id = catalog.requiredString("id"),
                 name = catalog.optionalString("name").orEmpty().ifBlank { catalog.requiredString("id") },
                 showInHome = catalog.optionalBoolean("showInHome") ?: true,
-                extra = catalog.array("extra").mapNotNull { extraElement ->
-                    extraElement.jsonObject.optionalString("name")?.takeIf { it.isNotBlank() }?.let { name ->
-                        AddonExtraProperty(
-                            name = name,
-                            isRequired = extraElement.jsonObject.boolean("isRequired"),
-                            options = extraElement.jsonObject.stringList("options"),
-                            optionsLimit = extraElement.jsonObject.int("optionsLimit"),
-                        )
-                    }
-                },
+                extra = catalog.extraProperties(),
             )
         }
+
+    /**
+     * The catalog's extra properties from both manifest shapes. Modern manifests list them under
+     * `extra`; the legacy `extraSupported` / `extraRequired` string arrays are still what plenty of
+     * addons ship, and Stremio honours both. Reading only `extra` left those catalogs looking like
+     * they could neither page nor search, so Home capped them at a preview while the catalog screen
+     * (which sniffs a full page) scrolled the whole thing.
+     */
+    private fun JsonObject.extraProperties(): List<AddonExtraProperty> {
+        val declared = array("extra").mapNotNull { extraElement ->
+            extraElement.jsonObject.optionalString("name")?.takeIf { it.isNotBlank() }?.let { name ->
+                AddonExtraProperty(
+                    name = name,
+                    isRequired = extraElement.jsonObject.boolean("isRequired"),
+                    options = extraElement.jsonObject.stringList("options"),
+                    optionsLimit = extraElement.jsonObject.int("optionsLimit"),
+                )
+            }
+        }
+        val required = stringList("extraRequired")
+        val legacy = (stringList("extraSupported") + required)
+            .distinct()
+            .filter { name -> declared.none { it.name.equals(name, ignoreCase = true) } }
+            .map { name -> AddonExtraProperty(name = name, isRequired = name in required) }
+        return declared + legacy
+    }
 
     private fun JsonObject.behaviorHints(): AddonBehaviorHints {
         val hints = this["behaviorHints"]?.jsonObject ?: return AddonBehaviorHints()

@@ -148,6 +148,8 @@ import com.nuvio.app.features.screensaver.ScreensaverSettingsRepository
 import com.nuvio.app.features.games.GameModeController
 import com.nuvio.app.features.qualicache.QualiCacheSettings
 import com.nuvio.app.features.qualicache.QualiCacheSettingsRepository
+import com.nuvio.app.features.posterservice.CustomPosterSettings
+import com.nuvio.app.features.posterservice.CustomPosterSettingsRepository
 import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsRepository
 import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsUiState
 import com.nuvio.app.features.player.PlayerSettingsRepository
@@ -331,6 +333,10 @@ fun SettingsScreen(
         val qualiCacheSettings by remember {
             QualiCacheSettingsRepository.ensureLoaded()
             QualiCacheSettingsRepository.uiState
+        }.collectAsStateWithLifecycle()
+        val customPosterSettings by remember {
+            CustomPosterSettingsRepository.ensureLoaded()
+            CustomPosterSettingsRepository.uiState
         }.collectAsStateWithLifecycle()
         val gameLibrarySettings by remember {
             GameLibrarySettingsRepository.ensureLoaded()
@@ -546,6 +552,7 @@ fun SettingsScreen(
                 tmdbSettings = tmdbSettings,
                 mdbListSettings = mdbListSettings,
                 qualiCacheSettings = qualiCacheSettings,
+                customPosterSettings = customPosterSettings,
                 gameLibrarySettings = gameLibrarySettings,
                 screensaverSettings = screensaverSettings,
                 debridSettings = debridSettings,
@@ -564,6 +571,7 @@ fun SettingsScreen(
                 homescreenHeroBadgeScale = homescreenSettingsUiState.heroBadgeScale,
                 homescreenHeroReleaseStatusUnavailableOnly = homescreenSettingsUiState.heroReleaseStatusUnavailableOnly,
                 homescreenHideUnreleasedContent = homescreenSettingsUiState.hideUnreleasedContent,
+                homescreenHideWatchedContent = homescreenSettingsUiState.hideWatchedContent,
                 homescreenHideCatalogUnderline = homescreenSettingsUiState.hideCatalogUnderline,
                 homescreenCatalogRowShuffleEnabled = homescreenSettingsUiState.catalogRowShuffleEnabled,
                 homescreenAdaptiveHeroEnabled = homescreenSettingsUiState.adaptiveHeroEnabled,
@@ -633,6 +641,7 @@ fun SettingsScreen(
                 tmdbSettings = tmdbSettings,
                 mdbListSettings = mdbListSettings,
                 qualiCacheSettings = qualiCacheSettings,
+                customPosterSettings = customPosterSettings,
                 gameLibrarySettings = gameLibrarySettings,
                 screensaverSettings = screensaverSettings,
                 debridSettings = debridSettings,
@@ -651,6 +660,7 @@ fun SettingsScreen(
                 homescreenHeroBadgeScale = homescreenSettingsUiState.heroBadgeScale,
                 homescreenHeroReleaseStatusUnavailableOnly = homescreenSettingsUiState.heroReleaseStatusUnavailableOnly,
                 homescreenHideUnreleasedContent = homescreenSettingsUiState.hideUnreleasedContent,
+                homescreenHideWatchedContent = homescreenSettingsUiState.hideWatchedContent,
                 homescreenHideCatalogUnderline = homescreenSettingsUiState.hideCatalogUnderline,
                 homescreenCatalogRowShuffleEnabled = homescreenSettingsUiState.catalogRowShuffleEnabled,
                 homescreenAdaptiveHeroEnabled = homescreenSettingsUiState.adaptiveHeroEnabled,
@@ -728,6 +738,7 @@ private fun MobileSettingsScreen(
     tmdbSettings: TmdbSettings,
     mdbListSettings: MdbListSettings,
     qualiCacheSettings: QualiCacheSettings,
+    customPosterSettings: CustomPosterSettings,
     gameLibrarySettings: GameLibrarySettings,
     screensaverSettings: ScreensaverSettings,
     debridSettings: DebridSettings,
@@ -746,6 +757,7 @@ private fun MobileSettingsScreen(
     homescreenHeroBadgeScale: Float,
     homescreenHeroReleaseStatusUnavailableOnly: Boolean,
     homescreenHideUnreleasedContent: Boolean,
+    homescreenHideWatchedContent: Boolean,
     homescreenHideCatalogUnderline: Boolean,
     homescreenCatalogRowShuffleEnabled: Boolean,
     homescreenAdaptiveHeroEnabled: Boolean,
@@ -1069,6 +1081,7 @@ private fun MobileSettingsScreen(
                     heroBadgeScale = homescreenHeroBadgeScale,
                     heroReleaseStatusUnavailableOnly = homescreenHeroReleaseStatusUnavailableOnly,
                     hideUnreleasedContent = homescreenHideUnreleasedContent,
+                    hideWatchedContent = homescreenHideWatchedContent,
                     hideCatalogUnderline = homescreenHideCatalogUnderline,
                     catalogRowShuffleEnabled = homescreenCatalogRowShuffleEnabled,
                     adaptiveHeroEnabled = homescreenAdaptiveHeroEnabled,
@@ -1086,6 +1099,7 @@ private fun MobileSettingsScreen(
                     onTmdbClick = { onPageChange(SettingsPage.TmdbEnrichment) },
                     onMdbListClick = { onPageChange(SettingsPage.MdbListRatings) },
                     onQualiCacheClick = { onPageChange(SettingsPage.QualiCache) },
+                    onPosterServiceClick = { onPageChange(SettingsPage.PosterService) },
                     onDebridClick = { onPageChange(SettingsPage.Debrid) },
                     onTraktClick = { onPageChange(SettingsPage.TraktAuthentication) },
                     onSimklClick = { onPageChange(SettingsPage.SimklAuthentication) },
@@ -1104,6 +1118,10 @@ private fun MobileSettingsScreen(
                 SettingsPage.QualiCache -> qualiCacheSettingsContent(
                     isTablet = false,
                     settings = qualiCacheSettings,
+                )
+                SettingsPage.PosterService -> customPosterSettingsContent(
+                    isTablet = false,
+                    settings = customPosterSettings,
                 )
                 SettingsPage.Games -> gamesSettingsContent(
                     isTablet = false,
@@ -1235,6 +1253,7 @@ private fun TabletSettingsScreen(
     tmdbSettings: TmdbSettings,
     mdbListSettings: MdbListSettings,
     qualiCacheSettings: QualiCacheSettings,
+    customPosterSettings: CustomPosterSettings,
     gameLibrarySettings: GameLibrarySettings,
     screensaverSettings: ScreensaverSettings,
     debridSettings: DebridSettings,
@@ -1253,6 +1272,7 @@ private fun TabletSettingsScreen(
     homescreenHeroBadgeScale: Float,
     homescreenHeroReleaseStatusUnavailableOnly: Boolean,
     homescreenHideUnreleasedContent: Boolean,
+    homescreenHideWatchedContent: Boolean,
     homescreenHideCatalogUnderline: Boolean,
     homescreenCatalogRowShuffleEnabled: Boolean,
     homescreenAdaptiveHeroEnabled: Boolean,
@@ -1771,6 +1791,7 @@ private fun TabletSettingsScreen(
                     heroBadgeScale = homescreenHeroBadgeScale,
                         heroReleaseStatusUnavailableOnly = homescreenHeroReleaseStatusUnavailableOnly,
                         hideUnreleasedContent = homescreenHideUnreleasedContent,
+                        hideWatchedContent = homescreenHideWatchedContent,
                             hideCatalogUnderline = homescreenHideCatalogUnderline,
                         catalogRowShuffleEnabled = homescreenCatalogRowShuffleEnabled,
                         adaptiveHeroEnabled = homescreenAdaptiveHeroEnabled,
@@ -1788,6 +1809,7 @@ private fun TabletSettingsScreen(
                         onTmdbClick = { onPageChange(SettingsPage.TmdbEnrichment) },
                         onMdbListClick = { onPageChange(SettingsPage.MdbListRatings) },
                     onQualiCacheClick = { onPageChange(SettingsPage.QualiCache) },
+                    onPosterServiceClick = { onPageChange(SettingsPage.PosterService) },
                         onDebridClick = { onPageChange(SettingsPage.Debrid) },
                         onTraktClick = { onPageChange(SettingsPage.TraktAuthentication) },
                         onSimklClick = { onPageChange(SettingsPage.SimklAuthentication) },
@@ -1806,6 +1828,10 @@ private fun TabletSettingsScreen(
                     SettingsPage.QualiCache -> qualiCacheSettingsContent(
                         isTablet = true,
                         settings = qualiCacheSettings,
+                    )
+                    SettingsPage.PosterService -> customPosterSettingsContent(
+                        isTablet = true,
+                        settings = customPosterSettings,
                     )
                     SettingsPage.Games -> gamesSettingsContent(
                         isTablet = true,
@@ -2030,6 +2056,7 @@ private fun SettingsPage.desktopSidebarPage(): SettingsPage = when (this) {
     SettingsPage.TmdbEnrichment,
     SettingsPage.MdbListRatings,
     SettingsPage.QualiCache,
+    SettingsPage.PosterService,
     SettingsPage.Debrid -> SettingsPage.Integrations
     SettingsPage.Notifications -> SettingsPage.Notifications
     SettingsPage.Advanced -> SettingsPage.Advanced
@@ -2041,6 +2068,7 @@ private fun SettingsPage.desktopBackPage(): SettingsPage? = when (this) {
     SettingsPage.TmdbEnrichment,
     SettingsPage.MdbListRatings,
     SettingsPage.QualiCache,
+    SettingsPage.PosterService,
     SettingsPage.Debrid,
     SettingsPage.TraktAuthentication,
     SettingsPage.SimklAuthentication,

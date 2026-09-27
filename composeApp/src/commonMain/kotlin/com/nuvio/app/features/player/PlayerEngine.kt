@@ -52,6 +52,13 @@ interface PlayerEngineController {
      * outlives a source change may treat it as [showTransientMessage]; others no-op.
      */
     fun showTransientMessageAfterNextAttach(title: String, value: String) {}
+
+    /**
+     * Last resort after a mid-playback rate limit whose failover found no other source: lets an
+     * engine that can reconnect the same stream do so. False means nothing was started and the
+     * caller should exit as usual.
+     */
+    fun reconnectAfterRateLimit(message: String): Boolean = false
 }
 
 data class PlayerChapter(
@@ -228,6 +235,12 @@ data class PlayerControlsState(
     val controlsVisible: Boolean = true,
     val mouseMoveRevealsControlsEnabled: Boolean = false,
     val legacyHudEnabled: Boolean = false,
+    val minimalHudEnabled: Boolean = false,
+    val minimalHudPillsEnabled: Boolean = false,
+    val ultraHudEnabled: Boolean = false,
+    val officialHudEnabled: Boolean = false,
+    val seekHandleEnabled: Boolean = true,
+    val hudVignetteEnabled: Boolean = true,
     val alwaysShowClock: Boolean = false,
     val playbackSpeedFineIncrementsEnabled: Boolean = false,
     val playbackSpeedToggleLow: Float = 1f,
@@ -253,6 +266,11 @@ data class PlayerControlsState(
     val skipPromptStartMs: Long = 0L,
     val skipPromptEndMs: Long = 0L,
     val skipPromptDismissed: Boolean = false,
+    // What the skip key does right now (a SkipKeyActions value, or "" for nothing). Resolved once
+    // here so the AWT dispatcher, the HUD's own keydown path and the gamepad all agree.
+    val skipKeyAction: String = "",
+    val skipSubmitToast: SkipSubmitToastCopy = SkipSubmitToastCopy(),
+    val skipSubmitToastDismissible: Boolean = false,
     val nextEpisodeVisible: Boolean = false,
     val nextEpisodeHeaderLabel: String = "Next episode",
     val nextEpisodeTitle: String = "",

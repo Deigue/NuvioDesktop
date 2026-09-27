@@ -1662,6 +1662,8 @@ internal fun StreamList(
         )
     }
 
+    val formatStreamSize = rememberStreamSizeLabelFormat()
+    CompositionLocalProvider(LocalStreamSizeLabelFormat provides formatStreamSize) {
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxWidth(),
@@ -1746,6 +1748,7 @@ internal fun StreamList(
                 }
             }
         }
+    }
     }
 }
 

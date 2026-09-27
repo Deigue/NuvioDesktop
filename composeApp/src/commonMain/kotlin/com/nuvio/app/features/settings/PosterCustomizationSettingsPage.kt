@@ -52,6 +52,8 @@ import nuvio.composeapp.generated.resources.settings_poster_width_large
 import nuvio.composeapp.generated.resources.settings_poster_width_standard
 import nuvio.composeapp.generated.resources.settings_poster_action_preview
 import nuvio.composeapp.generated.resources.settings_poster_action_preview_description
+import nuvio.composeapp.generated.resources.settings_poster_watchlist_badge
+import nuvio.composeapp.generated.resources.settings_poster_watchlist_badge_description
 import nuvio.composeapp.generated.resources.settings_poster_card_depth
 import nuvio.composeapp.generated.resources.settings_poster_card_depth_apply_to
 import nuvio.composeapp.generated.resources.settings_poster_card_depth_cast
@@ -77,6 +79,7 @@ internal fun PosterCardStyleControls(
     posterHighlightMode: PosterHighlightMode,
     hideLabelsEnabled: Boolean,
     zoomActionPreviewEnabled: Boolean,
+    watchlistBadgeEnabled: Boolean,
     onWidthSelected: (Int) -> Unit,
     onCornerRadiusSelected: (Int) -> Unit,
     onCatalogLandscapeModeChange: (Boolean) -> Unit,
@@ -204,6 +207,15 @@ internal fun PosterCardStyleControls(
             checked = zoomActionPreviewEnabled,
             isTablet = isTablet,
             onCheckedChange = PosterCardStyleRepository::setZoomActionPreviewEnabled,
+        )
+        SettingsGroupDivider(isTablet = isTablet)
+        SettingsSwitchRow(
+            title = stringResource(Res.string.settings_poster_watchlist_badge),
+            description = stringResource(Res.string.settings_poster_watchlist_badge_description),
+            checked = watchlistBadgeEnabled,
+            isTablet = isTablet,
+            modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("poster-watchlist-badge")),
+            onCheckedChange = PosterCardStyleRepository::setWatchlistBadgeEnabled,
         )
     }
 }

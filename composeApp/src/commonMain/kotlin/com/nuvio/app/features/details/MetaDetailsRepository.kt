@@ -7,9 +7,17 @@ import com.nuvio.app.features.addons.buildAddonResourceUrl
 import com.nuvio.app.features.addons.enabledAddons
 import com.nuvio.app.features.addons.httpGetText
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
+import com.nuvio.app.features.home.MetaPreview
+import com.nuvio.app.features.home.WatchedContentFilter
 import com.nuvio.app.features.home.filterReleasedItems
+import com.nuvio.app.features.home.filterUnwatchedItems
 import com.nuvio.app.features.mdblist.MdbListMetadataService
 import com.nuvio.app.features.mdblist.MdbListSettingsRepository
+import com.nuvio.app.features.posterservice.CustomPosterKeys
+import com.nuvio.app.features.posterservice.CustomPosterScreen
+import com.nuvio.app.features.posterservice.CustomPosterSettingsRepository
+import com.nuvio.app.features.posterservice.cacheToken
+import com.nuvio.app.features.posterservice.withResolvedCustomPosters
 import com.nuvio.app.features.metadata.AnimeArtworkService
 import com.nuvio.app.features.metadata.animeMovieTmdbFallbackId
 import com.nuvio.app.features.metadata.hasAnimeNamespacePrefix
@@ -19,6 +27,8 @@ import com.nuvio.app.features.tmdb.HeroImageSource
 import com.nuvio.app.features.tmdb.TmdbService
 import com.nuvio.app.features.tmdb.TmdbSettingsRepository
 import com.nuvio.app.features.tvdb.TvdbImageService
+import com.nuvio.app.features.watchprogress.isPlaceholderAirTime
+import com.nuvio.app.features.watchprogress.repairPlaceholderAirTime
 import com.nuvio.app.features.tvdb.TvdbSettingsRepository
 import com.nuvio.app.features.trakt.TraktAuthRepository
 import com.nuvio.app.features.trakt.TraktConnectionMode
@@ -33,6 +43,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -762,6 +773,32 @@ object MetaDetailsRepository {
 
     private const val FETCH_TIMEOUT_MS = 12_000L
     private const val TMDB_ENRICH_TIMEOUT_MS = 5_000L
+    private const val TVDB_AIR_TIME_TIMEOUT_MS = 4_000L
+
+    /**
+     * AIOMetadata dates an episode at noon UTC when it cannot work out the series' air time — every
+     * UK show, since TVDB says `gbr` and the addon's timezone table only knows `gb`. Ask TVDB for
+     * the schedule ourselves and rebuild the instant; one `/extended` call per series per run,
+     * and none at all for a meta with no placeholder or no TVDB id.
+     */
+    private suspend fun repairPlaceholderAirTimes(meta: MetaDetails): MetaDetails {
+        if (meta.videos.none { isPlaceholderAirTime(it.released) }) return meta
+        val tvdbId = meta.tvdbId?.trim()?.takeIf(String::isNotBlank) ?: return meta
+        val schedule = TvdbImageService.fetchAirSchedule(tvdbId) ?: return meta
+        var repaired = 0
+        val videos = meta.videos.map { video ->
+            val fixed = repairPlaceholderAirTime(video.released, schedule.airsTime, schedule.originalCountry)
+                ?: return@map video
+            repaired++
+            video.copy(released = fixed)
+        }
+        if (repaired == 0) {
+            log.d { "Placeholder air times left as-is for ${meta.id}: tvdb airsTime=${schedule.airsTime} country=${schedule.originalCountry}" }
+            return meta
+        }
+        log.d { "Repaired $repaired placeholder air times for ${meta.id} from tvdb airsTime=${schedule.airsTime} country=${schedule.originalCountry}" }
+        return meta.copy(videos = videos)
+    }
     private const val MDBLIST_ENRICH_TIMEOUT_MS = 5_000L
     private const val IMDB_INTERESTS_TIMEOUT_MS = 6_000L
     private const val LOGO_FALLBACK_TIMEOUT_MS = 5_000L
@@ -812,7 +849,12 @@ object MetaDetailsRepository {
             log.d { "Fetching meta from: $url [origin=$origin]" }
             val payload = httpGetText(url)
             log.d { "Raw payload length=${payload.length}, first 500 chars: ${payload.take(500)}" }
-            val result = MetaDetailsParser.parse(payload)
+            val parsed = MetaDetailsParser.parse(payload)
+            // Before TMDB enrichment: preferPreciseReleaseDate keeps a timestamped addon value
+            // over TMDB's bare date, so the placeholder has to become a real instant first.
+            val result = withTimeoutOrNull(TVDB_AIR_TIME_TIMEOUT_MS) {
+                repairPlaceholderAirTimes(parsed)
+            } ?: parsed
             val tmdbEnriched = if (enrichTmdb) {
                 withTimeoutOrNull(TMDB_ENRICH_TIMEOUT_MS) {
                     TmdbMetadataService.enrichMeta(
@@ -1087,6 +1129,32 @@ object MetaDetailsRepository {
         fallbackItemId: String,
         fallbackItemType: String,
     ): MetaDetails {
+        val sourced = selectMoreLikeThisSource(meta, fallbackItemId, fallbackItemType)
+        if (sourced.moreLikeThis.isEmpty()) return sourced
+        return sourced.copy(moreLikeThis = sourced.moreLikeThis.withCustomPosterService())
+    }
+
+    /**
+     * Runs the More Like This rail through the user's poster service, the way every Library and
+     * Discover row already is. The rail's cards are landscape, so this is where the landscape
+     * template shows up on the details page; the portrait template rides along for the poster-shaped
+     * layouts. Ids are resolved per item from the cached TMDB `/find` lookups, in parallel — a dozen
+     * cards, one request each at most, and only when a template names an id the item lacks.
+     */
+    private suspend fun List<MetaPreview>.withCustomPosterService(): List<MetaPreview> {
+        val settings = CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Details)
+        if (!settings.isActive) return this
+        val keys = CustomPosterKeys.snapshot()
+        return coroutineScope {
+            map { item -> async { item.withResolvedCustomPosters(settings, keys) } }.awaitAll()
+        }
+    }
+
+    private suspend fun selectMoreLikeThisSource(
+        meta: MetaDetails,
+        fallbackItemId: String,
+        fallbackItemType: String,
+    ): MetaDetails {
         if (!meta.imdbTmdbIdentityTrusted) {
             return meta.copy(moreLikeThis = emptyList(), moreLikeThisSource = null)
         }
@@ -1159,7 +1227,9 @@ object MetaDetailsRepository {
         return shouldUseTraktMoreLikeThis(
             isAuthenticated = isTraktAuthenticated,
             source = traktSettings.moreLikeThisSource,
-        ) || !tmdbSettings.enabled || !tmdbSettings.useMoreLikeThis || meta.moreLikeThisSource == null && meta.moreLikeThis.isNotEmpty()
+        ) || !tmdbSettings.enabled || !tmdbSettings.useMoreLikeThis || meta.moreLikeThisSource == null && meta.moreLikeThis.isNotEmpty() ||
+            // TMDB attached the rail already, but the poster service still has to run over it.
+            meta.moreLikeThis.isNotEmpty() && CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Details).isActive
     }
 
     private fun buildMetaScreenSettingsFingerprint(
@@ -1176,6 +1246,7 @@ object MetaDetailsRepository {
             append("${settings.enabled}:${settings.apiKey.trim()}:$providers")
             append("|more_like=${traktSettings.moreLikeThisSource}:$traktAuthMode")
             append("|tmdb=${tmdbSettings.enabled}:${tmdbSettings.useMoreLikeThis}:${tmdbSettings.hasApiKey}:${tmdbSettings.language}")
+            append("|${CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Details).cacheToken()}")
         }
     }
 
@@ -1202,14 +1273,20 @@ object MetaDetailsRepository {
         )
     }
 
+    /** Both browsing filters on the recommendation rails; the title itself is never filtered. */
     private fun MetaDetails.withUnreleasedFilter(): MetaDetails {
-        if (!HomeCatalogSettingsRepository.snapshot().hideUnreleasedContent) return this
-        val todayIsoDate = CurrentDateProvider.todayIsoDate()
-        val releasedMoreLikeThis = moreLikeThis.filterReleasedItems(todayIsoDate)
+        val snapshot = HomeCatalogSettingsRepository.snapshot()
+        val todayIsoDate = if (snapshot.hideUnreleasedContent) CurrentDateProvider.todayIsoDate() else null
+        val watchedFilter = WatchedContentFilter.current()
+        if (todayIsoDate == null && watchedFilter == null) return this
+        fun List<MetaPreview>.filtered(): List<MetaPreview> =
+            (if (todayIsoDate == null) this else filterReleasedItems(todayIsoDate))
+                .filterUnwatchedItems(watchedFilter)
+        val filteredMoreLikeThis = moreLikeThis.filtered()
         return copy(
-            moreLikeThis = releasedMoreLikeThis,
-            moreLikeThisSource = moreLikeThisSource.takeIf { releasedMoreLikeThis.isNotEmpty() },
-            collectionItems = collectionItems.filterReleasedItems(todayIsoDate),
+            moreLikeThis = filteredMoreLikeThis,
+            moreLikeThisSource = moreLikeThisSource.takeIf { filteredMoreLikeThis.isNotEmpty() },
+            collectionItems = collectionItems.filtered(),
         )
     }
 

@@ -3,6 +3,7 @@ package com.nuvio.app.features.settings
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.HighQuality
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.foundation.lazy.LazyListScope
@@ -44,6 +45,7 @@ internal fun LazyListScope.integrationsContent(
     onTmdbClick: () -> Unit,
     onMdbListClick: () -> Unit,
     onQualiCacheClick: () -> Unit,
+    onPosterServiceClick: () -> Unit,
     onDebridClick: () -> Unit,
     onTraktClick: () -> Unit,
     onSimklClick: () -> Unit,
@@ -115,6 +117,14 @@ internal fun LazyListScope.integrationsContent(
                     icon = Icons.Rounded.HighQuality,
                     isTablet = isTablet,
                     onClick = onQualiCacheClick,
+                )
+                SettingsGroupDivider(isTablet = isTablet)
+                SettingsNavigationRow(
+                    title = stringResource(Res.string.compose_settings_page_poster_service),
+                    description = stringResource(Res.string.settings_integrations_poster_service_description),
+                    icon = Icons.Rounded.Image,
+                    isTablet = isTablet,
+                    onClick = onPosterServiceClick,
                 )
                 SettingsGroupDivider(isTablet = isTablet)
                 SettingsNavigationRow(

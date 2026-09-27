@@ -9,6 +9,7 @@ internal actual object GameLibrarySettingsStorage {
     private const val steamGridDbApiKeyKey = "games_steamgriddb_api_key"
     private const val backdropStyleKey = "games_backdrop_style"
     private const val metadataSourceKey = "games_metadata_source"
+    private const val closeAfterLaunchKey = "games_close_after_launch"
     private const val migratedKey = "games_settings_migrated_from_library_file"
     private val store = DesktopStorage.store("nuvio_games_settings")
 
@@ -22,6 +23,8 @@ internal actual object GameLibrarySettingsStorage {
     actual fun saveBackdropStyle(value: String) = save(backdropStyleKey, value)
     actual fun loadMetadataSource(): String? = load(metadataSourceKey)
     actual fun saveMetadataSource(value: String) = save(metadataSourceKey, value)
+    actual fun loadCloseAfterLaunch(): Boolean? = store.getBoolean(ProfileScopedKey.of(closeAfterLaunchKey))
+    actual fun saveCloseAfterLaunch(value: Boolean) = store.putBoolean(ProfileScopedKey.of(closeAfterLaunchKey), value)
 
     private fun load(key: String): String? {
         migrateFromLibraryFileIfNeeded()

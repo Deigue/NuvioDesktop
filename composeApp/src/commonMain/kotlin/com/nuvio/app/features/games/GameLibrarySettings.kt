@@ -17,6 +17,10 @@ data class GameLibrarySettings(
     val steamGridDbApiKey: String = "",
     val backdropStyle: GameBackdropStyle = GameBackdropStyle.BlackShelf,
     val metadataSource: GameMetadataSource = GameMetadataSource.Igdb,
+    // Nuvio exits once a game has been started. The client idles at close to a gigabyte, which
+    // is a gigabyte the game would rather have; the tray icon is not enough, since the heap
+    // stays resident behind it.
+    val closeAfterLaunch: Boolean = false,
 ) {
     /** IGDB needs both halves of a Twitch confidential application; one alone buys nothing. */
     val igdbConfigured: Boolean

@@ -47,6 +47,7 @@ internal fun BoxScope.PlayerPlaybackOverlays(
     initialLoadCompleted: Boolean,
     pausedOverlayVisible: Boolean,
     activeSkipInterval: SkipInterval?,
+    skipLandsOnPostCredits: Boolean,
     skipIntervalDismissed: Boolean,
     controlsVisible: Boolean,
     onSkipInterval: (SkipInterval) -> Unit,
@@ -135,6 +136,8 @@ internal fun BoxScope.PlayerPlaybackOverlays(
                 activeSkipInterval?.let(onSkipInterval)
             },
             onDismiss = onDismissSkipInterval,
+            landsOnPostCredits = skipLandsOnPostCredits,
+            isMovie = !isSeries,
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(start = sliderEdgePadding, bottom = overlayBottomPadding),

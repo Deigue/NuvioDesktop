@@ -28,7 +28,7 @@ enum class PlayerShortcutAction(
     OpenSources("open_sources", "Open sources panel", PlayerShortcutSection.TracksAndPanels),
     OpenEpisodes("open_episodes", "Open episodes panel", PlayerShortcutSection.TracksAndPanels),
     CycleZoom("cycle_zoom", "Cycle zoom / aspect ratio", PlayerShortcutSection.TracksAndPanels),
-    SkipInterval("skip_interval", "Skip intro / outro (while prompt is shown)", PlayerShortcutSection.TracksAndPanels),
+    SkipInterval("skip_interval", "Skip intro / outro, play next episode, or submit timestamps to SkipDB (whichever is on screen)", PlayerShortcutSection.TracksAndPanels),
     CycleSvp("cycle_svp", "Cycle motion interpolation (SVP)", PlayerShortcutSection.VideoEnhancement),
     CycleHdr("cycle_hdr", "Cycle HDR mode", PlayerShortcutSection.VideoEnhancement),
     CycleColorProfile("cycle_color_profile", "Cycle color profile", PlayerShortcutSection.VideoEnhancement),

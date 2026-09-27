@@ -216,6 +216,8 @@ data class NuvioColorTokens(
     /** Which way [accentFill] runs; ignored when [accentGradientEnd] is null. */
     val accentGradientDirection: AccentGradientDirection,
     val onAccent: Color,
+    /** See [ThemeColorPalette.selectionTextFallback]; null means use [onAccent]. */
+    val selectionTextFallback: Color? = null,
     val focusRing: Color,
     val focusBackground: Color,
     val borderSubtle: Color,
@@ -389,7 +391,7 @@ internal val LocalNuvioThemeTokens = staticCompositionLocalOf {
  */
 fun NuvioColorTokens.selectionTextColor(): Color =
     if (abs(accent.relativeLuminance() - textPrimary.relativeLuminance()) < SELECTION_TEXT_MIN_GAP) {
-        onAccent
+        selectionTextFallback ?: onAccent
     } else {
         accent
     }
@@ -509,6 +511,7 @@ internal fun defaultNuvioThemeTokens(
             accentGradientEnd = palette.accentGradientEnd,
             accentGradientDirection = accentGradientDirection,
             onAccent = palette.onSecondary,
+            selectionTextFallback = palette.selectionTextFallback,
             focusRing = palette.focusRing,
             focusBackground = palette.focusBackground,
             borderSubtle = borderSubtle,

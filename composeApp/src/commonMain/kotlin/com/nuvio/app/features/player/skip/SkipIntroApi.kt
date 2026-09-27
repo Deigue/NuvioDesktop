@@ -3,6 +3,7 @@ package com.nuvio.app.features.player.skip
 import com.nuvio.app.features.addons.httpGetText
 import com.nuvio.app.features.addons.httpPostJsonWithHeaders
 import com.nuvio.app.features.addons.httpRequestRaw
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 
 internal object SkipIntroApi {
@@ -60,17 +61,26 @@ internal object SkipIntroApi {
 
     // --- IntroDb ---
 
+    /** Intro, recap and outro of one episode, from IntroDB's `/segments` endpoint. */
     suspend fun getIntroDbSegments(
         imdbId: String,
         season: Int,
         episode: Int,
-    ): IntroDbSegmentsResponse? {
+    ): IntroDbSegmentsResponse? =
+        getIntroDbSegmentsAt("segments?imdb_id=$imdbId&season=$season&episode=$episode")
+
+    /** End credits and any post-credits scene of a film. */
+    suspend fun getIntroDbMovieSegments(imdbId: String): IntroDbSegmentsResponse? =
+        getIntroDbSegmentsAt("segments?imdb_id=$imdbId&is_movie=true")
+
+    private suspend fun getIntroDbSegmentsAt(pathAndQuery: String): IntroDbSegmentsResponse? {
         val baseUrl = IntroDbConfig.URL.trimEnd('/')
         if (baseUrl.isBlank()) return null
-        val url = "$baseUrl/intro?imdb_id=$imdbId&season=$season&episode=$episode"
         return try {
-            val text = httpGetText(url)
+            val text = httpGetText("$baseUrl/$pathAndQuery")
             json.decodeFromString<IntroDbSegmentsResponse>(text)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
             null
         }

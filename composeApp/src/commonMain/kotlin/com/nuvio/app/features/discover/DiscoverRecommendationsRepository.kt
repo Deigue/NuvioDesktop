@@ -5,20 +5,16 @@ import com.nuvio.app.features.home.HeroDiscoveryMetadataService
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.HomeCatalogSettingsSnapshot
 import com.nuvio.app.features.home.MetaPreview
-import com.nuvio.app.features.mdblist.MdbListSettingsRepository
-import com.nuvio.app.features.metadata.isAnimeNativeId
 import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsClock
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.tmdb.TmdbBackgroundLane
 import com.nuvio.app.features.tmdb.TmdbSearchResult
 import com.nuvio.app.features.tmdb.TmdbService
-import com.nuvio.app.features.tmdb.TmdbSettings
-import com.nuvio.app.features.tmdb.TmdbSettingsRepository
-import com.nuvio.app.features.tmdb.customPosterTemplateNeedsImdbId
-import com.nuvio.app.features.tmdb.customPosterTemplateNeedsTmdbId
-import com.nuvio.app.features.tmdb.customPosterTemplateUsesNativeAnimeId
-import com.nuvio.app.features.tmdb.resolveCustomPosterIds
-import com.nuvio.app.features.tmdb.withCustomLibraryPoster
+import com.nuvio.app.features.posterservice.CustomPosterScreen
+import com.nuvio.app.features.posterservice.CustomPosterSettingsRepository
+import com.nuvio.app.features.posterservice.prefetchCustomPosterIds
+import com.nuvio.app.features.posterservice.withCachedCustomPosters
+import com.nuvio.app.features.posterservice.withCustomPosterOverlay
 import com.nuvio.app.features.watched.WatchedRepository
 import com.nuvio.app.features.watched.watchedItemKey
 import com.nuvio.app.features.watchprogress.WatchProgressClock
@@ -105,7 +101,14 @@ object DiscoverRecommendationsRepository {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _uiState = MutableStateFlow(DiscoverRecommendationsUiState())
+    // Rows (and the on-disk row cache) hold plain art; the poster service is applied on read.
     val uiState: StateFlow<DiscoverRecommendationsUiState> = _uiState.asStateFlow()
+        .withCustomPosterOverlay(CustomPosterScreen.Discover) { settings, keys ->
+            copy(rows = rows.map { row ->
+                val items = row.items.withCachedCustomPosters(settings, keys)
+                if (items === row.items) row else row.copy(items = items)
+            })
+        }
 
     private val refreshMutex = Mutex()
     private var activeJob: Job? = null
@@ -325,13 +328,12 @@ object DiscoverRecommendationsRepository {
         val aiRows = if (aiRowDefinitions.isEmpty()) {
             emptyList()
         } else {
-            val posterSettings = TmdbSettingsRepository.snapshot()
-            val posterMdbListKey = MdbListSettingsRepository.snapshot().apiKey
+            val posterSettings = CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Discover)
             aiRowDefinitions.map { row ->
                 val built = row.toRecommendationRow()
                 val serviced = coroutineScope {
                     built.items
-                        .map { item -> async { item.withPosterService(posterSettings, posterMdbListKey) } }
+                        .map { item -> async { item.prefetchCustomPosterIds(posterSettings) } }
                         .awaitAll()
                 }
                 built.copy(items = serviced)
@@ -643,11 +645,10 @@ object DiscoverRecommendationsRepository {
             return null
         }
         log.d { "Finish what you started: ${picked.size} titles" }
-        val tmdbSettings = TmdbSettingsRepository.snapshot()
-        val mdbListApiKey = MdbListSettingsRepository.snapshot().apiKey
+        val posterSettings = CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Discover)
         val items = coroutineScope {
             picked.map { entry ->
-                async { entry.toMetaPreview().withProgressPosterService(tmdbSettings, mdbListApiKey) }
+                async { entry.toMetaPreview().prefetchCustomPosterIds(posterSettings) }
             }.awaitAll()
         }
         return DiscoverRecommendationRow(
@@ -655,47 +656,6 @@ object DiscoverRecommendationsRepository {
             title = getString(Res.string.discover_row_finish_what_you_started),
             items = items,
             entryId = DiscoverRowFamily.Finish.entryId,
-        )
-    }
-
-    /**
-     * Runs a locally-sourced item through the user's poster service.
-     *
-     * Separate from [withPosterService] because the two start from different places. A TMDB-generated
-     * item knows its TMDB id and nothing else; this one knows whatever id its addon used, which is
-     * usually IMDb and sometimes neither. [resolveCustomPosterIds] fills in only what the template
-     * actually names, so a template wanting just `{id}` costs no lookups at all.
-     *
-     * Anime addressed by a native id is left alone unless the template asks for those ids: kitsu/MAL
-     * ids belong to the franchise, so a poster service hands back season one's art for every season.
-     */
-    private suspend fun MetaPreview.withProgressPosterService(
-        settings: TmdbSettings,
-        mdbListApiKey: String?,
-    ): MetaPreview {
-        if (!settings.libraryPosterEnabled) return this
-        if (id.isAnimeNativeId() && !settings.customPosterTemplateUsesNativeAnimeId()) return this
-        val resolved = runCatching {
-            resolveCustomPosterIds(
-                settings = settings,
-                imdbId = id.takeIf { it.startsWith("tt") },
-                tmdbId = id.removePrefix("tmdb:").toIntOrNull(),
-                type = tmdbMediaTypeFor(type),
-            )
-        }.getOrNull() ?: return this
-        // A template naming {tmdb_id} that gets a blank one is not merely a poorer request — it is a
-        // rejected one. PostersPlus answers 400 for `tmdb_id=&imdb_id=tt…` while serving both-blank
-        // happily, so an unresolved id here would replace working addon art with a broken image.
-        // Keeping what we have is the better failure.
-        if (resolved.tmdbId == null && settings.customPosterTemplateNeedsTmdbId()) {
-            log.d { "Poster service skipped for $id: template needs a TMDB id and none resolved" }
-            return this
-        }
-        return withCustomLibraryPoster(
-            settings = settings,
-            imdbId = resolved.imdbId,
-            tmdbId = resolved.tmdbId,
-            mdbListApiKey = mdbListApiKey,
         )
     }
 
@@ -1097,8 +1057,7 @@ object DiscoverRecommendationsRepository {
      * paid for a title that got filtered out.
      */
     private suspend fun List<TmdbSearchResult>.toRowItems(filters: RowFilters): List<MetaPreview> {
-        val settings = TmdbSettingsRepository.snapshot()
-        val mdbListApiKey = MdbListSettingsRepository.snapshot().apiKey
+        val posterSettings = CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Discover)
         val shortlist = distinctBy { "${it.isTv}:${it.id}" }
             .filterNot { result ->
                 val excluded = filters.excludedGenreIds[if (result.isTv) "tv" else "movie"].orEmpty()
@@ -1113,7 +1072,7 @@ object DiscoverRecommendationsRepository {
             .take(MAX_ITEMS_PER_ROW)
         if (shortlist.isEmpty()) return emptyList()
         return coroutineScope {
-            shortlist.map { item -> async { item.withPosterService(settings, mdbListApiKey) } }.awaitAll()
+            shortlist.map { item -> async { item.prefetchCustomPosterIds(posterSettings) } }.awaitAll()
         }
     }
 
@@ -1263,32 +1222,6 @@ object DiscoverRecommendationsRepository {
             releaseStatusUnavailableOnly = true,
         ).any { fact -> fact.category == RELEASE_STATUS_SLOT }
     }.getOrDefault(false)
-
-    /**
-     * Rewrites [MetaPreview.poster] through the configured poster template, keeping the plain TMDB
-     * image as [MetaPreview.posterFallback] — the service does not have art for everything, and a
-     * missing custom poster must not leave a blank card.
-     */
-    private suspend fun MetaPreview.withPosterService(
-        settings: TmdbSettings,
-        mdbListApiKey: String?,
-    ): MetaPreview {
-        if (!settings.libraryPosterEnabled) return this
-        val tmdbId = id.removePrefix("tmdb:").toIntOrNull() ?: return this
-        // Only pay for the /find call when the template actually names {imdb_id}; TmdbService
-        // caches and single-flights it, so the cost is one request per title ever.
-        val imdbId = if (settings.customPosterTemplateNeedsImdbId()) {
-            runCatching { TmdbService.tmdbToImdb(tmdbId, tmdbMediaTypeFor(type)) }.getOrNull()
-        } else {
-            null
-        }
-        return withCustomLibraryPoster(
-            settings = settings,
-            imdbId = imdbId,
-            tmdbId = tmdbId,
-            mdbListApiKey = mdbListApiKey,
-        )
-    }
 
     private fun TmdbSearchResult.toMetaPreview(): MetaPreview {
         val type = if (isTv) "series" else "movie"

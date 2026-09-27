@@ -1,12 +1,20 @@
 package com.nuvio.app.features.catalog
 
+import com.nuvio.app.features.posterservice.withCachedCustomPosters
+import com.nuvio.app.features.posterservice.withCustomPosterOverlay
+import com.nuvio.app.features.posterservice.CustomPosterScreen
 import com.nuvio.app.features.collection.CollectionRepository
 import com.nuvio.app.features.collection.TmdbCollectionSourceResolver
 import com.nuvio.app.features.collection.catalogRouteKey
+import com.nuvio.app.features.discover.DiscoverRecommendationsRepository
 import com.nuvio.app.features.library.LibraryRepository
 import com.nuvio.app.features.library.toMetaPreview
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
+import com.nuvio.app.features.home.MetaPreview
+import com.nuvio.app.features.home.WATCHED_FILTER_RESOLVE_BUDGET_MS
+import com.nuvio.app.features.home.WatchedContentFilter
 import com.nuvio.app.features.home.filterReleasedItems
+import com.nuvio.app.features.home.filterUnwatchedItems
 import com.nuvio.app.features.trakt.TraktPublicListSourceResolver
 import com.nuvio.app.features.watchprogress.CurrentDateProvider
 import kotlinx.coroutines.CoroutineScope
@@ -23,11 +31,19 @@ import org.jetbrains.compose.resources.getString
 object CatalogRepository {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _uiState = MutableStateFlow(CatalogUiState())
+    // See All is a Home row opened out, so it follows the Home screen toggle as upstream's does.
     val uiState: StateFlow<CatalogUiState> = _uiState.asStateFlow()
+        .withCustomPosterOverlay(CustomPosterScreen.Home) { settings, keys ->
+            copy(items = items.withCachedCustomPosters(settings, keys))
+        }
 
     private var activeJob: Job? = null
     private var activeRequest: CatalogRequest? = null
-    private val scrollPositions = linkedMapOf<CatalogRequest, CatalogScrollPosition>()
+    // Keyed by back-stack entry as well as request: a return from details resumes the same entry
+    // and gets its position back, while opening the catalog again is a new entry and starts at the
+    // top. clear() only runs on the screen's own back button, so request-only keys let a visit that
+    // left any other way (mouse Back, the sidebar) hand its scroll position to the next one.
+    private val scrollPositions = linkedMapOf<Pair<String, CatalogRequest>, CatalogScrollPosition>()
 
     fun load(
         target: CatalogTarget,
@@ -38,11 +54,18 @@ object CatalogRepository {
             return
         }
         activeRequest = request
-        if (target is CatalogTarget.Library) {
-            fetchInternalLibrary(request)
-            return
+        when (target) {
+            is CatalogTarget.Library -> fetchInternalLibrary(request)
+            // Already built and sitting in memory; there is no page to fetch, and the addon
+            // failure path below would only turn "See all" on a generated row into an error.
+            is CatalogTarget.DiscoverRow -> publishInMemoryItems(request) {
+                DiscoverRecommendationsRepository.uiState.value.rows
+                    .firstOrNull { it.key == target.rowKey }
+                    ?.items
+                    .orEmpty()
+            }
+            else -> fetchPage(request = request, reset = true)
         }
-        fetchPage(request = request, reset = true)
     }
 
     fun loadMore() {
@@ -60,24 +83,40 @@ object CatalogRepository {
     }
 
     fun scrollPosition(
+        entryKey: String,
         target: CatalogTarget,
     ): CatalogScrollPosition =
-        scrollPositions[catalogRequest(target)]
+        scrollPositions[entryKey to catalogRequest(target)]
             ?: CatalogScrollPosition()
 
     fun saveScrollPosition(
+        entryKey: String,
         target: CatalogTarget,
         firstVisibleItemIndex: Int,
         firstVisibleItemScrollOffset: Int,
     ) {
         val request = catalogRequest(target)
-        scrollPositions[request] = CatalogScrollPosition(
+        scrollPositions[entryKey to request] = CatalogScrollPosition(
             firstVisibleItemIndex = firstVisibleItemIndex,
             firstVisibleItemScrollOffset = firstVisibleItemScrollOffset,
         )
     }
 
-    private fun fetchInternalLibrary(request: CatalogRequest) {
+    private fun fetchInternalLibrary(request: CatalogRequest) = publishInMemoryItems(request) {
+        val target = request.target as CatalogTarget.Library
+        LibraryRepository.ensureLoaded()
+        LibraryRepository.uiState.value.sections
+            .firstOrNull { it.type == target.sectionType }
+            ?.items
+            .orEmpty()
+            .map { it.toMetaPreview() }
+    }
+
+    /** Serves a target whose items already exist locally as a single, non-paginating page. */
+    private fun publishInMemoryItems(
+        request: CatalogRequest,
+        items: suspend () -> List<MetaPreview>,
+    ) {
         activeJob?.cancel()
         _uiState.value = _uiState.value.copy(
             isLoading = true,
@@ -86,14 +125,7 @@ object CatalogRepository {
 
         activeJob = scope.launch {
             runCatching {
-                val target = request.target as CatalogTarget.Library
-                LibraryRepository.ensureLoaded()
-                LibraryRepository.uiState.value.sections
-                    .firstOrNull { it.type == target.sectionType }
-                    ?.items
-                    .orEmpty()
-                    .map { it.toMetaPreview() }
-                    .let(::dedupeCatalogItems)
+                dedupeCatalogItems(items())
             }.fold(
                 onSuccess = { items ->
                     if (activeRequest != request) return@fold
@@ -149,8 +181,11 @@ object CatalogRepository {
                         page = requestedSkip.takeIf { it > 0 } ?: 1,
                     )
 
-                    is CatalogTarget.Library -> error(getString(Res.string.catalog_load_failed))
+                    is CatalogTarget.Library,
+                    is CatalogTarget.DiscoverRow,
+                    -> error(getString(Res.string.catalog_load_failed))
                 }.withUnreleasedFilter(request.hideUnreleasedContent)
+                    .withWatchedFilter(request.hideWatchedContent)
             }.fold(
                 onSuccess = { page ->
                     if (activeRequest != request) return@fold
@@ -195,12 +230,21 @@ object CatalogRepository {
         CatalogRequest(
             target = target,
             hideUnreleasedContent = HomeCatalogSettingsRepository.snapshot().hideUnreleasedContent,
+            hideWatchedContent = HomeCatalogSettingsRepository.snapshot().hideWatchedContent,
         )
 }
 
 private fun CatalogPage.withUnreleasedFilter(hideUnreleasedContent: Boolean): CatalogPage {
     if (!hideUnreleasedContent) return this
     val filteredItems = items.filterReleasedItems(CurrentDateProvider.todayIsoDate())
+    return if (filteredItems.size == items.size) this else copy(items = filteredItems)
+}
+
+private suspend fun CatalogPage.withWatchedFilter(hideWatchedContent: Boolean): CatalogPage {
+    if (!hideWatchedContent) return this
+    // The verdict made here sticks for the session, so give it the mappings first.
+    WatchedContentFilter.prepareForLoad(items, resolveBudgetMs = WATCHED_FILTER_RESOLVE_BUDGET_MS)
+    val filteredItems = items.filterUnwatchedItems(WatchedContentFilter.current())
     return if (filteredItems.size == items.size) this else copy(items = filteredItems)
 }
 
@@ -226,4 +270,5 @@ private suspend fun fetchCollectionSourcePage(
 private data class CatalogRequest(
     val target: CatalogTarget,
     val hideUnreleasedContent: Boolean,
+    val hideWatchedContent: Boolean,
 )

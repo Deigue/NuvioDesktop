@@ -39,6 +39,7 @@ import com.nuvio.app.core.ui.NuvioDropdownOption
 import com.nuvio.app.core.ui.NuvioNetworkOfflineCard
 import com.nuvio.app.core.ui.NuvioPosterHoverTooltip
 import com.nuvio.app.core.ui.NuvioPosterWatchedOverlay
+import com.nuvio.app.core.ui.rememberPosterWatchlistMembership
 import com.nuvio.app.core.ui.PosterLabelWidthFraction
 import com.nuvio.app.core.ui.rememberPosterCardStyleUiState
 import com.nuvio.app.core.ui.posterCardClickable
@@ -204,6 +205,7 @@ private fun DiscoverGridRow(
     onPosterLongClick: ((MetaPreview) -> Unit)? = null,
 ) {
     val posterCardStyle = rememberPosterCardStyleUiState()
+    val watchlist = rememberPosterWatchlistMembership()
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -220,6 +222,7 @@ private fun DiscoverGridRow(
                     watchedKeys = watchedKeys,
                     item = item,
                 ),
+                isInWatchlist = watchlist.contains(item),
                 onClick = onPosterClick?.let { { it(item) } },
                 onLongClick = onPosterLongClick?.let { { it(item) } },
             )
@@ -238,6 +241,7 @@ private fun DiscoverPosterTile(
     hideLabels: Boolean,
     modifier: Modifier = Modifier,
     isWatched: Boolean = false,
+    isInWatchlist: Boolean = false,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -261,7 +265,7 @@ private fun DiscoverPosterTile(
                     contentScale = ContentScale.Crop,
                 )
             }
-            NuvioPosterWatchedOverlay(isWatched = isWatched)
+            NuvioPosterWatchedOverlay(isWatched = isWatched, isInWatchlist = isInWatchlist)
         }
         if (!hideLabels) {
             Box(

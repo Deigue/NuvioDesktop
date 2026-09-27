@@ -1,5 +1,7 @@
 package com.nuvio.app.features.details
 
+import com.nuvio.app.features.posterservice.CustomPosterScreen
+import com.nuvio.app.features.posterservice.rememberCustomPosters
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -184,10 +186,11 @@ private fun PersonDetailContent(
     }
     val accentColor = MaterialTheme.colorScheme.primary
 
-    val allCredits = remember(person.movieCredits, person.tvCredits) {
+    val rawCredits = remember(person.movieCredits, person.tvCredits) {
         (person.movieCredits + person.tvCredits)
             .distinctBy { it.id }
     }
+    val allCredits = rememberCustomPosters(rawCredits, CustomPosterScreen.Details)
 
     val todayDate = remember { CurrentDateProvider.todayIsoDate() }
 

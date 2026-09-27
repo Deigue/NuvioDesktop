@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -26,6 +27,13 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.animation.AnimatedContent
+import com.nuvio.app.features.home.HomeTvRowTransition
+import com.nuvio.app.features.home.components.ImmersiveRowDirection
+import com.nuvio.app.features.home.components.immersiveRowBodyEnter
+import com.nuvio.app.features.home.components.immersiveRowBodyExit
+import com.nuvio.app.features.home.components.immersiveRowFadeBounds
+import com.nuvio.app.features.home.components.immersiveRowTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.LocalRippleConfiguration
@@ -47,6 +55,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -83,7 +92,7 @@ import com.nuvio.app.core.ui.LocalCollectionsPosterSurface
 import com.nuvio.app.core.ui.NuvioPosterShape
 import com.nuvio.app.core.ui.rememberHomePosterCardStyleUiState
 import com.nuvio.app.core.ui.NuvioScreenHeader
-import com.nuvio.app.core.ui.MouseActivityState
+import com.nuvio.app.core.ui.rememberMouseActivityState
 import com.nuvio.app.core.ui.nuvioSafeBottomPadding
 import com.nuvio.app.core.ui.withDuplicateSafeLazyKeys
 import com.nuvio.app.features.home.HomeCatalogSection
@@ -429,6 +438,33 @@ private fun FolderDetailScreenContent(
 }
 
 
+/**
+ * Collection rows load in parallel and a row only exists once its catalog has returned items, so
+ * rows arrive in completion order, not display order. A keyed lazy list anchors on its first
+ * visible item's key: the row that answered first lands at the top, and every row meant to sit
+ * above it is then inserted out of view — the folder opens scrolled to whichever catalog was
+ * fastest. While the list is still exactly at its top, ask it to stay at index 0 instead of
+ * following that key. Once the user has scrolled, the default key anchoring is what they want.
+ */
+@Composable
+private fun KeepListAtTopWhileRowsArrive(state: LazyListState, rowKeys: List<String>) {
+    remember(state, rowKeys) {
+        // Unobserved: this runs in the caller's composition, and reading the scroll position
+        // normally would recompose the whole screen on every scroll frame.
+        Snapshot.withoutReadObservation {
+            if (state.firstVisibleItemIndex == 0 && state.firstVisibleItemScrollOffset == 0) {
+                state.requestScrollToItem(0)
+            }
+        }
+    }
+}
+
+private fun HomeTvKey.movesTvFocus(): Boolean = when (this) {
+    HomeTvKey.Down, HomeTvKey.Up, HomeTvKey.Left, HomeTvKey.Right,
+    HomeTvKey.PageDown, HomeTvKey.PageUp, HomeTvKey.Home, HomeTvKey.End -> true
+    else -> false
+}
+
 // 1-based position of each rendered collection row, mirroring Home's optional "Trending • 3"
 // header suffix (HomeCatalogSettings.catalogRowNumbersEnabled). Rows that render nothing take no
 // number, so the sequence matches what the user actually sees.
@@ -459,6 +495,14 @@ private fun ImmersiveCollectionContent(
     val restoredPosition = remember(sessionKey) { FolderScrollMemory.position(sessionKey) }
     var activeRowIndex by remember(sessionKey) { mutableIntStateOf(restoredPosition.rowIndex) }
     var activeItemIndex by remember(sessionKey) { mutableIntStateOf(restoredPosition.itemIndex) }
+    // The cursor is still wherever the user clicked to get here. Coming from TV Mode Home that is
+    // the collection tile in Home's bottom shelf, which is exactly where this screen's shelf draws,
+    // so the synthetic hover Enter for the poster now under it moved focus off the first item (or
+    // off the restored one on return from details). Same guard as AdaptiveCollectionContent: hover
+    // only counts once the mouse genuinely moves.
+    val mouseActivity = rememberMouseActivityState(startInactive = true)
+    val rowStates = remember(sessionKey) { mutableMapOf<String, LazyListState>() }
+    val rowDirection = remember { ImmersiveRowDirection() }
     var wheelLocked by remember { mutableStateOf(false) }
     var backButtonHovered by remember { mutableStateOf(false) }
     var activeHeroBackdrop by remember { mutableStateOf<String?>(null) }
@@ -541,61 +585,65 @@ private fun ImmersiveCollectionContent(
     // Mirrors HomeScreen's handleHomeTvKey: a shared handler so the same navigation works
     // whether Compose still owns keyboard focus or the native hero-trailer surface has
     // grabbed it (in which case keys arrive via HomeTvKeyboardBridge instead).
-    fun handleTvKey(key: HomeTvKey): Boolean = when (key) {
-        HomeTvKey.Down -> {
-            activeRowIndex = (activeRowIndex + 1).coerceAtMost(sections.lastIndex)
-            activeItemIndex = activeItemIndex.coerceIn(
-                0,
-                (sections[activeRowIndex].items.size - 1).coerceAtLeast(0),
-            )
-            true
-        }
-        HomeTvKey.Up -> {
-            activeRowIndex = (activeRowIndex - 1).coerceAtLeast(0)
-            activeItemIndex = activeItemIndex.coerceIn(
-                0,
-                (sections[activeRowIndex].items.size - 1).coerceAtLeast(0),
-            )
-            true
-        }
-        HomeTvKey.Right -> {
-            activeItemIndex = (activeItemIndex + 1).coerceAtMost((activeRowEntries.size - 1).coerceAtLeast(0))
-            true
-        }
-        HomeTvKey.Left -> {
-            activeItemIndex = (activeItemIndex - 1).coerceAtLeast(0)
-            true
-        }
-        // TV mode shows one row at a time, so a page is a run of posters along it.
-        HomeTvKey.PageDown, HomeTvKey.PageUp -> {
-            val delta = if (key == HomeTvKey.PageDown) PAGE_ITEM_STEP else -PAGE_ITEM_STEP
-            activeItemIndex = (activeItemIndex + delta)
-                .coerceIn(0, (activeRowEntries.size - 1).coerceAtLeast(0))
-            true
-        }
-        HomeTvKey.Home, HomeTvKey.End -> {
-            activeRowIndex = if (key == HomeTvKey.Home) 0 else sections.lastIndex.coerceAtLeast(0)
-            activeItemIndex = 0
-            true
-        }
-        HomeTvKey.Select -> {
-            focusedItem?.let(onPosterClick)
-            true
-        }
-        HomeTvKey.ToggleTrailer -> {
-            HomeHeroTrailerManualTrigger.trigger()
-            true
-        }
-        HomeTvKey.Dismiss -> {
-            if (heroTrailerShowing) {
+    fun handleTvKey(key: HomeTvKey): Boolean {
+        // A stationary cursor must not pull focus back from where the keys just moved it.
+        if (key.movesTvFocus()) mouseActivity.onKeyboardNavigation()
+        return when (key) {
+            HomeTvKey.Down -> {
+                activeRowIndex = (activeRowIndex + 1).coerceAtMost(sections.lastIndex)
+                activeItemIndex = activeItemIndex.coerceIn(
+                    0,
+                    (sections[activeRowIndex].items.size - 1).coerceAtLeast(0),
+                )
+                true
+            }
+            HomeTvKey.Up -> {
+                activeRowIndex = (activeRowIndex - 1).coerceAtLeast(0)
+                activeItemIndex = activeItemIndex.coerceIn(
+                    0,
+                    (sections[activeRowIndex].items.size - 1).coerceAtLeast(0),
+                )
+                true
+            }
+            HomeTvKey.Right -> {
+                activeItemIndex = (activeItemIndex + 1).coerceAtMost((activeRowEntries.size - 1).coerceAtLeast(0))
+                true
+            }
+            HomeTvKey.Left -> {
+                activeItemIndex = (activeItemIndex - 1).coerceAtLeast(0)
+                true
+            }
+            // TV mode shows one row at a time, so a page is a run of posters along it.
+            HomeTvKey.PageDown, HomeTvKey.PageUp -> {
+                val delta = if (key == HomeTvKey.PageDown) PAGE_ITEM_STEP else -PAGE_ITEM_STEP
+                activeItemIndex = (activeItemIndex + delta)
+                    .coerceIn(0, (activeRowEntries.size - 1).coerceAtLeast(0))
+                true
+            }
+            HomeTvKey.Home, HomeTvKey.End -> {
+                activeRowIndex = if (key == HomeTvKey.Home) 0 else sections.lastIndex.coerceAtLeast(0)
+                activeItemIndex = 0
+                true
+            }
+            HomeTvKey.Select -> {
+                focusedItem?.let(onPosterClick)
+                true
+            }
+            HomeTvKey.ToggleTrailer -> {
                 HomeHeroTrailerManualTrigger.trigger()
                 true
-            } else {
-                false
             }
+            HomeTvKey.Dismiss -> {
+                if (heroTrailerShowing) {
+                    HomeHeroTrailerManualTrigger.trigger()
+                    true
+                } else {
+                    false
+                }
+            }
+            HomeTvKey.ToggleMute, HomeTvKey.VolumeDown, HomeTvKey.VolumeUp,
+            HomeTvKey.TogglePeoplePanel, HomeTvKey.Search, HomeTvKey.Library -> false
         }
-        HomeTvKey.ToggleMute, HomeTvKey.VolumeDown, HomeTvKey.VolumeUp,
-        HomeTvKey.TogglePeoplePanel, HomeTvKey.Search, HomeTvKey.Library -> false
     }
     val latestTvKeyHandler = rememberUpdatedState<(HomeTvKey) -> Boolean>(::handleTvKey)
     LaunchedEffect(Unit) {
@@ -610,6 +658,13 @@ private fun ImmersiveCollectionContent(
             .focusable()
             .onPointerEvent(PointerEventType.Press, PointerEventPass.Initial) { _ ->
                 try { focusRequester.requestFocus() } catch (_: Exception) {}
+            }
+            .onPointerEvent(PointerEventType.Move, PointerEventPass.Initial) { event ->
+                mouseActivity.onMouseMoved(event.changes.first().position)
+            }
+            // Initial pass so isMouseActive is settled before the poster's own Enter handler runs.
+            .onPointerEvent(PointerEventType.Enter, PointerEventPass.Initial) { event ->
+                mouseActivity.onMouseMoved(event.changes.first().position)
             }
             .onPointerEvent(PointerEventType.Scroll) { event ->
                 val change = event.changes.firstOrNull() ?: return@onPointerEvent
@@ -716,35 +771,79 @@ private fun ImmersiveCollectionContent(
                         ),
                     ),
                 )
-                .padding(top = 68.dp, bottom = 12.dp),
+                // Bottom padding lives inside each row; see immersiveRowFadeBounds.
+                .padding(top = 68.dp),
             contentAlignment = if (landscapeMode) Alignment.BottomStart else Alignment.TopStart,
         ) {
-            HomeCatalogRowSection(
-                section = activeSection,
-                entries = activeRowEntries,
-                watchedKeys = watchedKeys,
-                basePosterWidthDpOverride = shelfPosterBaseWidthDp,
-                focusedItemIndex = activeItemIndex,
-                onHoverItem = { itemIndex -> activeItemIndex = itemIndex },
-                onViewAllClick = if (
-                    !activeUsesInfiniteScroll &&
-                    activeSection.canOpenCatalog(FolderCatalogPreviewLimit)
-                ) {
-                    { onCatalogClick(activeSection) }
+            // One composition per row, keyed by the row, as Home's TV shelf does. A single shared
+            // LazyRow fed each row in turn diffed the new row's posters against the old one's:
+            // animateItem slid and cross-faded them across each other on every row change, and
+            // the focused slot's per-item state (the depth border, the sweep) carried over from
+            // whatever poster last sat in it until it caught up a few frames later.
+            rowDirection.observe(activeRowIndex)
+            AnimatedContent(
+                targetState = activeRowIndex,
+                transitionSpec = { immersiveRowTransition(homeSettings.tvRowTransition) },
+                contentAlignment = if (landscapeMode) Alignment.BottomStart else Alignment.TopStart,
+                label = "collection_immersive_row",
+            ) { rowIndex ->
+                val section = sections.getOrNull(rowIndex) ?: return@AnimatedContent
+                val isActiveRow = rowIndex == activeRowIndex
+                val usesInfiniteScroll = section.usesInfiniteHomeRow(catalogSeeMoreEnabled)
+                val rowEntries = if (usesInfiniteScroll) {
+                    section.items
                 } else {
-                    null
-                },
-                onLoadMore = if (activeUsesInfiniteScroll) {
-                    { FolderDetailRepository.loadMoreCatalogRow(activeSection) }
+                    section.items.take(FolderCatalogPreviewLimit)
+                }
+                val rowBodyModifier = if (homeSettings.tvRowTransition == HomeTvRowTransition.FadeNudge) {
+                    Modifier.animateEnterExit(
+                        enter = immersiveRowBodyEnter(rowDirection.forward),
+                        exit = immersiveRowBodyExit(rowDirection.forward),
+                        label = "collection_immersive_row_body",
+                    )
                 } else {
-                    null
-                },
-                isLoadingMore = activeSection.isLoadingMore,
-                rowNumber = rowNumbers[activeSection.key],
-                headerTrailingContent = rowDotsContent,
-                onPosterClick = onPosterClick,
-                onPosterLongClick = onPosterLongClick,
-            )
+                    Modifier
+                }
+                Box(modifier = Modifier.immersiveRowFadeBounds()) {
+                    androidx.compose.runtime.key(section.key) {
+                        HomeCatalogRowSection(
+                            section = section,
+                            entries = rowEntries,
+                            watchedKeys = watchedKeys,
+                            basePosterWidthDpOverride = shelfPosterBaseWidthDp,
+                            focusedItemIndex = activeItemIndex,
+                            // Each row keeps its own horizontal position for this visit.
+                            rowState = remember { rowStates.getOrPut(section.key) { LazyListState() } },
+                            // Also stops the row's edge auto-scroll, which otherwise runs under a cursor
+                            // that happens to rest near the shelf's side and drags posters (and focus).
+                            isKeyboardNavigation = !mouseActivity.isMouseActive,
+                            onHoverItem = { itemIndex ->
+                                // The outgoing row is still hoverable while it fades out.
+                                if (isActiveRow && mouseActivity.isMouseActive) activeItemIndex = itemIndex
+                            },
+                            onViewAllClick = if (
+                                !usesInfiniteScroll &&
+                                section.canOpenCatalog(FolderCatalogPreviewLimit)
+                            ) {
+                                { onCatalogClick(section) }
+                            } else {
+                                null
+                            },
+                            onLoadMore = if (usesInfiniteScroll) {
+                                { FolderDetailRepository.loadMoreCatalogRow(section) }
+                            } else {
+                                null
+                            },
+                            isLoadingMore = section.isLoadingMore,
+                            rowNumber = rowNumbers[section.key],
+                            headerTrailingContent = rowDotsContent,
+                            bodyModifier = rowBodyModifier,
+                            onPosterClick = onPosterClick,
+                            onPosterLongClick = onPosterLongClick,
+                        )
+                    }
+                }
+            }
         }
 
         NuvioBackButton(
@@ -793,7 +892,7 @@ private fun AdaptiveCollectionContent(
     // screen look like it didn't open at the start. Arm ignoreNextMouseMove synchronously
     // (mirrors HomeScreen's native-surface-disposal guard) so that first synthetic event is
     // swallowed; a genuine mouse move afterwards re-activates hover normally.
-    val mouseActivity = remember { MouseActivityState().apply { onKeyboardNavigation(ignoreNextMouseMove = true) } }
+    val mouseActivity = rememberMouseActivityState(startInactive = true)
     var backButtonHovered by remember { mutableStateOf(false) }
     var activeHeroBackdrop by remember { mutableStateOf<String?>(null) }
     var activeHeroAccent by remember { mutableStateOf<Color?>(null) }
@@ -861,68 +960,72 @@ private fun AdaptiveCollectionContent(
     // Mirrors HomeScreen's handleHomeTvKey: a shared handler so the same navigation works
     // whether Compose still owns keyboard focus or the native hero-trailer surface has
     // grabbed it (in which case keys arrive via HomeTvKeyboardBridge instead).
-    fun handleTvKey(key: HomeTvKey): Boolean = when (key) {
-        HomeTvKey.Down -> {
-            activeRowIndex = (activeRowIndex + 1).coerceAtMost(sections.lastIndex)
-            activeItemIndex = activeItemIndex.coerceIn(
-                0,
-                (sections[activeRowIndex].items.size - 1).coerceAtLeast(0),
-            )
-            coroutineScope.launch { lazyListState.animateScrollToItem(activeRowIndex) }
-            true
-        }
-        HomeTvKey.Up -> {
-            activeRowIndex = (activeRowIndex - 1).coerceAtLeast(0)
-            activeItemIndex = activeItemIndex.coerceIn(
-                0,
-                (sections[activeRowIndex].items.size - 1).coerceAtLeast(0),
-            )
-            coroutineScope.launch { lazyListState.animateScrollToItem(activeRowIndex) }
-            true
-        }
-        HomeTvKey.Right -> {
-            activeItemIndex = (activeItemIndex + 1).coerceAtMost((activeRowEntries.size - 1).coerceAtLeast(0))
-            true
-        }
-        HomeTvKey.Left -> {
-            activeItemIndex = (activeItemIndex - 1).coerceAtLeast(0)
-            true
-        }
-        // Everywhere else the folder is a vertical list of rows, so a page is a run of rows.
-        HomeTvKey.PageDown, HomeTvKey.PageUp -> {
-            val delta = if (key == HomeTvKey.PageDown) PAGE_SECTION_STEP else -PAGE_SECTION_STEP
-            activeRowIndex = (activeRowIndex + delta).coerceIn(0, sections.lastIndex.coerceAtLeast(0))
-            activeItemIndex = activeItemIndex.coerceIn(
-                0,
-                (sections[activeRowIndex].items.size - 1).coerceAtLeast(0),
-            )
-            coroutineScope.launch { lazyListState.animateScrollToItem(activeRowIndex) }
-            true
-        }
-        HomeTvKey.Home, HomeTvKey.End -> {
-            activeRowIndex = if (key == HomeTvKey.Home) 0 else sections.lastIndex.coerceAtLeast(0)
-            activeItemIndex = 0
-            coroutineScope.launch { lazyListState.animateScrollToItem(activeRowIndex) }
-            true
-        }
-        HomeTvKey.Select -> {
-            focusedItem?.let(onPosterClick)
-            true
-        }
-        HomeTvKey.ToggleTrailer -> {
-            HomeHeroTrailerManualTrigger.trigger()
-            true
-        }
-        HomeTvKey.Dismiss -> {
-            if (heroTrailerShowing) {
+    fun handleTvKey(key: HomeTvKey): Boolean {
+        // A stationary cursor must not pull focus back from where the keys just moved it.
+        if (key.movesTvFocus()) mouseActivity.onKeyboardNavigation()
+        return when (key) {
+            HomeTvKey.Down -> {
+                activeRowIndex = (activeRowIndex + 1).coerceAtMost(sections.lastIndex)
+                activeItemIndex = activeItemIndex.coerceIn(
+                    0,
+                    (sections[activeRowIndex].items.size - 1).coerceAtLeast(0),
+                )
+                coroutineScope.launch { lazyListState.animateScrollToItem(activeRowIndex) }
+                true
+            }
+            HomeTvKey.Up -> {
+                activeRowIndex = (activeRowIndex - 1).coerceAtLeast(0)
+                activeItemIndex = activeItemIndex.coerceIn(
+                    0,
+                    (sections[activeRowIndex].items.size - 1).coerceAtLeast(0),
+                )
+                coroutineScope.launch { lazyListState.animateScrollToItem(activeRowIndex) }
+                true
+            }
+            HomeTvKey.Right -> {
+                activeItemIndex = (activeItemIndex + 1).coerceAtMost((activeRowEntries.size - 1).coerceAtLeast(0))
+                true
+            }
+            HomeTvKey.Left -> {
+                activeItemIndex = (activeItemIndex - 1).coerceAtLeast(0)
+                true
+            }
+            // Everywhere else the folder is a vertical list of rows, so a page is a run of rows.
+            HomeTvKey.PageDown, HomeTvKey.PageUp -> {
+                val delta = if (key == HomeTvKey.PageDown) PAGE_SECTION_STEP else -PAGE_SECTION_STEP
+                activeRowIndex = (activeRowIndex + delta).coerceIn(0, sections.lastIndex.coerceAtLeast(0))
+                activeItemIndex = activeItemIndex.coerceIn(
+                    0,
+                    (sections[activeRowIndex].items.size - 1).coerceAtLeast(0),
+                )
+                coroutineScope.launch { lazyListState.animateScrollToItem(activeRowIndex) }
+                true
+            }
+            HomeTvKey.Home, HomeTvKey.End -> {
+                activeRowIndex = if (key == HomeTvKey.Home) 0 else sections.lastIndex.coerceAtLeast(0)
+                activeItemIndex = 0
+                coroutineScope.launch { lazyListState.animateScrollToItem(activeRowIndex) }
+                true
+            }
+            HomeTvKey.Select -> {
+                focusedItem?.let(onPosterClick)
+                true
+            }
+            HomeTvKey.ToggleTrailer -> {
                 HomeHeroTrailerManualTrigger.trigger()
                 true
-            } else {
-                false
             }
+            HomeTvKey.Dismiss -> {
+                if (heroTrailerShowing) {
+                    HomeHeroTrailerManualTrigger.trigger()
+                    true
+                } else {
+                    false
+                }
+            }
+            HomeTvKey.ToggleMute, HomeTvKey.VolumeDown, HomeTvKey.VolumeUp,
+            HomeTvKey.TogglePeoplePanel, HomeTvKey.Search, HomeTvKey.Library -> false
         }
-        HomeTvKey.ToggleMute, HomeTvKey.VolumeDown, HomeTvKey.VolumeUp,
-        HomeTvKey.TogglePeoplePanel, HomeTvKey.Search, HomeTvKey.Library -> false
     }
     val latestTvKeyHandler = rememberUpdatedState<(HomeTvKey) -> Boolean>(::handleTvKey)
     LaunchedEffect(Unit) {
@@ -1011,6 +1114,7 @@ private fun AdaptiveCollectionContent(
                 )
             }
 
+            KeepListAtTopWhileRowsArrive(lazyListState, sections.map { it.key })
             LazyColumn(state = lazyListState, modifier = Modifier.weight(1f)) {
                 sections.forEachIndexed { rowIndex, section ->
                     val previewEntries = section.items.take(FolderCatalogPreviewLimit)
@@ -1026,6 +1130,7 @@ private fun AdaptiveCollectionContent(
                             entries = entries,
                             watchedKeys = watchedKeys,
                             focusedItemIndex = if (rowIndex == activeRowIndex) activeItemIndex else null,
+                            isKeyboardNavigation = !mouseActivity.isMouseActive,
                             onHoverItem = { itemIndex ->
                                 if (mouseActivity.isMouseActive) {
                                     activeRowIndex = rowIndex
@@ -1250,6 +1355,7 @@ private fun RowsContent(
         },
     )
 
+    KeepListAtTopWhileRowsArrive(listState, sections.map { it.key })
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxSize().then(pageScrollKeys),

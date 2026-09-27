@@ -18,7 +18,7 @@ data class QualiCacheSettings(
     val enabled: Boolean = false,
     val baseUrl: String = "",
     val accessKey: String = "",
-    val minimumTrust: QualiCacheMinimumTrust = QualiCacheMinimumTrust.HIGH,
+    val minimumTrust: QualiCacheMinimumTrust = QualiCacheMinimumTrust.MEDIUM,
     /**
      * The 4K badge. There is no toggle for the source on its own: the source picks which 4K badge
      * is drawn rather than earning one of its own, so it has nothing to switch off.

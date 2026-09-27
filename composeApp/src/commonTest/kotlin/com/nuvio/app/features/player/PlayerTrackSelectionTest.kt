@@ -486,6 +486,48 @@ class PlayerTrackSelectionTest {
     }
 
     @Test
+    fun `built-in match settles the automatic pass unless addon subtitles are preferred`() {
+        // Default order: a confirmed built-in match closes the pass, no match leaves it open.
+        assertTrue(settlesAutoPass(builtInMatchConfirmed = true, preferAddonSubtitles = false))
+        assertFalse(settlesAutoPass(builtInMatchConfirmed = false, preferAddonSubtitles = false))
+        // Prefer addons: even a confirmed built-in match waits for the addon fetch.
+        assertFalse(settlesAutoPass(builtInMatchConfirmed = true, preferAddonSubtitles = true))
+        assertFalse(settlesAutoPass(builtInMatchConfirmed = false, preferAddonSubtitles = true))
+    }
+
+    @Test
+    fun `automatic pass settles at once when no addon fetch is coming`() {
+        for (preferAddons in listOf(false, true)) {
+            assertTrue(
+                settlesAutoPass(
+                    builtInMatchConfirmed = false,
+                    preferAddonSubtitles = preferAddons,
+                    startupMode = AddonSubtitleStartupMode.FAST_STARTUP,
+                ),
+            )
+            assertTrue(
+                settlesAutoPass(
+                    builtInMatchConfirmed = false,
+                    preferAddonSubtitles = preferAddons,
+                    addonFetchPossible = false,
+                ),
+            )
+        }
+    }
+
+    private fun settlesAutoPass(
+        builtInMatchConfirmed: Boolean,
+        preferAddonSubtitles: Boolean,
+        startupMode: AddonSubtitleStartupMode = AddonSubtitleStartupMode.ALL_SUBTITLES,
+        addonFetchPossible: Boolean = true,
+    ) = builtInSubtitleSelectionSettlesAutoPass(
+        builtInMatchConfirmed = builtInMatchConfirmed,
+        preferAddonSubtitles = preferAddonSubtitles,
+        addonSubtitleStartupMode = startupMode,
+        addonFetchPossible = addonFetchPossible,
+    )
+
+    @Test
     fun `automatic addon subtitle stays blocked after another preference wins`() {
         assertFalse(
             canApplyPreferredAddonSubtitle(

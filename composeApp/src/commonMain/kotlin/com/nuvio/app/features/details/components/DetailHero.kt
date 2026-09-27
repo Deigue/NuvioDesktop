@@ -62,6 +62,8 @@ import com.nuvio.app.features.details.GenreSubgenres
 import com.nuvio.app.features.details.allKeywords
 import androidx.compose.ui.graphics.graphicsLayer
 import com.nuvio.app.core.ui.NuvioDesktopImageScaling
+import com.nuvio.app.core.ui.NuvioScrimRamp
+import com.nuvio.app.core.ui.nuvioDitheredScrim
 import com.nuvio.app.core.ui.NuvioAsyncImage as AsyncImage
 import com.nuvio.app.features.details.MetaCompany
 import com.nuvio.app.features.details.MetaDetails
@@ -226,6 +228,19 @@ fun DetailHero(
                     heroTrailerBackgroundMode == MetaHeroTrailerBackgroundMode.Backdrop &&
                     imageUrl != null
                 val showBackdropImage = imageUrl != null && (!boundedHeroTrailerActive || backdropWashActive)
+                // Desktop composites its two scrims onto the artwork in one dithered pass rather
+                // than painting them as gradients over it: over a dark backdrop the gradient
+                // version steps through the few output levels available as visible bands.
+                val backdropScrimModifier = if (desktopOverlay) {
+                    Modifier.nuvioDitheredScrim(
+                        scrim = heroTrailerScrimColor,
+                        horizontal = DesktopHeroSideScrimRamp,
+                        vertical = DesktopHeroBottomScrimRamp,
+                    )
+                } else {
+                    Modifier
+                }
+                Box(modifier = Modifier.fillMaxSize().then(backdropScrimModifier)) {
                 if (showBackdropImage) {
                     AsyncImage(
                         model = imageUrl,
@@ -268,6 +283,7 @@ fun DetailHero(
                             ),
                     )
                 }
+                }
                 if (fullHeroTrailer) {
                     HeroTrailerPlayerSurface(
                         sourceUrl = heroTrailerSourceUrl,
@@ -293,49 +309,25 @@ fun DetailHero(
                     )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(if (desktopOverlay) heroHeight else 260.dp)
-                        .align(Alignment.BottomCenter)
-                        .background(
-                            if (desktopOverlay) {
-                                Brush.horizontalGradient(
-                                    colorStops = arrayOf(
-                                        0f to heroTrailerScrimColor,
-                                        0.34f to heroTrailerScrimColor.copy(alpha = 0.9f),
-                                        0.6f to heroTrailerScrimColor.copy(alpha = 0.42f),
-                                        0.82f to heroTrailerScrimColor.copy(alpha = 0.12f),
-                                        1f to Color.Transparent,
-                                    ),
-                                )
-                            } else {
+                if (!desktopOverlay) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(260.dp)
+                            .align(Alignment.BottomCenter)
+                            .background(
                                 Brush.verticalGradient(
                                     colors = listOf(
                                         Color.Transparent,
                                         MaterialTheme.colorScheme.background.copy(alpha = 0.7f),
                                         MaterialTheme.colorScheme.background,
                                     ),
-                                )
-                            },
-                        ),
-                )
-
-                if (desktopOverlay) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colorStops = arrayOf(
-                                        0f to Color.Transparent,
-                                        0.38f to Color.Transparent,
-                                        0.68f to heroTrailerScrimColor.copy(alpha = 0.72f),
-                                        1f to heroTrailerScrimColor,
-                                    ),
                                 ),
                             ),
                     )
+                }
+
+                if (desktopOverlay) {
                     DetailDesktopHeroOverlay(
                         meta = meta,
                         logoUrl = logoUrl,
@@ -1042,3 +1034,16 @@ private fun detailHeroHeight(
             ?: 1080.dp
         minOf(maxWidth * 9f / 16f, viewportLimit).coerceIn(420.dp, 1080.dp)
     }
+
+/**
+ * The desktop hero's left-hand scrim: opaque under the metadata column, clear by the right edge.
+ * Same stops the gradient box used to paint; see [nuvioDitheredScrim] for why it is no longer one.
+ */
+private val DesktopHeroSideScrimRamp = NuvioScrimRamp(
+    listOf(0f to 1f, 0.34f to 0.9f, 0.6f to 0.42f, 0.82f to 0.12f, 1f to 0f),
+)
+
+/** The desktop hero's bottom fade into the page, applied over the side scrim. */
+private val DesktopHeroBottomScrimRamp = NuvioScrimRamp(
+    listOf(0f to 0f, 0.38f to 0f, 0.68f to 0.72f, 1f to 1f),
+)

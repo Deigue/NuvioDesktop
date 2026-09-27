@@ -3,6 +3,7 @@ package com.nuvio.app.core.ui
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 
@@ -22,3 +23,18 @@ internal actual fun Modifier.secondaryClick(onClick: (() -> Unit)?): Modifier {
         }
     }
 }
+
+@OptIn(ExperimentalComposeUiApi::class)
+internal actual fun Modifier.unclaimedSecondaryClick(enabled: () -> Boolean, onClick: () -> Unit): Modifier =
+    pointerInput(Unit) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Final)
+                if (event.type != PointerEventType.Press || event.button != PointerButton.Secondary) continue
+                if (event.changes.any { it.isConsumed }) continue
+                if (!enabled()) continue
+                event.changes.forEach { change -> change.consume() }
+                onClick()
+            }
+        }
+    }

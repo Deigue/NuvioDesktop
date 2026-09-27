@@ -28,6 +28,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
@@ -36,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.core.i18n.localizedMediaTypeLabel
 import com.nuvio.app.core.ui.accentFill
@@ -266,7 +273,9 @@ fun BoxScope.DiscoverPickerPanel(
             .align(Alignment.TopStart)
             .padding(start = horizontalPadding + offsetX, end = horizontalPadding)
             .width(panelWidth)
-            .onGloballyPositioned { onPanelBoundsChanged(it.boundsInRoot()) },
+            .onGloballyPositioned { onPanelBoundsChanged(it.boundsInRoot()) }
+            .consumeWheelScroll()
+            .nestedScroll(remember { AbsorbLeftoverScroll }),
         color = tokens.colors.surfaceCard,
         shape = RoundedCornerShape(12.dp),
         tonalElevation = 0.dp,
@@ -296,6 +305,38 @@ fun BoxScope.DiscoverPickerPanel(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Keeps the page still under an open picker. Two separate leaks needed closing, and they travel by
+ * different routes:
+ *
+ * 1. A tick that lands while the list is already at an end. The list's wheel node declines it
+ *    (`canConsumeDelta` is false) and leaves the pointer change unconsumed, so it bubbles to the
+ *    page's scrollable. [consumeWheelScroll] runs in the Main pass after the list and consumes it.
+ * 2. A fast burst that overshoots. The list's wheel node accepts each tick while it still has room,
+ *    then animates the *sum* through a NestedScrollScope; when it bottoms out mid-animation the
+ *    remainder is dispatched to the nested-scroll parent — never as a pointer event — and the page
+ *    jolts. [AbsorbLeftoverScroll] sits between the list and the page and reports the leftover as
+ *    consumed.
+ */
+private object AbsorbLeftoverScroll : NestedScrollConnection {
+    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
+        available
+
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity = available
+}
+
+
+private fun Modifier.consumeWheelScroll(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Main)
+            if (event.type == PointerEventType.Scroll) {
+                event.changes.forEach { it.consume() }
             }
         }
     }

@@ -67,6 +67,8 @@ import nuvio.composeapp.generated.resources.*
 import nuvio.composeapp.generated.resources.action_reset
 import nuvio.composeapp.generated.resources.layout_hide_unreleased
 import nuvio.composeapp.generated.resources.layout_hide_unreleased_sub
+import nuvio.composeapp.generated.resources.layout_hide_watched
+import nuvio.composeapp.generated.resources.layout_hide_watched_sub
 import nuvio.composeapp.generated.resources.settings_meta_hero_trailer_playback_area_fullscreen
 import nuvio.composeapp.generated.resources.settings_meta_hero_trailer_playback_area_hero
 import nuvio.composeapp.generated.resources.settings_homescreen_empty_message
@@ -104,6 +106,7 @@ internal fun LazyListScope.homescreenSettingsContent(
     heroBadgeScale: Float,
     heroReleaseStatusUnavailableOnly: Boolean,
     hideUnreleasedContent: Boolean,
+    hideWatchedContent: Boolean,
     hideCatalogUnderline: Boolean,
     catalogRowShuffleEnabled: Boolean = false,
     adaptiveHeroEnabled: Boolean = false,
@@ -301,6 +304,17 @@ internal fun LazyListScope.homescreenSettingsContent(
                         ),
                         onCheckedChange = HomeCatalogSettingsRepository::setCatalogRowNumbersEnabled,
                     )
+                    SettingsGroupDivider(isTablet = isTablet)
+                    SettingsSwitchRow(
+                        title = stringResource(Res.string.settings_home_catalog_provider_tag),
+                        description = stringResource(Res.string.settings_home_catalog_provider_tag_description),
+                        checked = homeSettings.catalogProviderTagEnabled,
+                        isTablet = isTablet,
+                        modifier = Modifier.settingsScrollAnchor(
+                            SettingsScrollAnchor.searchKey("home-catalog-provider-tag"),
+                        ),
+                        onCheckedChange = HomeCatalogSettingsRepository::setCatalogProviderTagEnabled,
+                    )
                     // Basic's hero sits in the rows list, so it has no area to play a trailer
                     // in that would survive a scroll — there it is always full screen and
                     // there is nothing to choose. Hidden rather than disabled, same as the
@@ -462,6 +476,15 @@ internal fun LazyListScope.homescreenSettingsContent(
                     isTablet = isTablet,
                     modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("home-hide-unreleased")),
                     onCheckedChange = HomeCatalogSettingsRepository::setHideUnreleasedContent,
+                )
+                SettingsGroupDivider(isTablet = isTablet)
+                SettingsSwitchRow(
+                    title = stringResource(Res.string.layout_hide_watched),
+                    description = stringResource(Res.string.layout_hide_watched_sub),
+                    checked = hideWatchedContent,
+                    isTablet = isTablet,
+                    modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("home-hide-watched")),
+                    onCheckedChange = HomeCatalogSettingsRepository::setHideWatchedContent,
                 )
 
                 SettingsGroupDivider(isTablet = isTablet)

@@ -308,19 +308,46 @@ internal fun PlayerScreenRuntime.refreshTracks() {
                 selectedAddonSubtitleId = null
                 useCustomSubtitles = false
             }
-            // Built-in tracks win. If none match, keep the selection open until the automatic
-            // addon request finishes (unless fast startup explicitly opted out of that work).
-            preferredSubtitleSelectionApplied =
-                nativePreferredSelectionConfirmed ||
-                playerSettingsUiState.addonSubtitleStartupMode == AddonSubtitleStartupMode.FAST_STARTUP ||
-                addonSubtitleFetchKey == null
+            // Built-in tracks win by default. If none match, keep the selection open until the
+            // automatic addon request finishes (unless fast startup explicitly opted out of that
+            // work). With "Prefer Addon Subtitles" the pass stays open even after a built-in match:
+            // that track is selected now so subtitles show from the first frame, and the addon pass
+            // replaces it when a matching addon subtitle arrives.
+            preferredSubtitleSelectionApplied = builtInSubtitleSelectionSettlesAutoPass(
+                builtInMatchConfirmed = nativePreferredSelectionConfirmed,
+                preferAddonSubtitles = playerSettingsUiState.preferAddonSubtitles,
+                addonSubtitleStartupMode = playerSettingsUiState.addonSubtitleStartupMode,
+                addonFetchPossible = addonSubtitleFetchKey != null,
+            )
         }
     }
 
     applySecondarySubtitleSelectionIfNeeded()
 }
 
-/** Applies an addon subtitle only when no built-in track matches the preferred languages. */
+/**
+ * Whether the built-in pass has finished automatic subtitle selection, or must leave it open for
+ * the addon pass. The addon pass only ever runs when an automatic fetch is coming: fast startup
+ * skips it, and with no subtitle addon there is nothing to fetch.
+ */
+internal fun builtInSubtitleSelectionSettlesAutoPass(
+    builtInMatchConfirmed: Boolean,
+    preferAddonSubtitles: Boolean,
+    addonSubtitleStartupMode: AddonSubtitleStartupMode,
+    addonFetchPossible: Boolean,
+): Boolean {
+    val addonPassComing =
+        addonSubtitleStartupMode != AddonSubtitleStartupMode.FAST_STARTUP && addonFetchPossible
+    if (!addonPassComing) return true
+    return builtInMatchConfirmed && !preferAddonSubtitles
+}
+
+/**
+ * Applies a matching addon subtitle once the automatic fetch lands. By default this only fills the
+ * gap when no built-in track matches the preferred languages; with "Prefer Addon Subtitles" a
+ * matching addon replaces the built-in track selected meanwhile, so the embedded track is only
+ * kept when the addons have nothing in the preferred languages.
+ */
 internal fun PlayerScreenRuntime.applyPreferredAddonSubtitleIfReady() {
     // The addon fetch and the first native track refresh complete independently. Always let the
     // refresh restore a persisted built-in/addon choice first; otherwise a completed network fetch
@@ -352,8 +379,10 @@ internal fun PlayerScreenRuntime.applyPreferredAddonSubtitleIfReady() {
         return
     }
     // A late native track refresh may have discovered a matching built-in track; never let an
-    // addon replace it merely because the network response arrived afterward.
-    if (findPreferredSubtitleTrackIndex(
+    // addon replace it merely because the network response arrived afterward — unless the viewer
+    // asked for addon subtitles first, in which case the built-in track is exactly what to replace.
+    if (!playerSettingsUiState.preferAddonSubtitles &&
+        findPreferredSubtitleTrackIndex(
             tracks = subtitleTracks,
             targets = targets,
             isRejected = { track -> playerSettingsUiState.rejectsSubtitleTrack(track) },

@@ -14,7 +14,7 @@ class DiscoverRowCacheTest {
     /**
      * A row item carrying every field the Discover generators actually set — the union of
      * `TmdbSearchResult.toMetaPreview`, `WatchProgressEntry.toMetaPreview`,
-     * `withCustomLibraryPoster` and the `toRecommendationRow` mappings for imported and AI rows.
+     * `withCustomPosters` and the `toRecommendationRow` mappings for imported and AI rows.
      */
     private fun generatedItem() = MetaPreview(
         id = "tmdb:1234",
@@ -23,6 +23,8 @@ class DiscoverRowCacheTest {
         poster = "https://posters.example/1234.jpg",
         posterFallback = "https://image.tmdb.org/t/p/w500/abc.jpg",
         banner = "https://image.tmdb.org/t/p/w780/def.jpg",
+        // The poster service's landscape template, when one is set.
+        landscapePoster = "https://posters.example/landscape/1234.jpg",
         logo = "https://logos.example/1234.png",
         description = "A synopsis long enough to matter when this row seeds the hero.",
         releaseInfo = "1999",

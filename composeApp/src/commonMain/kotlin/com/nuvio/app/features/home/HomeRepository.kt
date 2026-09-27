@@ -1,9 +1,13 @@
 package com.nuvio.app.features.home
 
+import com.nuvio.app.features.posterservice.withCachedCustomPosters
+import com.nuvio.app.features.posterservice.withCustomPosterOverlay
+import com.nuvio.app.features.posterservice.CustomPosterScreen
 import co.touchlab.kermit.Logger
 import com.nuvio.app.features.addons.ManagedAddon
 import com.nuvio.app.features.addons.AddonRepository
 import com.nuvio.app.features.addons.enabledAddons
+import com.nuvio.app.features.catalog.CATALOG_PAGE_SIZE
 import com.nuvio.app.features.catalog.CatalogTarget
 import com.nuvio.app.features.catalog.fetchCatalogPage
 import com.nuvio.app.features.catalog.mergeCatalogItems
@@ -16,6 +20,7 @@ import com.nuvio.app.features.collection.TmdbCollectionSourceResolver
 import com.nuvio.app.features.collection.catalogRouteKey
 import com.nuvio.app.features.collection.findCollectionCatalog
 import com.nuvio.app.features.trakt.TraktPublicListSourceResolver
+import com.nuvio.app.features.watched.WatchedRepository
 import com.nuvio.app.features.watchprogress.CurrentDateProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +31,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
@@ -63,7 +71,14 @@ object HomeRepository {
     private val log = Logger.withTag("HomeRepository")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _uiState = MutableStateFlow(HomeUiState())
+    // Poster-service art is layered on at read time so cachedSections never hold template URLs.
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+        .withCustomPosterOverlay(CustomPosterScreen.Home) { settings, keys ->
+            copy(sections = sections.map { section ->
+                val items = section.items.withCachedCustomPosters(settings, keys)
+                if (items === section.items) section else section.copy(items = items)
+            })
+        }
 
     private var activeJob: Job? = null
     private var activeRequestKey: String? = null
@@ -78,6 +93,24 @@ object HomeRepository {
     private var collectionHeroRequestKey: String? = null
     private var lastPublishedCatalogHeroEmpty: Boolean = true
     private var lastErrorMessage: String? = null
+
+    init {
+        // "Hide watched content" is applied at publish time from the cached rows, so a title that
+        // was just finished (playback completion) or marked watched from a details page would sit
+        // on Home until the next refresh. Republish from the cache whenever the history changes
+        // while the filter is on; the seeded hero shuffle keeps the same order minus the title.
+        scope.launch {
+            WatchedRepository.uiState
+                .map { it.items }
+                .distinctUntilChanged { old, new -> old === new }
+                .drop(1)
+                .collect {
+                    if (!HomeCatalogSettingsRepository.snapshot().hideWatchedContent) return@collect
+                    if (currentDefinitions.isEmpty()) return@collect
+                    applyCurrentSettings()
+                }
+        }
+    }
 
     fun refresh(addons: List<ManagedAddon>, force: Boolean = false) {
         val activeAddons = addons.enabledAddons()
@@ -266,9 +299,8 @@ object HomeRepository {
     ) {
         val snapshot = HomeCatalogSettingsRepository.snapshot()
         val preferences = snapshot.preferences
-        val todayIsoDate = if (snapshot.hideUnreleasedContent) CurrentDateProvider.todayIsoDate() else null
-        fun HomeCatalogSection.withReleaseFilter(): HomeCatalogSection =
-            if (todayIsoDate == null) this else filterReleasedItems(todayIsoDate)
+        val browsingFilters = BrowsingFilters.current(snapshot)
+        fun HomeCatalogSection.withReleaseFilter(): HomeCatalogSection = browsingFilters.apply(this)
 
         val skippedEnabledSections = mutableListOf<String>()
         val sections = currentDefinitions
@@ -342,31 +374,43 @@ object HomeRepository {
     }
 
     private suspend fun HomeCatalogDefinition.toSection(): HomeCatalogSection {
+        // The whole first page is parsed even for a catalog the manifest calls non-paginating:
+        // whether it pages is only known once the response is in hand (below), and a row that
+        // turns out to page keeps its full page so the next skip stays page-aligned.
         val page = fetchCatalogPage(
             manifestUrl = manifestUrl,
             type = type,
             catalogId = catalogId,
             genre = genre,
-            // Paginating rows are horizontal infinite-scroll, so fetch the full first page (skip stays
-            // page-aligned for subsequent loads). Non-paginating rows only need the preview + pill.
-            maxItems = if (supportsPagination) null else HOME_CATALOG_PREVIEW_FETCH_LIMIT,
         )
-        val items = page.items
-        val nextSkip = if (supportsPagination) page.nextSkip else null
-        log.d { "Catalog fetch: $addonName / $catalogId ($type) — ${if (items.isEmpty()) "empty" else "${items.size} items"}" }
+        // Cache load only, no lookups: Home's rows are on the startup path.
+        WatchedContentFilter.prepareForLoad(page.items)
+        // Same rule as the catalog screen and the Discover feed: a catalog that fills a whole page
+        // pages in practice even when its manifest never advertised `skip`. Deciding from the
+        // manifest alone left such rows as a capped preview with an arrow while "See more arrows"
+        // was off — and the arrow's catalog screen then scrolled the entire thing.
+        val paginates = supportsPagination || page.rawItemCount >= CATALOG_PAGE_SIZE
+        // A row that does not page is a preview plus a pill; it never needs more than the preview.
+        val items = if (paginates) page.items else page.items.take(HOME_CATALOG_PREVIEW_FETCH_LIMIT)
+        val nextSkip = if (paginates) page.nextSkip else null
+        log.d {
+            "Catalog fetch: $addonName / $catalogId ($type) — " +
+                if (items.isEmpty()) "empty" else "${items.size} items, paginates=$paginates"
+        }
+        val target = CatalogTarget.Addon(
+            manifestUrl = manifestUrl,
+            contentType = type,
+            catalogId = catalogId,
+            genre = genre,
+            supportsPagination = paginates,
+        )
         if (items.isEmpty()) {
             return HomeCatalogSection(
                 key = key,
                 title = defaultTitle,
                 subtitle = addonName,
                 addonName = addonName,
-                target = CatalogTarget.Addon(
-                    manifestUrl = manifestUrl,
-                    contentType = type,
-                    catalogId = catalogId,
-                    genre = genre,
-                    supportsPagination = supportsPagination,
-                ),
+                target = target,
                 items = emptyList(),
                 availableItemCount = 0,
                 hasMore = false,
@@ -378,17 +422,11 @@ object HomeRepository {
             title = defaultTitle,
             subtitle = addonName,
             addonName = addonName,
-            target = CatalogTarget.Addon(
-                manifestUrl = manifestUrl,
-                contentType = type,
-                catalogId = catalogId,
-                genre = genre,
-                supportsPagination = supportsPagination,
-            ),
+            target = target,
             items = items,
             availableItemCount = page.rawItemCount,
             hasMore = nextSkip != null,
-            paginates = supportsPagination,
+            paginates = paginates,
             nextSkip = nextSkip,
         )
     }
@@ -429,7 +467,7 @@ object HomeRepository {
         }
 
         log.i { "loadMore start ($sectionKey) skip=$skip have=${section.items.size}" }
-        setSection(section.copy(isLoadingMore = true))
+        setLoadingMore(sectionKey, loading = true)
         val job = scope.launch {
             runCatching {
                 fetchCatalogPage(
@@ -438,7 +476,9 @@ object HomeRepository {
                     catalogId = target.catalogId,
                     genre = target.genre,
                     skip = skip,
-                )
+                ).also { page ->
+                    WatchedContentFilter.prepareForLoad(page.items, resolveBudgetMs = WATCHED_FILTER_RESOLVE_BUDGET_MS)
+                }
             }.fold(
                 onSuccess = { page ->
                     val current = _uiState.value.sections.firstOrNull { it.key == sectionKey }
@@ -448,34 +488,40 @@ object HomeRepository {
                         log.i { "loadMore dropped ($sectionKey): section vanished while paging" }
                         return@launch
                     }
-                    val merged = mergeCatalogItems(current.items, page.items)
+                    // Merged against the *cached* row, not the published one. The published row
+                    // has already had the browsing filters (hide unreleased / hide watched)
+                    // applied, so merging into it and writing that back would bake the filter
+                    // into the cache — and a page of nothing but watched titles would read as
+                    // "row exhausted". The cache stays raw; only what is published is filtered.
+                    val cached = cachedSections[sectionKey] ?: current
+                    val merged = mergeCatalogItems(cached.items, page.items)
                     val pagination = nextCatalogPaginationState(
                         supportsPagination = true,
                         requestedSkip = skip,
                         page = page,
-                        loadedNewItems = merged.size > current.items.size,
+                        loadedNewItems = merged.size > cached.items.size,
                         consecutiveDuplicatePages = sectionDuplicatePageCounts[sectionKey] ?: 0,
                     )
                     sectionDuplicatePageCounts[sectionKey] = pagination.consecutiveDuplicatePages
-                    log.i {
-                        "loadMore done ($sectionKey) ${current.items.size} -> ${merged.size} " +
-                            "(page=${page.items.size}, new=${merged.size - current.items.size}, " +
-                            "nextSkip=${pagination.nextSkip}, dupPages=${pagination.consecutiveDuplicatePages})"
-                    }
-                    setSection(
-                        current.copy(
-                            items = merged,
-                            availableItemCount = maxOf(current.availableItemCount, merged.size),
-                            nextSkip = pagination.nextSkip,
-                            hasMore = pagination.nextSkip != null,
-                            isLoadingMore = false,
-                        ),
+                    val mergedSection = current.copy(
+                        items = merged,
+                        availableItemCount = maxOf(current.availableItemCount, merged.size),
+                        nextSkip = pagination.nextSkip,
+                        hasMore = pagination.nextSkip != null,
+                        isLoadingMore = false,
                     )
+                    val visible = BrowsingFilters.current().apply(mergedSection)
+                    log.i {
+                        "loadMore done ($sectionKey) ${cached.items.size} -> ${merged.size} " +
+                            "(page=${page.items.size}, new=${merged.size - cached.items.size}, " +
+                            "visible=${visible.items.size}, nextSkip=${pagination.nextSkip}, " +
+                            "dupPages=${pagination.consecutiveDuplicatePages})"
+                    }
+                    setSection(published = visible, cached = mergedSection)
                 },
                 onFailure = { error ->
                     log.w(error) { "loadMore failed ($sectionKey) skip=$skip" }
-                    _uiState.value.sections.firstOrNull { it.key == sectionKey }
-                        ?.let { setSection(it.copy(isLoadingMore = false)) }
+                    setLoadingMore(sectionKey, loading = false)
                 },
             )
         }
@@ -553,12 +599,29 @@ object HomeRepository {
         }
     }
 
-    private fun setSection(section: HomeCatalogSection) {
+    /**
+     * Writes a row to the published state and, when the row is cached, to the cache. The two are
+     * allowed to differ: the cache holds every item fetched, the published row only those the
+     * browsing filters let through, and [publishCurrentState] rebuilds the latter from the former.
+     */
+    private fun setSection(published: HomeCatalogSection, cached: HomeCatalogSection = published) {
         _uiState.update { state ->
-            state.copy(sections = state.sections.map { if (it.key == section.key) section else it })
+            state.copy(sections = state.sections.map { if (it.key == published.key) published else it })
         }
-        if (cachedSections.containsKey(section.key)) {
-            cachedSections = cachedSections + (section.key to section)
+        if (cachedSections.containsKey(cached.key)) {
+            cachedSections = cachedSections + (cached.key to cached)
+        }
+    }
+
+    /** Flips the paging flag on both copies without letting the filtered one overwrite the cache. */
+    private fun setLoadingMore(sectionKey: String, loading: Boolean) {
+        _uiState.update { state ->
+            state.copy(
+                sections = state.sections.map { if (it.key == sectionKey) it.copy(isLoadingMore = loading) else it },
+            )
+        }
+        cachedSections[sectionKey]?.let { cached ->
+            cachedSections = cachedSections + (sectionKey to cached.copy(isLoadingMore = loading))
         }
     }
 
@@ -648,7 +711,8 @@ object HomeRepository {
                 )
             }
         }
-        val items = page.items
+        WatchedContentFilter.prepareForLoad(page.items)
+        val items = page.items.filterUnwatchedItems(WatchedContentFilter.current())
         return if (HomeCatalogSettingsRepository.snapshot().hideUnreleasedContent) {
             items.filterReleasedItems(CurrentDateProvider.todayIsoDate())
         } else {
@@ -682,6 +746,8 @@ object HomeRepository {
         append(requestKey.orEmpty())
         append("|hideUnreleased=")
         append(snapshot.hideUnreleasedContent)
+        append("|hideWatched=")
+        append(snapshot.hideWatchedContent)
         append("|collections=")
         collections.forEach { collection ->
             val preference = snapshot.preferences["collection_${collection.id}"]

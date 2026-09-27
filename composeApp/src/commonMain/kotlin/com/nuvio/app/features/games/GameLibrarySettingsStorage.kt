@@ -11,4 +11,6 @@ internal expect object GameLibrarySettingsStorage {
     fun saveBackdropStyle(value: String)
     fun loadMetadataSource(): String?
     fun saveMetadataSource(value: String)
+    fun loadCloseAfterLaunch(): Boolean?
+    fun saveCloseAfterLaunch(value: Boolean)
 }

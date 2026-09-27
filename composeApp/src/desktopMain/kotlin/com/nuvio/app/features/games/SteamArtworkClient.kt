@@ -10,6 +10,8 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -17,6 +19,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import java.io.File
 
 /**
@@ -33,20 +40,40 @@ import java.io.File
  * [GameLibraryController] is deliberately left alone: it runs unattended across the whole library,
  * where a source that can fall back to a title search would silently attach another game's art.
  *
- * Nothing is assumed to exist. Every URL is probed before it is offered, because coverage varies
- * by title and era — Portal 2 has `library_hero.jpg` and `logo.png` but neither the 2x hero nor
- * the store-page background that every game after it carries.
+ * The fixed URLs are no longer the whole story. Since 2025 the store files new and re-uploaded
+ * assets under a per-asset content hash (`steam/apps/<appid>/<sha1>/library_capsule.jpg`), and a
+ * game whose art only ever existed in that era — Mortal Shell II, at the time of writing — has
+ * nothing at the bare path at all: its cover is a 404 there, and the file is not even called
+ * `library_600x900.jpg` any more. The hash cannot be guessed, so the cover and hero are read from
+ * the store's own asset manifest ([storeAssetsFor]) first, and only probed the old way when that
+ * manifest cannot be reached. The clear logo is not in the manifest and is still probed.
+ *
+ * Nothing is assumed to exist. Every probed URL is checked before it is offered, because coverage
+ * varies by title and era — Portal 2 has `library_hero.jpg` and `logo.png` but neither the 2x
+ * hero nor the store-page background that every game after it carries.
  */
 class SteamArtworkClient : AutoCloseable {
     private val http = HttpClient(CIO) { expectSuccess = false }
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val appIdCacheLock = Mutex()
     private val appIdCache = mutableMapOf<SteamGameReference, Long?>()
+    private val storeAssetsLock = Mutex()
+    private val storeAssetsCache = mutableMapOf<Long, CompletableDeferred<SteamStoreAssets?>>()
 
     suspend fun heroesFor(reference: SteamGameReference): List<ArtworkCandidate> =
         heroesFor(appIdFor(reference) ?: return emptyList())
 
     suspend fun heroesFor(appId: Long): List<ArtworkCandidate> {
+        val manifest = storeAssetsFor(appId)
+        if (manifest != null) {
+            return STEAM_HERO_ASSETS.mapNotNull { group ->
+                group.firstNotNullOfOrNull { asset ->
+                    manifest.url(asset.manifestKey)?.let { url ->
+                        ArtworkCandidate(url, asset.width, asset.height, ArtworkSource.STEAM)
+                    }
+                }
+            }
+        }
         return firstExistingPerGroup(appId, STEAM_HERO_ASSETS, measure = false).map { probe ->
             ArtworkCandidate(
                 url = probe.url,
@@ -78,8 +105,83 @@ class SteamArtworkClient : AutoCloseable {
     }
 
     /** The portrait cover for the poster rail, largest first, or null when Steam has none. */
-    suspend fun coverFor(appId: Long): String? =
-        firstExistingPerGroup(appId, STEAM_COVER_ASSETS, measure = false).firstOrNull()?.url
+    suspend fun coverFor(appId: Long): String? {
+        val manifest = storeAssetsFor(appId)
+        if (manifest != null) {
+            return STEAM_COVER_ASSETS.first().firstNotNullOfOrNull { manifest.url(it.manifestKey) }
+        }
+        return firstExistingPerGroup(appId, STEAM_COVER_ASSETS, measure = false).firstOrNull()?.url
+    }
+
+    /**
+     * The store's asset manifest for [appId], or null when it could not be fetched or the store
+     * does not list the app (delisted, or region-locked away from this machine).
+     *
+     * `IStoreBrowseService/GetItems` is the endpoint the store pages themselves draw from and needs
+     * no key. It names every capsule, hero and background file with its hash segment when it has
+     * one, which is the only way to reach art filed under the hashed layout. Answers are kept for
+     * the life of the client, and a lookup in flight is shared — the cover and hero of one game are
+     * asked for at the same time from the editor — so each app costs one request. A failed fetch
+     * is not remembered, so a network blip does not pin a game to the probe fallback for good.
+     */
+    suspend fun storeAssetsFor(appId: Long): SteamStoreAssets? = storeAssetsFor(listOf(appId))[appId]
+
+    /** The manifests of every app in [appIds] that the store lists, in one request for the misses. */
+    suspend fun storeAssetsFor(appIds: Collection<Long>): Map<Long, SteamStoreAssets> {
+        val ids = appIds.distinct()
+        if (ids.isEmpty()) return emptyMap()
+        val waiting = mutableMapOf<Long, CompletableDeferred<SteamStoreAssets?>>()
+        val owned = mutableMapOf<Long, CompletableDeferred<SteamStoreAssets?>>()
+        storeAssetsLock.withLock {
+            ids.forEach { id ->
+                val cached = storeAssetsCache[id]
+                if (cached != null) {
+                    waiting[id] = cached
+                } else {
+                    owned[id] = CompletableDeferred<SteamStoreAssets?>().also { storeAssetsCache[id] = it }
+                }
+            }
+        }
+        if (owned.isNotEmpty()) {
+            val fetched = try {
+                fetchStoreAssets(owned.keys)
+            } catch (error: Throwable) {
+                // Every waiter sees the failure, and the next caller gets to try again.
+                storeAssetsLock.withLock { owned.keys.forEach { storeAssetsCache.remove(it) } }
+                owned.values.forEach { it.completeExceptionally(error) }
+                if (error is CancellationException) throw error
+                null
+            }
+            owned.forEach { (id, deferred) -> deferred.complete(fetched?.get(id)) }
+        }
+        return buildMap {
+            (owned + waiting).forEach { (id, deferred) ->
+                val assets = runCatching { deferred.await() }
+                    .onFailure { if (it is CancellationException) throw it }
+                    .getOrNull()
+                if (assets != null) put(id, assets)
+            }
+        }
+    }
+
+    private suspend fun fetchStoreAssets(appIds: Collection<Long>): Map<Long, SteamStoreAssets> {
+        val request = buildString {
+            append("{\"ids\":[")
+            append(appIds.joinToString(",") { "{\"appid\":$it}" })
+            append("],\"context\":{\"language\":\"english\",\"country_code\":\"US\"},")
+            append("\"data_request\":{\"include_assets\":true}}")
+        }
+        val response = http.get("https://api.steampowered.com/IStoreBrowseService/GetItems/v1") {
+            url { parameters.append("input_json", request) }
+        }
+        if (!response.status.isSuccess()) {
+            throw SteamStoreException("Steam returned ${response.status.value} for the asset manifest.")
+        }
+        val items = json.parseToJsonElement(response.bodyAsText())
+            .jsonObject["response"]?.jsonObject?.get("store_items")?.jsonArray
+            ?: return emptyMap()
+        return items.mapNotNull { item -> parseSteamStoreAssets(item.jsonObject) }.associateBy { it.appId }
+    }
 
     /**
      * The app id, from the cheapest source that can produce one.
@@ -174,7 +276,56 @@ data class SteamGameReference(
     val arguments: List<String> = emptyList(),
 )
 
-internal data class SteamAsset(val fileName: String, val width: Int, val height: Int)
+/**
+ * One Steam asset: the file name it has at the bare `steam/apps/<appid>/` path, and the key the
+ * store's asset manifest lists it under (which is also where its hashed path, if any, lives).
+ */
+internal data class SteamAsset(
+    val fileName: String,
+    val width: Int,
+    val height: Int,
+    val manifestKey: String? = null,
+)
+
+/**
+ * The store's asset manifest for one app: every file it lists, by manifest key, as a path relative
+ * to the store CDN root — `steam/apps/<appid>/<hash>/library_capsule.jpg?t=…` for art filed under
+ * the hashed layout, `steam/apps/<appid>/library_600x900.jpg?t=…` for art that predates it.
+ */
+data class SteamStoreAssets(
+    val appId: Long,
+    private val paths: Map<String, String>,
+) {
+    fun url(manifestKey: String?): String? = manifestKey?.let(paths::get)?.let { STEAM_STORE_ASSET_ROOT + it }
+}
+
+/**
+ * The manifest out of one `GetItems` store item. An item the store will not show (`visible:false`,
+ * `success` other than 1) carries no `assets` and yields nothing, so the caller falls back.
+ *
+ * The `${'$'}{FILENAME}` placeholder in `asset_url_format` is filled per file: the file values
+ * already carry their hash segment when they have one, and the format supplies the app directory
+ * and the cache-busting stamp. `community_icon` is a bare hash rather than a file and is skipped.
+ */
+internal fun parseSteamStoreAssets(item: JsonObject): SteamStoreAssets? {
+    val appId = item["appid"]?.jsonPrimitive?.longOrNull?.takeIf { it > 0 } ?: return null
+    val assets = item["assets"]?.jsonObject ?: return null
+    val format = assets["asset_url_format"]?.jsonPrimitive?.content
+        ?.takeIf { it.contains(STEAM_ASSET_FILENAME_PLACEHOLDER) }
+        ?: return null
+    val paths = assets.mapNotNull { (key, value) ->
+        val file = runCatching { value.jsonPrimitive.content }.getOrNull()
+            ?.takeIf { key != "asset_url_format" && it.contains('.') }
+            ?: return@mapNotNull null
+        key to format.replace(STEAM_ASSET_FILENAME_PLACEHOLDER, file)
+    }.toMap()
+    return SteamStoreAssets(appId, paths)
+}
+
+private const val STEAM_ASSET_FILENAME_PLACEHOLDER = "${'$'}{FILENAME}"
+
+/** The CDN root `asset_url_format` paths hang off; the akamai and fastly hosts mirror it. */
+internal const val STEAM_STORE_ASSET_ROOT = "https://shared.steamstatic.com/store_item_assets/"
 
 internal data class SteamAssetProbe(
     val asset: SteamAsset,
@@ -216,10 +367,10 @@ private const val PNG_HEADER_BYTES = 33
  */
 internal val STEAM_HERO_ASSETS: List<List<SteamAsset>> = listOf(
     listOf(
-        SteamAsset("library_hero_2x.jpg", 3840, 1240),
-        SteamAsset("library_hero.jpg", 1920, 620),
+        SteamAsset("library_hero_2x.jpg", 3840, 1240, manifestKey = "library_hero_2x"),
+        SteamAsset("library_hero.jpg", 1920, 620, manifestKey = "library_hero"),
     ),
-    listOf(SteamAsset("page_bg_raw.jpg", 0, 0)),
+    listOf(SteamAsset("page_bg_raw.jpg", 0, 0, manifestKey = "raw_page_background")),
 )
 
 /**
@@ -242,18 +393,22 @@ internal val STEAM_LOGO_ASSETS: List<List<SteamAsset>> = listOf(
 /**
  * Portrait cover art, as one chain: the 2x is the same picture at twice the size, and `header.jpg`
  * is landscape, so it is not an acceptable substitute for a poster and is not in the chain.
+ *
+ * The manifest calls the same picture `library_capsule`, under which a hashed-era game files it as
+ * `<hash>/library_capsule.jpg` and an older one as plain `library_600x900.jpg`.
  */
 internal val STEAM_COVER_ASSETS: List<List<SteamAsset>> = listOf(
     listOf(
-        SteamAsset("library_600x900_2x.jpg", 1200, 1800),
-        SteamAsset("library_600x900.jpg", 600, 900),
+        SteamAsset("library_600x900_2x.jpg", 1200, 1800, manifestKey = "library_capsule_2x"),
+        SteamAsset("library_600x900.jpg", 600, 900, manifestKey = "library_capsule"),
     ),
 )
 
 /**
- * Both hosts the same asset can live behind. Newer titles are served from the `store_item_assets`
- * path, older ones from the bare `steam/apps` path, and most from both. `shared.steamstatic.com`
- * rather than `shared.cloudflare.steamstatic.com`, which only 301s to it.
+ * Both hosts the same bare-path asset can live behind. Newer titles are served from the
+ * `store_item_assets` path, older ones from the bare `steam/apps` path, and most from both.
+ * `shared.steamstatic.com` rather than `shared.cloudflare.steamstatic.com`, which only 301s to it.
+ * Hashed-era art is on the `store_item_assets` host only, and is reached via [SteamStoreAssets].
  */
 internal fun steamAssetUrls(appId: Long, fileName: String): List<String> = listOf(
     "https://cdn.cloudflare.steamstatic.com/steam/apps/$appId/$fileName",

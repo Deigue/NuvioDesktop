@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -154,9 +155,19 @@ fun PlayerSourcesPanel(
                             }
                         }
 
-                        // Addon filter chips
-                        val addonNames = remember(streamsUiState.groups) {
-                            streamsUiState.groups.map { it.addonName }.distinct()
+                        // Addon filter chips. An addon that finished with nothing (or failed) gets
+                        // no chip: tapping it could only ever show an empty list.
+                        val addonGroups = remember(streamsUiState.groups) {
+                            streamsUiState.groups.filter { it.streams.isNotEmpty() || it.isLoading }
+                        }
+                        val addonNames = remember(addonGroups) {
+                            addonGroups.map { it.addonName }.distinct()
+                        }
+                        LaunchedEffect(visible, addonGroups, streamsUiState.selectedFilter) {
+                            val selected = streamsUiState.selectedFilter ?: return@LaunchedEffect
+                            if (visible && addonGroups.none { it.addonId == selected }) {
+                                onFilterSelected(null)
+                            }
                         }
                         if (addonNames.size > 1) {
                             Row(
@@ -173,7 +184,7 @@ fun PlayerSourcesPanel(
                                     onClick = { onFilterSelected(null) },
                                 )
                                 addonNames.forEach { addon ->
-                                    val group = streamsUiState.groups.firstOrNull { it.addonName == addon }
+                                    val group = addonGroups.firstOrNull { it.addonName == addon }
                                     AddonFilterChip(
                                         label = addon,
                                         isSelected = streamsUiState.selectedFilter == group?.addonId,

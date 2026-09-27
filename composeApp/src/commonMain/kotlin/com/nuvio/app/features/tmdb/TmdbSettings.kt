@@ -24,11 +24,6 @@ data class TmdbSettings(
     val useSeasonPosters: Boolean = true,
     val useMoreLikeThis: Boolean = true,
     val useCollections: Boolean = true,
-    // Custom poster service for library items (which aren't catalog-backed and otherwise
-    // show plain TMDB posters). The template is a full URL with {imdb_id}/{tmdb_id}/{type}
-    // placeholders, e.g. a PostersPlus/RPDB/etc. endpoint. Applied only to the library.
-    val libraryPosterEnabled: Boolean = false,
-    val libraryPosterUrlTemplate: String = "",
     // Cloud-library catalogs (TorBox, the AIOStreams library addon) list release filenames with no
     // metadata; when set, those rows are looked up on TMDB by parsed name + year. Needs an API key.
     val resolveFilenameCatalogs: Boolean = true,

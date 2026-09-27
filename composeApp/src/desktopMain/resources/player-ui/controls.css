@@ -370,6 +370,7 @@ button:disabled {
 .player.native-resizing .metadata,
 .player.native-resizing .parental-guide,
 .player.native-resizing .skip-prompt,
+.player.native-resizing .skip-submit-toast,
 .player.native-resizing .next-episode-card,
 .player.native-resizing .episode-notch,
 .player.native-resizing .header-actions,
@@ -414,6 +415,7 @@ button:disabled {
 .player.opening-active .parental-guide,
 .player.opening-active .pause-metadata-overlay,
 .player.opening-active .skip-prompt,
+.player.opening-active .skip-submit-toast,
 .player.opening-active .next-episode-card,
 .player.opening-active .gesture-pill,
 .player.opening-active:not(.source-panel-open) .content,
@@ -647,8 +649,11 @@ button:disabled {
 }
 
 .parental-guide-line {
+  /* Stretched to the row list rather than sized in JS: the rows scale with --user-scale and a
+     pixel height computed from the unscaled row size drifted away from the text at any other
+     scale. The reveal is the scaleY transform, so the full height is fine from the start. */
+  align-self: stretch;
   width: 3px;
-  height: 0;
   border-radius: 1px;
   background: var(--theme-accent-fill);
   transform: scaleY(0);
@@ -863,6 +868,122 @@ button:disabled {
   width: 0%;
   height: 100%;
   background: rgba(30, 30, 30, .85);
+}
+
+/* Same footprint and motion as .skip-prompt; a second line of copy and a key hint on top. */
+.skip-submit-toast {
+  position: absolute;
+  left: var(--hp);
+  bottom: calc(var(--overlay-bottom) + env(safe-area-inset-bottom));
+  z-index: 7;
+  min-width: max-content;
+  max-width: min(460px, calc(100vw - (var(--hp) * 2)));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 16px;
+  background: rgba(30, 30, 30, .85);
+  color: #fff;
+  text-align: left;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(.8);
+  transform-origin: left bottom;
+  transition:
+    opacity 300ms ease,
+    transform 300ms var(--ease-out);
+}
+
+.skip-submit-toast.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+.skip-submit-toast-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 18px;
+}
+
+.skip-submit-toast-title {
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.skip-submit-toast-detail {
+  font-size: 13px;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, .78);
+  white-space: normal;
+}
+
+.skip-submit-toast-detail:empty,
+.skip-submit-toast-hint:empty {
+  display: none;
+}
+
+.skip-submit-toast-hint {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, .6);
+  white-space: pre;
+}
+
+.skip-submit-toast-hint kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .14);
+  color: #fff;
+  font: inherit;
+  font-weight: 650;
+}
+
+.skip-submit-toast.phase-capturing .skip-submit-toast-title::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: #ff4d4d;
+  animation: skip-submit-toast-blink 1.2s ease-in-out infinite;
+}
+
+.skip-submit-toast.phase-result.accepted .skip-submit-toast-title {
+  color: #7ee0a3;
+}
+
+.skip-submit-toast.phase-result:not(.accepted) .skip-submit-toast-title {
+  color: #ffb4a8;
+}
+
+@keyframes skip-submit-toast-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .25; }
+}
+
+.skip-submit-toast-track {
+  display: none;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, .15);
+}
+
+.skip-submit-toast.show-progress .skip-submit-toast-track {
+  display: block;
+}
+
+.skip-submit-toast-fill {
+  width: 100%;
+  height: 100%;
+  background: var(--theme-accent-fill);
 }
 
 .next-episode-card {
@@ -3220,6 +3341,8 @@ button:focus-visible,
   .center-status,
   .pause-metadata-overlay,
   .skip-prompt,
+  .skip-submit-toast,
+  .skip-submit-toast-fill,
   .next-episode-card,
   .skip-progress-fill,
   .progress,
@@ -3544,6 +3667,26 @@ svg {
   pointer-events: none;
 }
 #episodesModal .episode-row-top .status-chip { margin-left: auto; }
+#episodesModal .episode-row-top .episode-watched {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  background: var(--theme-accent-fill);
+  color: var(--theme-on-accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+}
+#episodesModal .episode-row-top .status-chip + .episode-watched { margin-left: 8px; }
+#episodesModal .episode-row-top .episode-watched .track-check {
+  width: 14px;
+  height: 14px;
+  opacity: 1;
+  color: inherit;
+}
 #episodesModal .episode-code,
 #episodesModal .status-chip {
   background: rgba(0,0,0,.62);
@@ -3661,6 +3804,17 @@ svg {
   margin: 0;
   background: #fff;
 }
+/* The glyph is a real button (click = mute/unmute); it keeps the glyph's footprint so the
+   icon-and-slider rhythm of every layout is unchanged. Hover feedback matches the transport. */
+.volume-mute-button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  padding: calc(var(--user-scale) * 4px);
+  margin: calc(var(--user-scale) * -4px);
+  border-radius: 999px;
+}
+.volume-mute-button:hover { background: rgba(255, 255, 255, .12); }
 .player-volume-icon {
   width: 24px;
   height: 24px;
@@ -4359,6 +4513,22 @@ svg {
   font-size: calc(var(--user-scale) * 11px);
 }
 
+.skip-submit-toast {
+  max-width: min(calc(var(--user-scale) * 460px), calc(100vw - (var(--hp) * 2)));
+  border-radius: calc(var(--user-scale) * 16px);
+}
+.skip-submit-toast-body {
+  gap: calc(var(--user-scale) * 3px);
+  padding: calc(var(--user-scale) * 12px) calc(var(--user-scale) * 18px);
+}
+.skip-submit-toast-title { font-size: calc(var(--user-scale) * 14px); }
+.skip-submit-toast-detail { font-size: calc(var(--user-scale) * 13px); }
+.skip-submit-toast-hint {
+  margin-top: calc(var(--user-scale) * 3px);
+  font-size: calc(var(--user-scale) * 12px);
+}
+.skip-submit-toast-track { height: calc(var(--user-scale) * 3px); }
+
 .skip-prompt { border-radius: calc(var(--user-scale) * 16px); }
 .skip-prompt-row {
   padding: calc(var(--user-scale) * 12px) calc(var(--user-scale) * 18px);
@@ -4512,10 +4682,16 @@ svg {
   width: calc(100% - (var(--user-scale) * 28px));
 }
 .scrub::-webkit-slider-runnable-track { height: calc(var(--user-scale) * 3px); }
+/* .scrub is squashed by scaleY(--slider-scale) (.72-.82), which flattened the thumb into an
+   ellipse; the height is authored pre-squash so it lands as a 9px circle. The margin re-centres
+   that taller box on the 3px track in the same unscaled space. The radius must be 50%, not a
+   large px value: on a non-square box 999px clamps to a stadium (straight sides), and a squashed
+   stadium is still not a circle -- only a squashed ellipse is. */
 .scrub::-webkit-slider-thumb {
   width: calc(var(--user-scale) * 9px);
-  height: calc(var(--user-scale) * 9px);
-  margin-top: calc(var(--user-scale) * -3px);
+  height: calc(var(--user-scale) * 9px / var(--slider-scale));
+  margin-top: calc((var(--user-scale) * 3px - var(--user-scale) * 9px / var(--slider-scale)) / 2);
+  border-radius: 50%;
   border: 0;
   background: rgba(255, 255, 255, .96);
   box-shadow:
@@ -4960,4 +5136,573 @@ svg {
 }
 .player:not(.legacy-hud):not(.pip-active).hud-minimal .timeline-row {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* Minimal HUD (the "Player Controls Layout: Minimal" setting -> .player.minimal-hud). Not to be
+   confused with .hud-minimal, the narrowest width tier, which keeps its own rules above.
+   One slim row modelled on the YouTube / typical web-player bar: the seek bar runs edge to edge
+   on top, then transport + volume + a single "position / duration" readout on the left and the
+   tool icons on the right. controls.js moves #position/#duration into #minimalTime for this
+   layout, so every time rule here targets them through that container. Kept last so the generic
+   desktop grid/track sizing above cannot re-widen the row. */
+.player.minimal-hud {
+  --slider-bottom: calc(var(--user-scale) * 14px);
+  --side-icon: calc(var(--user-scale) * var(--control-icon-scale) * 24px);
+}
+.player.minimal-hud .timeline-row {
+  grid-template-columns: minmax(0, 1fr);
+  /* The scrub keeps its inset so the thumb has room at 0%/100%; pull the row out by the same
+     amount so the track's ends line up with the play button and the last tool icon below. */
+  margin-inline: calc(var(--user-scale) * -14px);
+  margin-bottom: 0;
+}
+.player.minimal-hud .desktop-control-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--user-scale) * 4px);
+  min-height: calc(var(--user-scale) * 44px);
+  transform: none;
+}
+.player.minimal-hud .center-controls {
+  order: 0;
+  gap: calc(var(--user-scale) * var(--control-icon-scale) * 2px);
+}
+.player.minimal-hud .side-control,
+.player.minimal-hud .play-control {
+  width: calc(var(--user-scale) * 40px);
+  height: calc(var(--user-scale) * 40px);
+  padding: 0;
+}
+.player.minimal-hud .play-control svg {
+  width: calc(var(--user-scale) * var(--control-icon-scale) * 26px);
+  height: calc(var(--user-scale) * var(--control-icon-scale) * 26px);
+}
+.player.minimal-hud .time-cluster {
+  order: 1;
+  /* The readout needs real air after the slider; anything tighter reads as one run of controls
+     once the slider is out. */
+  gap: calc(var(--user-scale) * 24px);
+  padding-left: calc(var(--user-scale) * 6px);
+}
+.player.minimal-hud .player-volume-control {
+  width: auto;
+  min-height: 0;
+}
+/* The .time-cluster hop in these selectors is deliberate: the hud-compact/hud-small width tiers
+   set the slider's width and the control's gap at (0,5,1)/(0,4,1), and the slide-out below
+   has to beat them or a narrow window would pin the slider open. */
+.player.minimal-hud .time-cluster .player-volume-control { gap: 0; }
+/* YouTube-style slide-out: the slider is collapsed to nothing beside the mute button and grows
+   out on hover, keyboard focus, or while a drag is in flight (the .dragging class from
+   controls.js, since a vertical wobble mid-drag leaves the hover area). Width and margin animate
+   together so the time readout glides right instead of jumping. */
+.player.minimal-hud .time-cluster .player-volume-control .player-volume {
+  width: 0;
+  margin-left: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    width 200ms cubic-bezier(.4, 0, .2, 1),
+    margin-left 200ms cubic-bezier(.4, 0, .2, 1),
+    opacity 140ms ease;
+}
+.player.minimal-hud .time-cluster .player-volume-control:hover .player-volume,
+.player.minimal-hud .time-cluster .player-volume-control:focus-within .player-volume,
+.player.minimal-hud .time-cluster .player-volume-control.dragging .player-volume {
+  width: calc(var(--user-scale) * 84px);
+  margin-left: calc(var(--user-scale) * 10px);
+  opacity: 1;
+  pointer-events: auto;
+}
+.player.minimal-hud .player-volume-icon {
+  width: calc(var(--user-scale) * 22px);
+  height: calc(var(--user-scale) * 22px);
+}
+.minimal-time { display: none; }
+.player.minimal-hud .minimal-time {
+  display: inline-flex;
+  align-items: baseline;
+  gap: calc(var(--user-scale) * 5px);
+  font-size: calc(var(--user-scale) * 14px);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, .92);
+  white-space: nowrap;
+}
+.player.minimal-hud .minimal-time .timeline-time {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  text-align: left;
+}
+.player.minimal-hud .minimal-time-separator { color: rgba(255, 255, 255, .55); }
+.player.minimal-hud .action-row {
+  order: 2;
+  /* A zero basis keeps clientWidth equal to the leftover space regardless of the row's own
+     buttons, which is what syncActionRowOverflow measures against before folding. */
+  flex: 1 1 0;
+  min-width: 0;
+  margin-left: auto;
+  gap: calc(var(--user-scale) * 2px);
+}
+.player.minimal-hud .desktop-control-row .action {
+  padding: calc(var(--user-scale) * var(--control-icon-scale) * 8px);
+}
+.player.minimal-hud .desktop-control-row .action svg {
+  width: calc(var(--user-scale) * var(--control-icon-scale) * 22px);
+  height: calc(var(--user-scale) * var(--control-icon-scale) * 22px);
+}
+
+/* Minimal + pills (the "Minimal Controls Pills" toggle -> .player.minimal-hud.minimal-pills).
+   Each control group sits on its own translucent pill -- transport, mute+slider, readout, tools
+   -- rather than directly on the picture. Same ink as the overflow menu so the two read as one
+   family. The tool row gives up its zero flex basis here: a pill must hug its icons, not span the
+   leftover width, so it shrinks only when it has to (syncActionRowOverflow still reads a
+   clientWidth below natural in that case and folds). Every pill is the same fixed height with its
+   contents centred, so the four read as one bar rather than differently sized bubbles -- the
+   transport (40px buttons + 3px padding) sets the height, the others just centre in it. */
+.player.minimal-hud.minimal-pills .center-controls,
+.player.minimal-hud.minimal-pills .time-cluster .player-volume-control,
+.player.minimal-hud.minimal-pills .minimal-time,
+.player.minimal-hud.minimal-pills .action-row {
+  box-sizing: border-box;
+  height: calc(var(--user-scale) * 46px);
+  align-items: center;
+  border-radius: 999px;
+  /* Lighter than the overflow menu on purpose: the picture should still read through a soft
+     blur, YouTube-style, rather than the pill sitting on the frame as a dark slab. */
+  background: rgba(28, 28, 34, .26);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+/* The pills carry their own contrast, so the edge gradient under them can back right off; at full
+   strength (.7 black at the edge) it swamped any change to the pill tint -- the row sat in a ~60%
+   black band and the pills read the same whatever their alpha. */
+.player.minimal-hud.minimal-pills .bottom-gradient {
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, .3));
+}
+.player.minimal-hud.minimal-pills .desktop-control-row { gap: calc(var(--user-scale) * 8px); }
+.player.minimal-hud.minimal-pills .center-controls { padding: calc(var(--user-scale) * 3px); }
+.player.minimal-hud.minimal-pills .time-cluster {
+  gap: calc(var(--user-scale) * 8px);
+  padding-left: 0;
+}
+.player.minimal-hud.minimal-pills .time-cluster .player-volume-control {
+  padding: 0 calc(var(--user-scale) * 13px);
+}
+.player.minimal-hud.minimal-pills .time-cluster .player-volume-control:hover .player-volume,
+.player.minimal-hud.minimal-pills .time-cluster .player-volume-control:focus-within .player-volume,
+.player.minimal-hud.minimal-pills .time-cluster .player-volume-control.dragging .player-volume {
+  /* A little extra so the thumb never kisses the pill's rounded end. */
+  margin-right: calc(var(--user-scale) * 6px);
+}
+.player.minimal-hud.minimal-pills .minimal-time {
+  padding: 0 calc(var(--user-scale) * 14px);
+}
+.player.minimal-hud.minimal-pills .action-row {
+  flex: 0 1 auto;
+  gap: calc(var(--user-scale) * 6px);
+  padding: 0 calc(var(--user-scale) * 10px);
+}
+
+/* Ultra layout (the "Player Controls Layout: Ultra Minimal" setting -> .player.ultra-hud).
+   The bar is reduced to the seek line flanked by the position and duration readouts, and a
+   two-button cluster bottom-right: a gear and a fullscreen switch. No transport row -- clicking the picture
+   plays/pauses and double-clicking it fullscreens, exactly as in every other layout. The gear is
+   #actionOverflowButton wearing a different glyph: syncActionRowOverflow folds EVERY tool into the
+   popover for this layout (into .ultra-menu-actions), and this block restyles the overflow menu
+   from a dark vertical icon strip into a frosted-glass card: the volume control on top
+   (controls.js parks #playerVolumeControl in .ultra-menu-volume) over one horizontal row of the
+   icons. Kept last, after the minimal block, for the same reason that one is: the generic desktop
+   grid sizing above must not re-widen the row. */
+.player.ultra-hud {
+  --slider-bottom: calc(var(--user-scale) * 10px);
+}
+/* The picture carries most of the frame here; the edge gradient only needs to keep the seek line
+   and the two glyphs legible. */
+.player.ultra-hud .bottom-gradient {
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, .38));
+}
+.player.ultra-hud .timeline-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  /* The scrub's own 14px inset is the gap between each readout and the track's end. */
+  gap: 0;
+  margin-inline: 0;
+  margin-bottom: 0;
+  transition: opacity 160ms ease;
+}
+/* The popover opens over the seek row; fading the row out under it reads cleaner than the two
+   overlapping. Nothing moves, so the subtitle clearance and the row's hit-test stay put. */
+.player.ultra-hud.action-overflow-open .timeline-row {
+  opacity: 0;
+  pointer-events: none;
+}
+.player.ultra-hud .timeline-row .timeline-time {
+  min-width: 0;
+  font-size: calc(var(--user-scale) * 13px);
+  font-weight: 500;
+  color: rgba(255, 255, 255, .9);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .6);
+}
+.player.ultra-hud .desktop-control-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  min-height: calc(var(--user-scale) * 40px);
+  gap: 0;
+  transform: none;
+}
+.player.ultra-hud .center-controls,
+.player.ultra-hud .time-cluster {
+  display: none !important;
+}
+.player.ultra-hud .action-row {
+  flex: 0 0 auto;
+  margin-left: auto;
+  gap: calc(var(--user-scale) * 4px);
+}
+/* The gear swaps glyphs with the overflow container icon; the toggle itself is untouched. */
+.ultra-gear-glyph { display: none !important; }
+.player.ultra-hud .action-overflow-toggle > svg:not(.ultra-gear-glyph) { display: none !important; }
+.player.ultra-hud .ultra-gear-glyph { display: block !important; }
+.player:not(.ultra-hud) #fullscreenButton { display: none !important; }
+.player.ultra-hud .desktop-control-row > .action-row > .action {
+  padding: calc(var(--user-scale) * var(--control-icon-scale) * 8px);
+}
+.player.ultra-hud .desktop-control-row > .action-row > .action svg {
+  width: calc(var(--user-scale) * var(--control-icon-scale) * 22px);
+  height: calc(var(--user-scale) * var(--control-icon-scale) * 22px);
+}
+/* The overhead tooltip of an icon in the popover's row lands inside the card (over the volume
+   row), so it has to paint above the card, not under it. */
+.player.ultra-hud .control-tooltip { z-index: 41; }
+
+/* The popover: a frosted-glass card in the phone control-centre idiom -- a light translucent
+   tint over a heavy blur with a hairline highlight edge, rather than the dark slab of the
+   overflow strip. It hugs the icon row's width; the volume row stretches to match. */
+.player.ultra-hud .action-overflow-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  width: max-content;
+  max-height: none;
+  overflow: visible;
+  padding: calc(var(--user-scale) * 4px);
+  bottom: calc(100% + (var(--user-scale) * 8px));
+  border: 1px solid rgba(255, 255, 255, .24);
+  border-radius: calc(var(--user-scale) * 20px);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, .10) 45%, rgba(255, 255, 255, .06)),
+    rgba(96, 96, 108, .34);
+  box-shadow:
+    0 calc(var(--user-scale) * 22px) calc(var(--user-scale) * 56px) rgba(0, 0, 0, .45),
+    inset 0 1px 0 rgba(255, 255, 255, .38),
+    inset 0 -1px 0 rgba(255, 255, 255, .08);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+}
+.player.ultra-hud .action-overflow-menu[hidden] { display: none; }
+.ultra-menu-volume,
+.ultra-menu-actions { display: none; }
+.player.ultra-hud .action-overflow-menu .ultra-menu-volume {
+  display: flex;
+  align-items: center;
+  padding: calc(var(--user-scale) * 8px) calc(var(--user-scale) * 14px) calc(var(--user-scale) * 10px);
+  border-bottom: 1px solid rgba(255, 255, 255, .16);
+}
+.player.ultra-hud .ultra-menu-volume .player-volume-control {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  gap: calc(var(--user-scale) * 12px);
+  opacity: 1;
+}
+.player.ultra-hud .ultra-menu-volume .player-volume-control .player-volume {
+  flex: 1 1 auto;
+  width: auto;
+  margin: 0;
+  opacity: 1;
+  pointer-events: auto;
+}
+.player.ultra-hud .ultra-menu-volume .player-volume-icon {
+  width: calc(var(--user-scale) * 22px);
+  height: calc(var(--user-scale) * 22px);
+}
+/* One horizontal row of the icons, icon-only like the bar they came from; #controlTooltip
+   supplies the name and live value ("Aspect ratio - Fit") on hover. */
+.player.ultra-hud .action-overflow-menu .ultra-menu-actions {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--user-scale) * 2px);
+  padding: calc(var(--user-scale) * 4px) calc(var(--user-scale) * 4px) calc(var(--user-scale) * 2px);
+}
+.player.ultra-hud .action-row .action-overflow-menu .action {
+  flex: 0 0 auto;
+  padding: calc(var(--user-scale) * var(--control-icon-scale) * 8px);
+  border-radius: 999px;
+}
+.player.ultra-hud .action-row .action-overflow-menu .action:hover { background: rgba(255, 255, 255, .16); }
+.player.ultra-hud .action-row .action-overflow-menu .action.selected { background: rgba(255, 255, 255, .24); }
+.player.ultra-hud .action-overflow-menu .action svg {
+  width: calc(var(--user-scale) * var(--control-icon-scale) * 22px);
+  height: calc(var(--user-scale) * var(--control-icon-scale) * 22px);
+}
+.player.ultra-hud .action-overflow-menu .action span { display: none; }
+
+/* "Seek Bar Handle: Off" -- the fill edge alone marks the position. The thumb stays in the DOM
+   (the input still needs it to drag), it just paints nothing. */
+.player.seek-handle-hidden .scrub::-webkit-slider-thumb {
+  opacity: 0;
+  box-shadow: none;
+}
+
+/* Official Nuvio layout (the "Player Controls Layout: Official Nuvio" setting -> .player.official-hud).
+   The bottom bar of the official Nuvio Desktop player (NuvioMedia/NuvioDesktop), which shipped after
+   this fork split off. Only the bottom bar is ported: the header, clock and side notches stay ours.
+   Upstream sizes are flat px authored for its 1920-wide CSS viewport, which is exactly this HUD's
+   4K reference, so each value below is upstream's number times --user-scale.
+   Shape: a thick (10px) edge-to-edge seek bar with no handle, then one row -- the accent play
+   button leading the round icon-only tools on the left, the volume slider and a
+   "position / duration" readout on the right. controls.js moves #position/#duration into
+   #minimalTime for this layout too (applyMinimalHudTimeLayout), and folds tools behind the
+   overflow toggle by measurement exactly as in the other layouts. Kept last, like the minimal and
+   ultra blocks, so the generic desktop grid sizing above cannot re-widen the row. */
+.player.official-hud {
+  --slider-bottom: calc(var(--user-scale) * 28px);
+}
+.player.official-hud .progress {
+  left: calc(var(--user-scale) * 28px);
+  right: calc(var(--user-scale) * 28px);
+}
+.player.official-hud .timeline-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  margin-inline: 0;
+  margin-bottom: 0;
+}
+/* A 22px hit strip around the 10px track: upstream's input is only as tall as the track, which is
+   a 5 CSS px target on a 1080p screen. The row gap below is shortened by the difference so the
+   visible track-to-buttons spacing still matches upstream's 16px. */
+.player.official-hud .timeline {
+  height: calc(var(--user-scale) * 22px);
+}
+.player.official-hud .scrub {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: none;
+  cursor: pointer;
+}
+.player.official-hud .scrub::-webkit-slider-runnable-track {
+  height: calc(var(--user-scale) * 10px);
+  border-radius: 999px;
+  /* Upstream paints the played part with the theme gradient when there is one, white otherwise;
+     the buffered band between played and unplayed is this fork's and is kept. */
+  background:
+    var(--theme-accent-gradient, linear-gradient(var(--theme-timeline-fill), var(--theme-timeline-fill)))
+      left center / var(--progress, 0%) 100% no-repeat,
+    linear-gradient(
+      to right,
+      transparent 0 var(--progress, 0%),
+      var(--theme-timeline-buffered, rgba(255, 255, 255, .45)) var(--progress, 0%) var(--buffered, 0%),
+      var(--theme-timeline-track) var(--buffered, 0%) 100%);
+}
+/* No handle upstream; the thumb stays as a transparent 10px box so the input still maps its value
+   the same way and drags from anywhere on the strip. */
+.player.official-hud .scrub::-webkit-slider-thumb,
+.player.official-hud .scrub:hover::-webkit-slider-thumb,
+.player.official-hud .scrub:active::-webkit-slider-thumb {
+  width: calc(var(--user-scale) * 10px);
+  height: calc(var(--user-scale) * 10px);
+  margin-top: 0;
+  opacity: 0;
+  box-shadow: none;
+  transform: none;
+}
+/* Chapter ticks would vanish into a 10px white fill; cut them as dark notches through the bar. */
+.player.official-hud .chapter-markers { inset-inline: 0; }
+.player.official-hud .chapter-marker {
+  width: calc(var(--user-scale) * 3px);
+  height: calc(var(--user-scale) * 10px);
+  border-radius: 0;
+  background: rgba(0, 0, 0, .55);
+  box-shadow: none;
+}
+.player.official-hud .desktop-control-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--user-scale) * 10px);
+  min-height: calc(var(--user-scale) * 48px);
+  margin-top: calc(var(--user-scale) * 10px);
+  transform: none;
+}
+
+/* Left: play (+ next episode) then the tools, one run of 48px round buttons 10px apart. Upstream's
+   bar has no previous-episode or +/-10s buttons; the keyboard and the picture still seek. */
+.player.official-hud .center-controls {
+  order: 0;
+  flex: 0 0 auto;
+  gap: calc(var(--user-scale) * 10px);
+}
+.player.official-hud .center-controls .seek-control,
+.player.official-hud .center-controls [data-command="previousEpisode"] {
+  display: none !important;
+}
+.player.official-hud .side-control,
+.player.official-hud .play-control,
+.player.official-hud .desktop-control-row .action {
+  width: calc(var(--user-scale) * 48px);
+  height: calc(var(--user-scale) * 48px);
+  min-width: calc(var(--user-scale) * 48px);
+  display: grid;
+  place-items: center;
+  gap: 0;
+  padding: 0;
+  border-radius: 999px;
+  color: var(--theme-control-foreground);
+  box-shadow: none;
+}
+.player.official-hud .side-control svg,
+.player.official-hud .play-control svg,
+.player.official-hud .episode-skip svg,
+.player.official-hud .desktop-control-row .action svg {
+  width: calc(var(--user-scale) * var(--control-icon-scale) * 24px);
+  height: calc(var(--user-scale) * var(--control-icon-scale) * 24px);
+}
+.player.official-hud .play-control {
+  background: var(--theme-accent);
+  color: var(--theme-on-accent);
+}
+.player.official-hud .side-control:hover,
+.player.official-hud .desktop-control-row .action:hover {
+  background: var(--theme-selected-surface-hover);
+  transform: translateZ(0) scale(1.04);
+}
+.player.official-hud .play-control:hover {
+  background: var(--theme-accent-strong);
+  color: var(--theme-on-accent);
+  transform: translateZ(0) scale(1.04);
+}
+.player.official-hud .side-control:active,
+.player.official-hud .play-control:active,
+.player.official-hud .desktop-control-row .action:active {
+  transform: translateZ(0) scale(.96);
+}
+.player.official-hud .action-row {
+  order: 1;
+  /* Zero basis: clientWidth is the leftover space whatever the row holds, which is what
+     syncActionRowOverflow measures against before folding. */
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: calc(var(--user-scale) * 10px);
+}
+/* The folded strip keeps its own compact buttons rather than the 48px circles. */
+.player.official-hud .action-row .action-overflow-menu .action {
+  width: auto;
+  height: auto;
+  min-width: 0;
+  padding: calc(var(--user-scale) * var(--control-icon-scale) * 10px);
+}
+
+/* Right: volume then the time readout, 18px apart. */
+.player.official-hud .time-cluster {
+  order: 2;
+  flex: 0 0 auto;
+  margin-left: auto;
+  gap: calc(var(--user-scale) * 18px);
+  padding-left: calc(var(--user-scale) * 8px);
+}
+.player.official-hud .player-volume-control {
+  width: auto;
+  min-height: 0;
+  gap: calc(var(--user-scale) * 10px);
+}
+.player.official-hud .volume-mute-button {
+  width: calc(var(--user-scale) * 48px);
+  height: calc(var(--user-scale) * 48px);
+  margin: calc(var(--user-scale) * -7px);
+  padding: 0;
+}
+.player.official-hud .volume-mute-button:hover {
+  background: var(--theme-selected-surface-hover);
+  transform: translateZ(0) scale(1.04);
+}
+.player.official-hud .player-volume-icon {
+  width: calc(var(--user-scale) * 34px);
+  height: calc(var(--user-scale) * 34px);
+  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, .65));
+}
+/* The .time-cluster hop outranks the base slider width; the hud-compact/small tiers still narrow
+   it in a small window (their selectors carry more classes), which is the intended fallback. */
+.player.official-hud .time-cluster .player-volume-control .player-volume {
+  width: calc(var(--user-scale) * 150px);
+  height: calc(var(--user-scale) * 24px);
+  background: transparent;
+  cursor: pointer;
+}
+/* Level fill (theme gradient when there is one) under upstream's warm boost tint across the
+   100-200% half. --volume-position is set by syncPlayerVolumeControl. */
+.player.official-hud .player-volume-control .player-volume::-webkit-slider-runnable-track {
+  height: calc(var(--user-scale) * 6px);
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      to right,
+      transparent 0 50%,
+      rgba(224, 189, 85, 0) 50%,
+      rgba(224, 189, 85, .18) 60%,
+      rgba(224, 189, 85, .46) 70%,
+      rgba(255, 173, 50, .78) 84%,
+      #ff4d4d 100%
+    ),
+    var(--theme-accent-gradient, linear-gradient(var(--theme-accent), var(--theme-accent)))
+      left center / var(--volume-position, 50%) 100% no-repeat,
+    rgba(255, 255, 255, .26);
+}
+.player.official-hud .player-volume-control .player-volume::-webkit-slider-thumb {
+  width: calc(var(--user-scale) * 22px);
+  height: calc(var(--user-scale) * 22px);
+  margin-top: calc(var(--user-scale) * -8px);
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: none;
+}
+.player.official-hud .minimal-time {
+  display: inline-flex;
+  align-items: baseline;
+  gap: calc(var(--user-scale) * 5px);
+  font-size: calc(var(--user-scale) * 18px);
+  line-height: 1;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--theme-control-foreground);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, .7);
+  white-space: nowrap;
+}
+.player.official-hud .minimal-time .timeline-time {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+/* "Controls Vignette: Off" -- the edge gradients that fade in with the chrome are dropped in every
+   layout, so the picture is never darkened by the HUD; the controls keep only their own text and
+   glyph shadows for contrast. !important because each layout re-tints .bottom-gradient with its own
+   (more specific) rule. */
+.player.vignette-hidden .top-gradient,
+.player.vignette-hidden .bottom-gradient {
+  display: none !important;
 }

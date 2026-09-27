@@ -104,6 +104,7 @@ import com.nuvio.app.isDesktop
 import com.nuvio.app.features.debrid.DebridCloudLibraryWindow
 import com.nuvio.app.features.debrid.DebridSettingsRepository
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
+import com.nuvio.app.features.home.WatchedContentFilter
 import com.nuvio.app.features.home.components.HomeEmptyStateCard
 import com.nuvio.app.features.home.components.HomePosterCard
 import com.nuvio.app.features.home.components.HomeSkeletonRow
@@ -171,8 +172,22 @@ fun LibraryScreen(
     var focusedItemIndex by remember { mutableIntStateOf(0) }
     val isTraktSource = uiState.sourceMode == LibrarySourceMode.TRAKT
     val isRemoteSource = uiState.sourceMode != LibrarySourceMode.LOCAL
-    val sortedSections = remember(uiState.sections, displaySettings.sortOption, uiState.sourceMode) {
-        sortLibrarySections(uiState.sections, displaySettings.sortOption, uiState.sourceMode)
+    // "Hide watched content" applies here at display time, not in the repository: the saved set
+    // itself is untouched, so a title comes straight back when the switch is turned off, and the
+    // filter follows history edits made on other screens (a mark on the details page) live.
+    val visibleSections = remember(uiState.sections, homeCatalogSettingsUiState.hideWatchedContent, watchedUiState.items) {
+        if (!homeCatalogSettingsUiState.hideWatchedContent) {
+            uiState.sections
+        } else {
+            val filter = WatchedContentFilter.forHistory(watchedUiState.items)
+            uiState.sections.mapNotNull { section ->
+                val kept = section.items.filterNot { filter.isWatched(it.type, it.id) }
+                if (kept.isEmpty()) null else if (kept.size == section.items.size) section else section.copy(items = kept)
+            }
+        }
+    }
+    val sortedSections = remember(visibleSections, displaySettings.sortOption, uiState.sourceMode) {
+        sortLibrarySections(visibleSections, displaySettings.sortOption, uiState.sourceMode)
     }
     val gridEntries = remember(sortedSections, displaySettings.sortOption, uiState.sourceMode) {
         libraryGridEntries(sortedSections, displaySettings.sortOption, uiState.sourceMode)
@@ -182,9 +197,9 @@ fun LibraryScreen(
         if (isDesktop) try { screenFocusRequester.requestFocus() } catch (_: Exception) {}
     }
 
-    LaunchedEffect(uiState.sections.size) {
-        if (uiState.sections.isNotEmpty()) {
-            focusedRowIndex = focusedRowIndex.coerceAtMost(uiState.sections.lastIndex)
+    LaunchedEffect(visibleSections.size) {
+        if (visibleSections.isNotEmpty()) {
+            focusedRowIndex = focusedRowIndex.coerceAtMost(visibleSections.lastIndex)
         }
     }
     val retryLibraryLoad: () -> Unit = {
@@ -406,7 +421,7 @@ fun LibraryScreen(
             )
         } else {
             when {
-                !uiState.isLoaded || (uiState.isLoading && uiState.sections.isEmpty()) -> {
+                !uiState.isLoaded || (uiState.isLoading && visibleSections.isEmpty()) -> {
                     if (displaySettings.layoutMode == LibraryLayoutMode.GRID) {
                         libraryGridSkeletonItems(gridColumns)
                     } else {
@@ -419,7 +434,7 @@ fun LibraryScreen(
                     }
                 }
 
-                !uiState.errorMessage.isNullOrBlank() && uiState.sections.isEmpty() -> {
+                !uiState.errorMessage.isNullOrBlank() && visibleSections.isEmpty() -> {
                     item {
                         if (networkStatusUiState.isOfflineLike) {
                             NuvioNetworkOfflineCard(
@@ -443,7 +458,7 @@ fun LibraryScreen(
                     }
                 }
 
-                uiState.sections.isEmpty() -> {
+                visibleSections.isEmpty() -> {
                     item {
                         if (networkStatusUiState.isOfflineLike && isRemoteSource) {
                             NuvioNetworkOfflineCard(

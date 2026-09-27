@@ -1,6 +1,8 @@
 package com.nuvio.app.features.player
 
 import com.nuvio.app.features.player.skip.SkipInterval
+import com.nuvio.app.features.player.skip.SkipLanding
+import com.nuvio.app.features.player.skip.skipLanding
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.simkl.WatchProgressSourceSimkl
 import com.nuvio.app.features.tmdb.TmdbService
@@ -531,10 +533,19 @@ internal fun PlayerPlaybackSnapshot.progressSnapshotForFlush(
  * and the auto-accept setting), so all three leave the player in the same state.
  */
 internal fun PlayerScreenRuntime.acceptSkipInterval(interval: SkipInterval) {
-    playerController?.seekTo((interval.endTime * 1000).toLong())
+    playerController?.seekTo(activeSkipLanding(interval).targetMs)
     scheduleProgressSyncAfterSeek()
     skipIntervalDismissed = true
+    offerSkipSubmissionAfterSkip(interval)
 }
+
+/** Where skipping [interval] lands: a known post-credits scene after it, else its end. */
+internal fun PlayerScreenRuntime.activeSkipLanding(interval: SkipInterval): SkipLanding =
+    interval.skipLanding(
+        intervals = skipIntervals,
+        durationMs = playbackSnapshot.durationMs,
+        isMovie = !isSeries,
+    )
 
 internal fun PlayerScreenRuntime.scheduleProgressSyncAfterSeek() {
     if (progressTrackingDisabled) return

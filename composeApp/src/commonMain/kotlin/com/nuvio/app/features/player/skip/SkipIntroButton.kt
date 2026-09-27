@@ -43,6 +43,8 @@ import nuvio.composeapp.generated.resources.player_skip
 import nuvio.composeapp.generated.resources.player_skip_intro
 import nuvio.composeapp.generated.resources.player_skip_outro
 import nuvio.composeapp.generated.resources.player_skip_recap
+import nuvio.composeapp.generated.resources.player_skip_credits
+import nuvio.composeapp.generated.resources.player_skip_to_post_credits
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
@@ -53,9 +55,15 @@ fun SkipIntroButton(
     onSkip: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    landsOnPostCredits: Boolean = false,
+    isMovie: Boolean = false,
 ) {
     var lastType by remember { mutableStateOf(interval?.type) }
-    if (interval != null) lastType = interval.type
+    var lastLandsOnPostCredits by remember { mutableStateOf(landsOnPostCredits) }
+    if (interval != null) {
+        lastType = interval.type
+        lastLandsOnPostCredits = landsOnPostCredits
+    }
     val shouldShow = interval != null && (!dismissed || controlsVisible)
 
     var autoHidden by remember { mutableStateOf(false) }
@@ -122,7 +130,7 @@ fun SkipIntroButton(
                     modifier = Modifier.size(20.dp),
                 )
                 Text(
-                    text = skipLabel(lastType),
+                    text = skipLabel(lastType, lastLandsOnPostCredits, isMovie),
                     color = Color.White,
                     fontSize = 14.sp,
                     modifier = Modifier.padding(start = 8.dp),
@@ -151,10 +159,16 @@ fun SkipIntroButton(
 }
 
 @Composable
-private fun skipLabel(type: String?): String =
+private fun skipLabel(type: String?, landsOnPostCredits: Boolean, isMovie: Boolean): String =
     when (type?.lowercase()) {
         "intro", "op", "mixed-op" -> stringResource(Res.string.player_skip_intro)
-        "outro", "ed", "mixed-ed", "credits" -> stringResource(Res.string.player_skip_outro)
+        "outro", "ed", "mixed-ed", "credits" -> stringResource(
+            when {
+                landsOnPostCredits -> Res.string.player_skip_to_post_credits
+                isMovie -> Res.string.player_skip_credits
+                else -> Res.string.player_skip_outro
+            },
+        )
         "recap" -> stringResource(Res.string.player_skip_recap)
         else -> stringResource(Res.string.player_skip)
     }

@@ -55,7 +55,7 @@ internal data class DiscoverRowCacheEntry(
          * rating badge and no AI reasons for the rest of the hour — readable, and wrong in exactly
          * the way nobody would report.
          */
-        const val VERSION = 4
+        const val VERSION = 5
 
         /** Stand-in for an entry written before [profileId] existed; never matches a real profile. */
         const val UNKNOWN_PROFILE = -1
@@ -79,7 +79,7 @@ internal data class DiscoverCachedRow(
  * become part of the format.
  *
  * The subset is not arbitrary and is not a guess: it is exactly what
- * `TmdbSearchResult.toMetaPreview`, `WatchProgressEntry.toMetaPreview`, `withCustomLibraryPoster`
+ * `TmdbSearchResult.toMetaPreview`, `WatchProgressEntry.toMetaPreview`, `withCustomPosters`
  * and the `toRecommendationRow` mappings for imported and AI rows between them set — the only
  * things that ever build a Discover row item. That makes the
  * round trip **lossless for these rows** rather than merely adequate, which matters because a
@@ -98,6 +98,7 @@ internal data class DiscoverCachedItem(
     val poster: String? = null,
     val posterFallback: String? = null,
     val banner: String? = null,
+    val landscapePoster: String? = null,
     val logo: String? = null,
     val description: String? = null,
     val releaseInfo: String? = null,
@@ -113,6 +114,7 @@ internal fun MetaPreview.toCachedItem(): DiscoverCachedItem = DiscoverCachedItem
     poster = poster,
     posterFallback = posterFallback,
     banner = banner,
+    landscapePoster = landscapePoster,
     logo = logo,
     description = description,
     releaseInfo = releaseInfo,
@@ -128,6 +130,7 @@ internal fun DiscoverCachedItem.toMetaPreview(): MetaPreview = MetaPreview(
     poster = poster,
     posterFallback = posterFallback,
     banner = banner,
+    landscapePoster = landscapePoster,
     logo = logo,
     description = description,
     releaseInfo = releaseInfo,

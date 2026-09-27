@@ -123,6 +123,7 @@ import com.nuvio.app.features.streams.StreamPrefetchService
 import com.nuvio.app.features.home.components.ImmersiveRowDirection
 import com.nuvio.app.features.home.components.immersiveRowBodyEnter
 import com.nuvio.app.features.home.components.immersiveRowBodyExit
+import com.nuvio.app.features.home.components.immersiveRowFadeBounds
 import com.nuvio.app.features.home.components.immersiveRowTransition
 import com.nuvio.app.features.home.components.immersiveShelfScrimStops
 import com.nuvio.app.features.home.components.PAGE_ITEM_STEP
@@ -361,8 +362,14 @@ fun HomeScreen(
     var discoverHeaderBounds by remember { mutableStateOf<Rect?>(null) }
     var homeRootCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     // Discover catalogs are derived from the installed addons, so this is lazy — nothing here runs
-    // until the user actually opens the tab.
-    LaunchedEffect(contentMode, addonsUiState.addons) {
+    // until the user actually opens the tab. The browsing filters are keys too: the repository
+    // reuses its feed when they are unchanged, and refetches when a Settings visit flipped one.
+    LaunchedEffect(
+        contentMode,
+        addonsUiState.addons,
+        homeSettingsUiState.hideUnreleasedContent,
+        homeSettingsUiState.hideWatchedContent,
+    ) {
         if (contentMode is HomeContentMode.Discover) {
             SearchRepository.refreshDiscover(addonsUiState.addons)
         }
@@ -606,16 +613,22 @@ fun HomeScreen(
                                 contentType = catalog.type,
                                 catalogId = catalog.catalogId,
                                 genre = discoverUiState.selectedGenre,
-                                supportsPagination = catalog.supportsPagination,
+                                supportsPagination = discoverUiState.paginates,
                             ),
                             items = discoverUiState.items,
                             // Unlike the old Search-hosted row, this one paginates in place: it is
-                            // the tab's primary browsing surface, not a preview of one.
-                            paginates = catalog.supportsPagination,
+                            // the tab's primary browsing surface, not a preview of one. Not
+                            // inlineOnly, though — that flag overrode "See more arrows" outright,
+                            // so the toggle changed Home and left this tab untouched. The row is
+                            // now decided exactly like a Home catalog: infinite unless the user
+                            // asked for capped previews with an arrow into the full catalog.
+                            // The feed's verdict, not the manifest's: a catalog that fills a page
+                            // pages whether or not it advertised `skip`, and going by the manifest
+                            // alone froze such rows at page one with no way to scroll further.
+                            paginates = discoverUiState.paginates,
                             hasMore = discoverUiState.canLoadMore,
                             nextSkip = discoverUiState.nextSkip,
                             isLoadingMore = discoverUiState.isLoading && discoverUiState.items.isNotEmpty(),
-                            inlineOnly = true,
                         ),
                     )
                 }
@@ -628,11 +641,15 @@ fun HomeScreen(
                             title = row.title,
                             subtitle = "",
                             addonName = "",
-                            // No CatalogTarget: these rows are generated, not addon-backed, so
-                            // there is no catalog for "see all" to open.
-                            target = null,
+                            // Generated, not addon-backed: "See all" reads the built row back
+                            // out of DiscoverRecommendationsRepository rather than fetching. A
+                            // placeholder has no items and never draws an arrow, so its target
+                            // is inert.
+                            target = com.nuvio.app.features.catalog.CatalogTarget.DiscoverRow(
+                                rowKey = row.key,
+                                contentType = row.items.firstOrNull()?.type ?: "movie",
+                            ),
                             items = row.items,
-                            inlineOnly = true,
                         ),
                     )
                 }
@@ -1430,7 +1447,7 @@ fun HomeScreen(
         }
     }
 
-    val continueWatchingItems = remember(
+    val rawContinueWatchingItems = remember(
         visibleContinueWatchingEntries,
         cachedInProgressItems,
         effectivNextUpItems,
@@ -1448,6 +1465,9 @@ fun HomeScreen(
             cloudLibraryUiState = cloudLibraryUiState,
         )
     }
+    val continueWatchingItems = com.nuvio.app.features.posterservice.rememberContinueWatchingCustomPosters(
+        rawContinueWatchingItems,
+    )
     val (continueWatchingRowItems, nextUpRowItems) = remember(
         continueWatchingItems,
         continueWatchingPreferences.separateNextUpRow,
@@ -1458,8 +1478,9 @@ fun HomeScreen(
         )
     }
 
-    LaunchedEffect(continueWatchingItems, tmdbImageModeOn) {
-        val metadataTargets = continueWatchingItems
+    // Keyed on the raw rows: a poster-service re-derive changes art, not which titles need metadata.
+    LaunchedEffect(rawContinueWatchingItems, tmdbImageModeOn) {
+        val metadataTargets = rawContinueWatchingItems
             .filter { it.parentMetaType.equals("series", ignoreCase = true) || it.parentMetaType.equals("anime", ignoreCase = true) }
         if (metadataTargets.isEmpty()) return@LaunchedEffect
         if (!continueWatchingMetadataStartupGraceUsed) {
@@ -2080,7 +2101,10 @@ fun HomeScreen(
     // Updated from BoxWithConstraints once the adaptive layout is known. Keyboard handling lives
     // outside that scope, so retain the current configured hero height here for scroll targets.
     var adaptiveHeroScrollClearancePx by remember { mutableStateOf(0) }
-    val mouseActivity = rememberMouseActivityState()
+    // Starts inactive: Home re-mounts on return from details/collections with the cursor wherever
+    // the user left it, and the synthetic hover Enter for the poster under it would otherwise
+    // replace the restored shelf position. A genuine mouse move re-enables hover.
+    val mouseActivity = rememberMouseActivityState(startInactive = true)
     // Seed from the session-scoped holder so the immersive home layout returns to the
     // catalog row the user was on (e.g. after visiting the details screen) instead of
     // resetting to the top. Saved back whenever it changes (see below).
@@ -2294,10 +2318,14 @@ fun HomeScreen(
                             onEnter = { index ->
                                 entries.getOrNull(index)?.let { posterClickHandler?.invoke(it) }
                             },
-                            onLoadMore = if (usesInfiniteScroll && section.hasMore) {
-                                onLoadMoreCatalog?.let { callback -> { callback(section) } }
-                            } else {
-                                null
+                            onLoadMore = when {
+                                !usesInfiniteScroll || !section.hasMore -> null
+                                // The Discover browser row pages through SearchRepository, not
+                                // the caller's onLoadMoreCatalog — which the Discover tab never
+                                // supplies, so in TV mode this row used to stop at page one.
+                                section.key == DISCOVER_BROWSER_ROW_KEY ->
+                                    { { SearchRepository.loadMoreDiscover() } }
+                                else -> onLoadMoreCatalog?.let { callback -> { callback(section) } }
                             },
                             onRightAtEnd = if (
                                 !usesInfiniteScroll && section.canOpenCatalog(HOME_CATALOG_PREVIEW_LIMIT)
@@ -3890,6 +3918,7 @@ fun HomeScreen(
                                         onPosterClick = posterClickHandler,
                                         onPosterLongClick = onPosterLongClick,
                                         rowNumber = catalogRowNumbers[settingsItem.key],
+                                        providerTag = section.addonName,
                                     )
                                 }
                             }
@@ -3950,7 +3979,10 @@ fun HomeScreen(
                                         null
                                     },
                                     onLoadMore = when {
-                                        isDiscoverBrowserRow && section.hasMore ->
+                                        // A capped preview must not page: with 18 cards and a
+                                        // 6-card threshold it would fetch the moment 12 were on
+                                        // screen, for pages the preview can never show.
+                                        isDiscoverBrowserRow && usesInfiniteScroll && section.hasMore ->
                                             { { SearchRepository.loadMoreDiscover() } }
                                         usesInfiniteScroll && section.hasMore ->
                                             onLoadMoreCatalog?.let { callback -> { callback(section) } }
@@ -3997,7 +4029,10 @@ fun HomeScreen(
                         )
                         .padding(
                             top = IMMERSIVE_SHELF_TOP_PADDING_DP.dp,
-                            bottom = IMMERSIVE_SHELF_BOTTOM_PADDING_DP.dp,
+                            // The bottom padding is applied inside each row instead, so the row
+                            // fade's layer covers cards that overhang the row; see
+                            // immersiveRowFadeBounds.
+                            bottom = 0.dp,
                         ),
                     contentAlignment = if (immersiveLandscapeMode) {
                         Alignment.BottomStart
@@ -4040,32 +4075,11 @@ fun HomeScreen(
                             } else {
                                 Modifier
                             }
-                        when {
-                            activeSettingsItem == null && isShowingHomeContent -> HomeContinueWatchingSection(
-                                items = continueWatchingRowItems,
-                                style = continueWatchingPreferences.style,
-                                useEpisodeThumbnails = continueWatchingPreferences.useEpisodeThumbnails,
-                                blurNextUp = continueWatchingPreferences.blurNextUp,
-                                sectionPadding = homeSectionPadding,
-                                layout = continueWatchingLayout,
-                                basePosterWidthDpOverride = immersivePosterBaseWidthDp.takeIf {
-                                    immersiveLandscapeMode
-                                },
-                                maxCardHeight = immersiveShelfCardHeightDp(immersiveShelfHeight.value).dp,
-                                focusedItemIndex = tvFocus.itemIndex,
-                                rowState = continueWatchingRowState,
-                                onHoverItem = ::selectHoveredImmersiveItem,
-                                isKeyboardNavigation = !mouseActivity.isMouseActive,
-                                headerTrailingContent = tvRowDotsContent,
-                                bodyModifier = rowBodyModifier,
-                                onItemClick = onContinueWatchingClick,
-                                onItemLongPress = onContinueWatchingLongPress,
-                            )
-
-                            isShowingHomeContent && activeSettingsItem?.key == HOME_NEXT_UP_SECTION_KEY ->
-                                HomeContinueWatchingSection(
-                                    items = nextUpRowItems,
-                                    title = nextUpRowTitle,
+                        // The row root carries the shelf's bottom padding; see immersiveRowFadeBounds.
+                        Box(modifier = Modifier.immersiveRowFadeBounds()) {
+                            when {
+                                activeSettingsItem == null && isShowingHomeContent -> HomeContinueWatchingSection(
+                                    items = continueWatchingRowItems,
                                     style = continueWatchingPreferences.style,
                                     useEpisodeThumbnails = continueWatchingPreferences.useEpisodeThumbnails,
                                     blurNextUp = continueWatchingPreferences.blurNextUp,
@@ -4076,7 +4090,7 @@ fun HomeScreen(
                                     },
                                     maxCardHeight = immersiveShelfCardHeightDp(immersiveShelfHeight.value).dp,
                                     focusedItemIndex = tvFocus.itemIndex,
-                                    rowState = nextUpRowState,
+                                    rowState = continueWatchingRowState,
                                     onHoverItem = ::selectHoveredImmersiveItem,
                                     isKeyboardNavigation = !mouseActivity.isMouseActive,
                                     headerTrailingContent = tvRowDotsContent,
@@ -4085,110 +4099,136 @@ fun HomeScreen(
                                     onItemLongPress = onContinueWatchingLongPress,
                                 )
 
-                            isShowingHomeContent && activeSettingsItem?.isCollection == true -> {
-                                collectionsMap[activeSettingsItem?.key ?: ""]?.let { collection ->
-                                    HomeCollectionRowSection(
-                                        collection = collection,
+                                isShowingHomeContent && activeSettingsItem?.key == HOME_NEXT_UP_SECTION_KEY ->
+                                    HomeContinueWatchingSection(
+                                        items = nextUpRowItems,
+                                        title = nextUpRowTitle,
+                                        style = continueWatchingPreferences.style,
+                                        useEpisodeThumbnails = continueWatchingPreferences.useEpisodeThumbnails,
+                                        blurNextUp = continueWatchingPreferences.blurNextUp,
                                         sectionPadding = homeSectionPadding,
-                                        basePosterWidthDpOverride = immersivePosterBaseWidthDp,
-                                        animateGifs = animateCollectionGifs,
-                                        focusedItemIndex = tvFocus.itemIndex,
-                                        rowState = remember(collection.id) {
-                                            HomeScrollMemory.immersiveRowStates.getOrPut("collection:${collection.id}") { LazyListState() }
+                                        layout = continueWatchingLayout,
+                                        basePosterWidthDpOverride = immersivePosterBaseWidthDp.takeIf {
+                                            immersiveLandscapeMode
                                         },
+                                        maxCardHeight = immersiveShelfCardHeightDp(immersiveShelfHeight.value).dp,
+                                        focusedItemIndex = tvFocus.itemIndex,
+                                        rowState = nextUpRowState,
+                                        onHoverItem = ::selectHoveredImmersiveItem,
                                         isKeyboardNavigation = !mouseActivity.isMouseActive,
-                                        rowNumber = catalogRowNumbers[activeSettingsItem?.key],
                                         headerTrailingContent = tvRowDotsContent,
                                         bodyModifier = rowBodyModifier,
-                                        onHoverItem = ::selectHoveredImmersiveItem,
-                                        onFolderClick = onFolderClick,
+                                        onItemClick = onContinueWatchingClick,
+                                        onItemLongPress = onContinueWatchingLongPress,
                                     )
-                                }
-                            }
 
-                            else -> {
-                                val immSection = if (isShowingHomeContent) {
-                                    sectionsMap[activeSettingsItem?.key ?: ""]
-                                } else {
-                                    effectiveSections.firstOrNull { it.key == activeSettingsItem?.key }
-                                }
-                                immSection?.let { section ->
-                                    val usesInfiniteScroll =
-                                        section.usesInfiniteHomeRow(catalogSeeMoreEnabled)
-                                    val shuffleOrder = shuffleOrderFor(section)
-                                    val shuffledItems = section.shuffled(shuffleOrder)
-                                    androidx.compose.runtime.key(section.key) {
-                                        HomeCatalogRowSection(
-                                            section = section,
-                                            entries = when {
-                                                !isShowingHomeContent ->
-                                                    section.resultRowEntries(
-                                                        catalogSeeMoreEnabled = catalogSeeMoreEnabled,
-                                                        cardEnrichments = heroEnrichmentMap,
-                                                        pendingEnrichmentKeys = landscapePendingEnrichmentKeys,
-                                                    )
-                                                usesInfiniteScroll -> shuffledItems
-                                                else -> shuffledItems.take(HOME_CATALOG_PREVIEW_LIMIT)
-                                            },
-                                            onShuffleClick = shuffleClickFor(section),
-                                            isShuffling = section.key in rowShufflingKeys,
-                                            shuffleGeneration = shuffleOrder?.generation ?: 0,
+                                isShowingHomeContent && activeSettingsItem?.isCollection == true -> {
+                                    collectionsMap[activeSettingsItem?.key ?: ""]?.let { collection ->
+                                        HomeCollectionRowSection(
+                                            collection = collection,
                                             sectionPadding = homeSectionPadding,
                                             basePosterWidthDpOverride = immersivePosterBaseWidthDp,
+                                            animateGifs = animateCollectionGifs,
                                             focusedItemIndex = tvFocus.itemIndex,
-                                            rowState = remember(section.key) {
-                                                HomeScrollMemory.immersiveRowStates.getOrPut("catalog:${section.key}") { LazyListState() }
+                                            rowState = remember(collection.id) {
+                                                HomeScrollMemory.immersiveRowStates.getOrPut("collection:${collection.id}") { LazyListState() }
                                             },
                                             isKeyboardNavigation = !mouseActivity.isMouseActive,
-                                            onHoverItem = ::selectHoveredImmersiveItem,
-                                            onLoadMore = if (usesInfiniteScroll) {
-                                                if (isShowingHomeContent) {
-                                                    { HomeRepository.loadMoreCatalogRow(section.key) }
-                                                } else {
-                                                    onLoadMoreCatalog?.let { callback -> { callback(section) } }
-                                                }
-                                            } else {
-                                                null
-                                            },
-                                            isLoadingMore = section.isLoadingMore,
-                                            watchedKeys = watchedUiState.watchedKeys,
-                                            onPosterClick = posterClickHandler,
-                                            onPosterLongClick = onPosterLongClick,
-                                            rowNumber = catalogRowNumbers[section.key],
+                                            rowNumber = catalogRowNumbers[activeSettingsItem?.key],
                                             headerTrailingContent = tvRowDotsContent,
                                             bodyModifier = rowBodyModifier,
-                                            titleContent = discoverRowTitleContentFor(section),
-                                            bodyAlpha = if (section.key == DISCOVER_BROWSER_ROW_KEY) {
-                                                discoverPostersAlpha
-                                            } else {
-                                                1f
-                                            },
-                                            bodyOverlay = if (section.key == DISCOVER_BROWSER_ROW_KEY) {
-                                                {
-                                                    // The immersive shelf is a fixed-height box pinned to
-                                                    // the bottom of the window, so the picker is capped to
-                                                    // it rather than to the viewport.
-                                                    DiscoverRowBodySlot(
-                                                        section = section,
-                                                        pickerMaxHeight = minOf(
-                                                            discoverPickerMaxHeight,
-                                                            immersiveShelfHeight,
-                                                        ),
-                                                    )
-                                                }
-                                            } else {
-                                                null
-                                            },
-                                            onViewAllClick = if (
-                                                (isShowingHomeContent || catalogSeeMoreEnabled) &&
-                                                !usesInfiniteScroll &&
-                                                section.canOpenCatalog(HOME_CATALOG_PREVIEW_LIMIT)
-                                            ) {
-                                                onCatalogClick?.let { { it(section) } }
-                                            } else {
-                                                null
-                                            },
+                                            onHoverItem = ::selectHoveredImmersiveItem,
+                                            onFolderClick = onFolderClick,
                                         )
+                                    }
+                                }
+
+                                else -> {
+                                    val immSection = if (isShowingHomeContent) {
+                                        sectionsMap[activeSettingsItem?.key ?: ""]
+                                    } else {
+                                        effectiveSections.firstOrNull { it.key == activeSettingsItem?.key }
+                                    }
+                                    immSection?.let { section ->
+                                        val usesInfiniteScroll =
+                                            section.usesInfiniteHomeRow(catalogSeeMoreEnabled)
+                                        val shuffleOrder = shuffleOrderFor(section)
+                                        val shuffledItems = section.shuffled(shuffleOrder)
+                                        androidx.compose.runtime.key(section.key) {
+                                            HomeCatalogRowSection(
+                                                section = section,
+                                                entries = when {
+                                                    !isShowingHomeContent ->
+                                                        section.resultRowEntries(
+                                                            catalogSeeMoreEnabled = catalogSeeMoreEnabled,
+                                                            cardEnrichments = heroEnrichmentMap,
+                                                            pendingEnrichmentKeys = landscapePendingEnrichmentKeys,
+                                                        )
+                                                    usesInfiniteScroll -> shuffledItems
+                                                    else -> shuffledItems.take(HOME_CATALOG_PREVIEW_LIMIT)
+                                                },
+                                                onShuffleClick = shuffleClickFor(section),
+                                                isShuffling = section.key in rowShufflingKeys,
+                                                shuffleGeneration = shuffleOrder?.generation ?: 0,
+                                                sectionPadding = homeSectionPadding,
+                                                basePosterWidthDpOverride = immersivePosterBaseWidthDp,
+                                                focusedItemIndex = tvFocus.itemIndex,
+                                                rowState = remember(section.key) {
+                                                    HomeScrollMemory.immersiveRowStates.getOrPut("catalog:${section.key}") { LazyListState() }
+                                                },
+                                                isKeyboardNavigation = !mouseActivity.isMouseActive,
+                                                onHoverItem = ::selectHoveredImmersiveItem,
+                                                onLoadMore = when {
+                                                    !usesInfiniteScroll -> null
+                                                    isShowingHomeContent ->
+                                                        { { HomeRepository.loadMoreCatalogRow(section.key) } }
+                                                    // See the tvRows builder: the Discover browser row
+                                                    // has its own pager.
+                                                    section.key == DISCOVER_BROWSER_ROW_KEY && section.hasMore ->
+                                                        { { SearchRepository.loadMoreDiscover() } }
+                                                    else -> onLoadMoreCatalog?.let { callback -> { callback(section) } }
+                                                },
+                                                isLoadingMore = section.isLoadingMore,
+                                                watchedKeys = watchedUiState.watchedKeys,
+                                                onPosterClick = posterClickHandler,
+                                                onPosterLongClick = onPosterLongClick,
+                                                rowNumber = catalogRowNumbers[section.key],
+                                                providerTag = section.addonName.takeIf { isShowingHomeContent },
+                                                headerTrailingContent = tvRowDotsContent,
+                                                bodyModifier = rowBodyModifier,
+                                                titleContent = discoverRowTitleContentFor(section),
+                                                bodyAlpha = if (section.key == DISCOVER_BROWSER_ROW_KEY) {
+                                                    discoverPostersAlpha
+                                                } else {
+                                                    1f
+                                                },
+                                                bodyOverlay = if (section.key == DISCOVER_BROWSER_ROW_KEY) {
+                                                    {
+                                                        // The immersive shelf is a fixed-height box pinned to
+                                                        // the bottom of the window, so the picker is capped to
+                                                        // it rather than to the viewport.
+                                                        DiscoverRowBodySlot(
+                                                            section = section,
+                                                            pickerMaxHeight = minOf(
+                                                                discoverPickerMaxHeight,
+                                                                immersiveShelfHeight,
+                                                            ),
+                                                        )
+                                                    }
+                                                } else {
+                                                    null
+                                                },
+                                                onViewAllClick = if (
+                                                    (isShowingHomeContent || catalogSeeMoreEnabled) &&
+                                                    !usesInfiniteScroll &&
+                                                    section.canOpenCatalog(HOME_CATALOG_PREVIEW_LIMIT)
+                                                ) {
+                                                    onCatalogClick?.let { { it(section) } }
+                                                } else {
+                                                    null
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -4204,7 +4244,11 @@ fun HomeScreen(
                         .fillMaxSize()
                         .smoothVerticalWheelScroll(
                             state = currentListState,
-                            enabled = isDesktop && homeSettingsUiState.smoothScrollingEnabled,
+                            // Same stand-down as the standard layout below: an open Discover
+                            // picker owns the wheel, or its list can never scroll.
+                            enabled = isDesktop &&
+                                homeSettingsUiState.smoothScrollingEnabled &&
+                                discoverPickerSegment == null,
                         ),
                     horizontalPadding = 0.dp,
                     topPadding = 0.dp,

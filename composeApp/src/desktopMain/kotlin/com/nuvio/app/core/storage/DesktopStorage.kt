@@ -101,10 +101,33 @@ internal object DesktopStorage {
             ?.resolve("Nuvio")
             ?: userHome.resolve("AppData/Roaming/Nuvio")
         val localNuvio = localAppData.resolve("Nuvio")
-        freshInstall = !roamingNuvio.exists() && !localNuvio.exists()
+        // These are also the *official* Nuvio Desktop's directories (settings in roaming, cache in
+        // local), so their existence alone only proves the user has tried upstream. That user is
+        // new to this fork and gets the wizard and new-install defaults; only a directory holding a
+        // store this fork alone ever wrote marks an upgrade from a pre-1.10 HTPC build.
+        freshInstall = listOf(roamingNuvio, localNuvio).none(::holdsHtpcOnlyStore)
         migrateLegacyDirectories(destination, roamingNuvio, localNuvio)
         return destination
     }
+
+    /**
+     * Stores HTPC wrote into the shared `Nuvio` directory up to 1.9 (1.10 moved to `NuvioHTPC`)
+     * that upstream Nuvio Desktop has never had. Checked against upstream/Dev on 2026-09-25; if
+     * upstream later adopts one of these names, drop it from the list.
+     */
+    private val HTPC_ONLY_LEGACY_STORES = listOf(
+        "nuvio_api_keys_onboarding",
+        "nuvio_discord_presence",
+        "nuvio_mdblist_ratings_cache",
+        "nuvio_player_shortcuts",
+        "nuvio_settings_category_order",
+        "nuvio_settings_favorites",
+        "nuvio_simkl_settings",
+        "nuvio_tvdb_settings",
+    )
+
+    internal fun holdsHtpcOnlyStore(directory: Path): Boolean =
+        directory.exists() && HTPC_ONLY_LEGACY_STORES.any { name -> directory.resolve("$name.properties").exists() }
 
     private fun migrateLegacyDirectories(destination: Path, vararg sources: Path) {
         synchronized(stores) {

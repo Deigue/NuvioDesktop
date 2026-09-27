@@ -59,6 +59,31 @@ class HomeCatalogParserTest {
     }
 
     @Test
+    fun `parse catalog response keeps addon-supplied tmdb and tvdb ids`() {
+        // AIOMetadata search result shape: TMDB 16146 has no IMDb link, so `_tmdbId` is the only
+        // way a poster service template gets tmdb_id for it.
+        val result = HomeCatalogParser.parseCatalogResponse(
+            """
+            {
+              "metas": [
+                { "id": "tt0197156", "type": "series", "name": "Guinness World Records: Primetime",
+                  "_tmdbId": "16146", "_tvdbId": "70429" },
+                { "id": "tt1", "type": "movie", "name": "Plain spelling", "tmdb_id": 42 },
+                { "id": "tt2", "type": "movie", "name": "Junk", "_tmdbId": "n/a", "_tvdbId": "x1" }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val (aio, plain, junk) = result.items
+        assertEquals(16146, aio.addonTmdbId)
+        assertEquals("70429", aio.addonTvdbId)
+        assertEquals(42, plain.addonTmdbId)
+        assertEquals(null, junk.addonTmdbId)
+        assertEquals(null, junk.addonTvdbId)
+    }
+
+    @Test
     fun `parse catalog response reads anime form and side-channel anime ids`() {
         // Shaped after a real anime-kitsu meta: the anime catalogue's own id sits beside an imdb
         // one, and animeType names the form the `type` field is too coarse to give.

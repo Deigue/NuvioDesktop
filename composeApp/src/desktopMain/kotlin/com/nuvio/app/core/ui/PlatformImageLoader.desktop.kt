@@ -33,6 +33,9 @@ internal actual fun ImageLoader.Builder.configurePlatformImageLoader(): ImageLoa
             .maxSizeBytes(IMAGE_CACHE_MAX_BYTES)
             .build()
     }.components { addDesktopArtworkComponents() }
+        // Per-image wait/fetch/decode timing for every load that leaves the memory cache; see the
+        // listener for the log format and why it exists.
+        .eventListenerFactory(ImageFetchTimingListener.Factory())
 
 /**
  * The desktop fetch/decode chain, shared with the integration test that drives it against a real

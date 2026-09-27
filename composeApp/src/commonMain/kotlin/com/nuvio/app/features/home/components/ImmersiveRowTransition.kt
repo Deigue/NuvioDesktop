@@ -4,12 +4,18 @@ import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.nuvio.app.features.home.HomeTvRowTransition
+import com.nuvio.app.features.home.IMMERSIVE_SHELF_BOTTOM_PADDING_DP
 
 /**
  * Shelf-level transition for a TV Mode row change, per the user's [HomeTvRowTransition]: a
@@ -29,12 +35,39 @@ internal fun immersiveRowTransition(mode: HomeTvRowTransition): ContentTransform
     }
     // No size transform at all: the shelf is a fixed-height box, so there is no size to animate,
     // and a size modifier would clip a focused poster's scale-up at the row bounds mid-transition.
+    //
+    // A dip rather than a cross-fade: the incoming row waits until the outgoing one is mostly gone.
+    // Two poster rows in identical slots cross-faded into each other so evenly that the change
+    // barely registered as a transition at all.
     return ContentTransform(
-        targetContentEnter = fadeIn(tween(ImmersiveRowFadeInMs)),
-        initialContentExit = fadeOut(tween(ImmersiveRowFadeOutMs)),
+        targetContentEnter = fadeIn(
+            tween(
+                durationMillis = ImmersiveRowFadeInMs,
+                delayMillis = ImmersiveRowFadeInDelayMs,
+                easing = LinearOutSlowInEasing,
+            ),
+        ),
+        initialContentExit = fadeOut(tween(ImmersiveRowFadeOutMs, easing = FastOutLinearInEasing)),
         sizeTransform = null,
     )
 }
+
+/**
+ * Root modifier for each row inside the shelf's `AnimatedContent`. Carries the shelf's bottom
+ * padding, which the shelf box itself therefore no longer applies.
+ *
+ * The fade composites each row through an offscreen layer the size of the row, and a translucent
+ * offscreen layer clips. Continue Watching and collection cards are sized from an estimated header
+ * height and overhang their row by a few pixels, so every fade shaved their bottom edge off until
+ * it finished. Moving the padding inside the row changes nothing about where anything sits, but
+ * grows the layer over that overhang.
+ *
+ * Not `CompositingStrategy.ModulateAlpha` to avoid the layer: on desktop that alpha does not reach
+ * the cards' own graphics layers (focus scale, artwork), so rows never faded and the outgoing and
+ * incoming rows drew over each other at full strength.
+ */
+internal fun Modifier.immersiveRowFadeBounds(): Modifier =
+    padding(bottom = IMMERSIVE_SHELF_BOTTOM_PADDING_DP.dp)
 
 /**
  * The incoming row body's slide, for the Fade + nudge mode. Rises into place when [forward]
@@ -52,7 +85,7 @@ internal fun immersiveRowBodyEnter(forward: Boolean): EnterTransition =
 internal fun immersiveRowBodyExit(forward: Boolean): ExitTransition =
     slideOutVertically(
         animationSpec = tween(ImmersiveRowFadeOutMs, easing = ImmersiveRowSlideEasing),
-        targetOffsetY = { if (forward) -slideDistance(it) else slideDistance(it) },
+        targetOffsetY = { if (forward) -exitSlideDistance(it) else exitSlideDistance(it) },
     )
 
 /**
@@ -78,11 +111,19 @@ internal class ImmersiveRowDirection {
 
 private fun slideDistance(fullHeight: Int): Int = (fullHeight * ImmersiveRowSlideFraction).toInt()
 
-/** Fraction of the row body height the posters travel during a nudge — a few dp, not a page turn. */
-private const val ImmersiveRowSlideFraction = 0.028f
-private const val ImmersiveRowSlideMs = 380
-private const val ImmersiveRowFadeInMs = 240
-private const val ImmersiveRowFadeOutMs = 220
+/**
+ * The outgoing row travels half as far as the incoming one. Moving down a row it slides *up*, toward
+ * the header, and at the full distance its posters crossed the title text while fading out.
+ */
+private fun exitSlideDistance(fullHeight: Int): Int = slideDistance(fullHeight) / 2
+
+/** Fraction of the row body height the posters travel during a nudge — a short hop, not a page turn. */
+private const val ImmersiveRowSlideFraction = 0.035f
+private const val ImmersiveRowSlideMs = 480
+private const val ImmersiveRowFadeInMs = 260
+// The incoming row starts once the outgoing one is mostly faded; see [immersiveRowTransition].
+private const val ImmersiveRowFadeInDelayMs = 120
+private const val ImmersiveRowFadeOutMs = 170
 
 /**
  * Gentle S-curve: a soft start, most of the travel in the middle, and a long settle. Softer at both

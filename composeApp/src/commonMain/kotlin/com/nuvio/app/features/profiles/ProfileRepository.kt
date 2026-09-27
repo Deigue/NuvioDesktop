@@ -247,6 +247,7 @@ object ProfileRepository {
         EpisodeReleaseNotificationsRepository.onProfileChanged()
         TmdbSettingsRepository.onProfileChanged()
         MdbListSettingsRepository.onProfileChanged()
+        com.nuvio.app.features.posterservice.CustomPosterSettingsRepository.onProfileChanged()
         DiscoverAiSettingsRepository.onProfileChanged()
         CalendarSourceRepository.onProfileChanged()
         ContinueWatchingSourceRepository.onProfileChanged()

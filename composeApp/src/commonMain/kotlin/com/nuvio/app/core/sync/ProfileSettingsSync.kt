@@ -19,7 +19,10 @@ import com.nuvio.app.features.player.PlayerSettingsStorage
 import com.nuvio.app.features.player.PlayerSettingsRepository
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.core.ui.PosterCardStyleRepository
+import com.nuvio.app.core.ui.CardDepthSync
 import com.nuvio.app.core.ui.PosterCardStyleStorage
+import com.nuvio.app.features.posterservice.CustomPosterSettingsRepository
+import com.nuvio.app.features.posterservice.CustomPosterSync
 import com.nuvio.app.features.settings.ThemeSettingsStorage
 import com.nuvio.app.features.settings.ThemeSettingsRepository
 import com.nuvio.app.features.streams.StreamBadgeSettingsRepository
@@ -53,6 +56,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -166,7 +172,15 @@ object ProfileSettingsSync {
 
                     preserveRemotePlayerSettings(profileId, remoteBlob)
 
-                    val localBlob = exportSettingsBlob(profileId)
+                    // Compared as this device would write it: a section it may not sync (or a
+                    // poster template it keeps local) differing from the profile is not a change
+                    // to pull, and would otherwise re-apply the whole blob on every pull.
+                    // The version is the writer's, not a setting (upstream is on 4 since adding
+                    // poster screens), so it never counts as a difference either.
+                    val localBlob = withUnsyncedSectionsFrom(
+                        blob = exportSettingsBlob(profileId),
+                        remoteFeatures = remoteBlob.features,
+                    ).copy(version = remoteBlob.version)
                     val localSignature = buildSignature(localBlob)
                     val remoteSignature = buildSignature(remoteBlob)
                     if (remoteSignature == localSignature) {
@@ -187,7 +201,7 @@ object ProfileSettingsSync {
                         }
                     }
 
-                    applyRemoteBlob(profileId, remoteBlob)
+                    applyRemoteBlob(profileId, remoteBlob, remoteJson.featureKeys())
                     skipNextPushSignature = currentObservedStateSignature()
                 } finally {
                     isApplyingRemoteBlob = false
@@ -223,6 +237,7 @@ object ProfileSettingsSync {
             add(ThemeSettingsRepository.customTheme.map { "custom_theme" })
             add(ThemeSettingsRepository.amoledEnabled.map { "amoled" })
             add(PosterCardStyleRepository.uiState.map { "poster_card_style" })
+            add(CustomPosterSettingsRepository.uiState.map { "custom_poster" })
             if (syncPlayerSettings) {
                 add(PlayerSettingsRepository.uiState.map { "player" })
             }
@@ -261,11 +276,13 @@ object ProfileSettingsSync {
     }
 
     private suspend fun pushToRemoteLocked(profileId: Int, blob: MobileProfileSettingsBlob) {
-        val blobToPush = withPreservedUnsyncedSettings(profileId, blob)
+        val remoteJson = fetchRemoteForPush(profileId)
+        val blobToPush = withPreservedUnsyncedSettings(profileId, blob, remoteJson)
+        val encoded = json.encodeToJsonElement(MobileProfileSettingsBlob.serializer(), blobToPush).jsonObject
         val params = buildJsonObject {
             put("p_profile_id", profileId)
             put("p_platform", MOBILE_SYNC_PLATFORM)
-            put("p_settings_json", json.encodeToJsonElement(MobileProfileSettingsBlob.serializer(), blobToPush))
+            put("p_settings_json", withUnmodelledRemoteKeys(remote = remoteJson, local = encoded))
         }
         SupabaseProvider.client.postgrest.rpc("sync_push_profile_settings_blob", params)
         clearPendingLocalChange(profileId)
@@ -315,6 +332,11 @@ object ProfileSettingsSync {
             features = MobileProfileSettingsFeatures(
                 themeSettings = ThemeSettingsStorage.exportToSyncPayload(),
                 posterCardStyleSettingsPayload = PosterCardStyleStorage.loadPayload().orEmpty().trim(),
+                // A template this device must not publish exports blank here and is replaced by
+                // the profile's own value in withUnsyncedSectionsFrom before any push.
+                customPosterUrlPattern = CustomPosterSync.exportPattern().orEmpty(),
+                customPosterEnabledScreens = CustomPosterSync.exportScreens(),
+                cardDepthStyleSettingsPayload = CardDepthSync.exportPayload(),
                 playerSettings = exportPlayerSettingsPayload(profileId),
                 streamBadgeSettings = StreamBadgeSettingsStorage.exportToSyncPayload(),
                 debridSettings = DebridSettingsStorage.exportToSyncPayload(),
@@ -332,10 +354,29 @@ object ProfileSettingsSync {
         )
     }
 
-    private fun applyRemoteBlob(profileId: Int, blob: MobileProfileSettingsBlob) {
+    private fun applyRemoteBlob(
+        profileId: Int,
+        blob: MobileProfileSettingsBlob,
+        remoteFeatureKeys: Set<String>,
+    ) {
         if (preferences.appearanceEnabled) {
             ThemeSettingsStorage.replaceFromSyncPayload(blob.features.themeSettings)
             ThemeSettingsRepository.onProfileChanged()
+
+            val keepLocalPoster = CustomPosterSync.applyRemote(
+                pattern = blob.features.customPosterUrlPattern
+                    .takeIf { CustomPosterSync.PATTERN_KEY in remoteFeatureKeys },
+                screens = blob.features.customPosterEnabledScreens
+                    .takeIf { CustomPosterSync.SCREENS_KEY in remoteFeatureKeys },
+            )
+            if (keepLocalPoster) {
+                log.i { "pull(profileId=$profileId) — keeping local custom poster settings for first sync" }
+                markLocalChangePending()
+            }
+
+            if (CardDepthSync.PAYLOAD_KEY in remoteFeatureKeys) {
+                CardDepthSync.applyPayload(blob.features.cardDepthStyleSettingsPayload)
+            }
         }
 
         if (syncPosterCardStyle) {
@@ -394,6 +435,7 @@ object ProfileSettingsSync {
         SynchronizationPreferencesRepository.ensureLoaded()
         ThemeSettingsRepository.ensureLoaded()
         PosterCardStyleRepository.ensureLoaded()
+        CustomPosterSettingsRepository.ensureLoaded()
         if (syncPlayerSettings) {
             PlayerSettingsRepository.ensureLoaded()
         }
@@ -420,6 +462,8 @@ object ProfileSettingsSync {
             add("theme=${ThemeSettingsRepository.selectedTheme.value.name}")
             add("custom_theme=${ThemeSettingsRepository.customTheme.value}")
             add("amoled=${ThemeSettingsRepository.amoledEnabled.value}")
+            add("custom_poster=${CustomPosterSync.signature()}")
+            add("card_depth=${CardDepthSync.signature()}")
         }
         if (syncPosterCardStyle) {
             add("poster_card_style=${PosterCardStyleRepository.uiState.value}")
@@ -474,21 +518,25 @@ object ProfileSettingsSync {
         preservedRemotePlayerSettings
             ?.takeIf { preservedRemotePlayerSettingsProfileId == profileId }
 
-    private suspend fun withPreservedUnsyncedSettings(
-        profileId: Int,
-        blob: MobileProfileSettingsBlob,
-    ): MobileProfileSettingsBlob {
-        // Every section this device may not write is carried over from the profile as it stands,
-        // so without a readable remote blob there is no safe push to build. Failing here leaves
-        // the remote untouched; guessing would overwrite those sections with defaults.
-        val remoteBlob = runCatching {
-            fetchRemoteSettingsJson(profileId)
-                ?.let { remoteJson ->
-                    json.decodeFromJsonElement(MobileProfileSettingsBlob.serializer(), remoteJson)
-                }
-        }.getOrElse { error ->
+    // Every section this device may not write is carried over from the profile as it stands, so
+    // without a readable remote blob there is no safe push to build. Failing here leaves the remote
+    // untouched; guessing would overwrite those sections with defaults.
+    private suspend fun fetchRemoteForPush(profileId: Int): JsonObject? =
+        runCatching { fetchRemoteSettingsJson(profileId) }.getOrElse { error ->
             log.e(error) { "pushToRemoteLocked(profileId=$profileId) — failed to read remote settings; skipping push" }
             throw error
+        }
+
+    private fun withPreservedUnsyncedSettings(
+        profileId: Int,
+        blob: MobileProfileSettingsBlob,
+        remoteJson: JsonObject?,
+    ): MobileProfileSettingsBlob {
+        val remoteBlob = remoteJson?.let {
+            runCatching { json.decodeFromJsonElement(MobileProfileSettingsBlob.serializer(), it) }.getOrElse { error ->
+                log.e(error) { "pushToRemoteLocked(profileId=$profileId) — failed to decode remote settings; skipping push" }
+                throw error
+            }
         }
 
         val remoteFeatures = remoteBlob?.features ?: MobileProfileSettingsFeatures()
@@ -521,6 +569,21 @@ object ProfileSettingsSync {
                     blob.features.posterCardStyleSettingsPayload
                 } else {
                     remoteFeatures.posterCardStyleSettingsPayload
+                },
+                customPosterUrlPattern = if (preferences.appearanceEnabled && CustomPosterSync.exportPattern() != null) {
+                    blob.features.customPosterUrlPattern
+                } else {
+                    remoteFeatures.customPosterUrlPattern
+                },
+                customPosterEnabledScreens = if (preferences.appearanceEnabled) {
+                    blob.features.customPosterEnabledScreens
+                } else {
+                    remoteFeatures.customPosterEnabledScreens
+                },
+                cardDepthStyleSettingsPayload = if (preferences.appearanceEnabled) {
+                    blob.features.cardDepthStyleSettingsPayload
+                } else {
+                    remoteFeatures.cardDepthStyleSettingsPayload
                 },
                 streamBadgeSettings = if (preferences.streamDisplayEnabled) {
                     blob.features.streamBadgeSettings
@@ -576,6 +639,29 @@ object ProfileSettingsSync {
         )
     }
 
+    /**
+     * The blob this build encodes only knows the keys it models, so a push used to drop every key
+     * the official apps added since (their custom poster pattern, card depth style, …) from the
+     * shared profile. Those are carried over from the remote copy untouched; keys this build does
+     * model always come from [local]. The version never moves backwards.
+     */
+    private fun withUnmodelledRemoteKeys(remote: JsonObject?, local: JsonObject): JsonObject {
+        if (remote == null) return local
+        val remoteFeatures = remote["features"] as? JsonObject ?: JsonObject(emptyMap())
+        val localFeatures = local["features"] as? JsonObject ?: JsonObject(emptyMap())
+        val remoteVersion = (remote["version"] as? JsonPrimitive)?.intOrNull
+        val localVersion = (local["version"] as? JsonPrimitive)?.intOrNull
+        val version = listOfNotNull(remoteVersion, localVersion).maxOrNull()
+        return JsonObject(
+            remote + local +
+                ("features" to JsonObject(remoteFeatures + localFeatures)) +
+                (version?.let { mapOf("version" to JsonPrimitive(it)) } ?: emptyMap()),
+        )
+    }
+
+    private fun JsonObject.featureKeys(): Set<String> =
+        (this["features"] as? JsonObject)?.keys.orEmpty()
+
     private suspend fun fetchRemoteSettingsJson(profileId: Int): JsonObject? {
         val params = buildJsonObject {
             put("p_profile_id", profileId)
@@ -596,6 +682,11 @@ private data class MobileProfileSettingsBlob(
 private data class MobileProfileSettingsFeatures(
     @SerialName("theme_settings") val themeSettings: JsonObject = JsonObject(emptyMap()),
     @SerialName("poster_card_style_settings_payload") val posterCardStyleSettingsPayload: String = "",
+    // Upstream's custom poster URL pattern and screen selection — see CustomPosterSync.
+    @SerialName(CustomPosterSync.PATTERN_KEY) val customPosterUrlPattern: String = "",
+    @SerialName(CustomPosterSync.SCREENS_KEY) val customPosterEnabledScreens: String = "",
+    // Upstream's card depth JSON string — see CardDepthSync.
+    @SerialName(CardDepthSync.PAYLOAD_KEY) val cardDepthStyleSettingsPayload: String = "",
     @SerialName("player_settings") val playerSettings: JsonObject = JsonObject(emptyMap()),
     @SerialName("stream_badge_settings") val streamBadgeSettings: JsonObject = JsonObject(emptyMap()),
     @SerialName("debrid_settings") val debridSettings: JsonObject = JsonObject(emptyMap()),

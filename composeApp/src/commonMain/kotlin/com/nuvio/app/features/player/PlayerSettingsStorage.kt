@@ -13,6 +13,18 @@ internal expect object PlayerSettingsStorage {
     fun saveMouseMoveRevealsControlsEnabled(enabled: Boolean)
     fun loadDesktopLegacyHudEnabled(): Boolean?
     fun saveDesktopLegacyHudEnabled(enabled: Boolean)
+    fun loadDesktopMinimalHudEnabled(): Boolean?
+    fun saveDesktopMinimalHudEnabled(enabled: Boolean)
+    fun loadDesktopUltraHudEnabled(): Boolean?
+    fun saveDesktopUltraHudEnabled(enabled: Boolean)
+    fun loadDesktopOfficialHudEnabled(): Boolean?
+    fun saveDesktopOfficialHudEnabled(enabled: Boolean)
+    fun loadDesktopMinimalHudPillsEnabled(): Boolean?
+    fun saveDesktopMinimalHudPillsEnabled(enabled: Boolean)
+    fun loadDesktopSeekHandleEnabled(): Boolean?
+    fun saveDesktopSeekHandleEnabled(enabled: Boolean)
+    fun loadDesktopHudVignetteEnabled(): Boolean?
+    fun saveDesktopHudVignetteEnabled(enabled: Boolean)
     fun loadDesktopAlwaysShowClockEnabled(): Boolean?
     fun saveDesktopAlwaysShowClockEnabled(enabled: Boolean)
     fun loadDesktopPauseOverlaySourceEnabled(): Boolean?
@@ -94,6 +106,8 @@ internal expect object PlayerSettingsStorage {
     fun saveSubtitleShowOnlyPreferredLanguages(enabled: Boolean)
     fun loadAddonSubtitleStartupMode(): String?
     fun saveAddonSubtitleStartupMode(mode: String)
+    fun loadPreferAddonSubtitles(): Boolean?
+    fun savePreferAddonSubtitles(enabled: Boolean)
     fun loadRejectedSubtitleKeywords(): Set<String>?
     fun saveRejectedSubtitleKeywords(keywords: Set<String>)
     fun loadRejectedAudioKeywords(): Set<String>?
@@ -134,8 +148,16 @@ internal expect object PlayerSettingsStorage {
     fun saveDesktopCustomShaderSelectedPath(path: String)
     fun loadDesktopAudioPassthroughEnabled(): Boolean?
     fun saveDesktopAudioPassthroughEnabled(enabled: Boolean)
+    /** Legacy On/Off switch, read once to migrate into [loadDesktopSeekThumbnailMode]. */
     fun loadDesktopSeekThumbnailsEnabled(): Boolean?
-    fun saveDesktopSeekThumbnailsEnabled(enabled: Boolean)
+    fun loadDesktopSeekThumbnailMode(): String?
+    fun saveDesktopSeekThumbnailMode(mode: String)
+    fun loadDesktopRateLimitRecoveryMode(): String?
+    fun saveDesktopRateLimitRecoveryMode(mode: String)
+    fun loadDesktopRateLimitReconnectFirstDelaySeconds(): Int?
+    fun saveDesktopRateLimitReconnectFirstDelaySeconds(seconds: Int)
+    fun loadDesktopRateLimitReconnectSecondDelaySeconds(): Int?
+    fun saveDesktopRateLimitReconnectSecondDelaySeconds(seconds: Int)
     fun loadDesktopCustomMpvOptions(): String?
     fun saveDesktopCustomMpvOptions(options: String)
     fun loadDesktopMpvConfigMode(): String?
@@ -171,6 +193,10 @@ internal expect object PlayerSettingsStorage {
     fun saveSkipDbApiKey(apiKey: String)
     fun loadSkipAutoAcceptMode(): String?
     fun saveSkipAutoAcceptMode(mode: String)
+    fun loadSkipMovieCreditsToPostCredits(): Boolean?
+    fun saveSkipMovieCreditsToPostCredits(enabled: Boolean)
+    fun loadStripSdhSubtitles(): Boolean?
+    fun saveStripSdhSubtitles(enabled: Boolean)
     fun loadIntroSubmitEnabled(): Boolean?
     fun saveIntroSubmitEnabled(enabled: Boolean)
     fun loadStreamAutoPlayNextEpisodeEnabled(): Boolean?

@@ -64,6 +64,7 @@ import com.nuvio.app.core.format.formatReleaseDateForDisplay
 import com.nuvio.app.core.ui.NuvioBackButton
 import com.nuvio.app.core.ui.NuvioPosterHoverTooltip
 import com.nuvio.app.core.ui.NuvioPosterWatchedOverlay
+import com.nuvio.app.core.ui.rememberPosterWatchlistMembership
 import com.nuvio.app.core.ui.PosterLabelWidthFraction
 import com.nuvio.app.core.ui.PosterLandscapeAspectRatio
 import com.nuvio.app.core.ui.NuvioShelfItemSlot
@@ -90,6 +91,7 @@ import org.jetbrains.compose.resources.stringResource
 @Composable
 @OptIn(ExperimentalComposeUiApi::class)
 fun CatalogScreen(
+    entryKey: String,
     title: String,
     subtitle: String,
     target: CatalogTarget,
@@ -101,6 +103,7 @@ fun CatalogScreen(
     val uiState by CatalogRepository.uiState.collectAsStateWithLifecycle()
     val homeCatalogSettingsUiState by HomeCatalogSettingsRepository.uiState.collectAsStateWithLifecycle()
     val posterCardStyle = rememberPosterCardStyleUiState()
+    val watchlist = rememberPosterWatchlistMembership()
     val networkStatusUiState by NetworkStatusRepository.uiState.collectAsStateWithLifecycle()
     val watchedUiState by remember {
         WatchedRepository.ensureLoaded()
@@ -109,8 +112,10 @@ fun CatalogScreen(
     val initialScrollPosition = remember(
         target,
         homeCatalogSettingsUiState.hideUnreleasedContent,
+        homeCatalogSettingsUiState.hideWatchedContent,
     ) {
         CatalogRepository.scrollPosition(
+            entryKey = entryKey,
             target = target,
         )
     }
@@ -141,17 +146,18 @@ fun CatalogScreen(
         }
     }
 
-    LaunchedEffect(target, homeCatalogSettingsUiState.hideUnreleasedContent) {
+    LaunchedEffect(target, homeCatalogSettingsUiState.hideUnreleasedContent, homeCatalogSettingsUiState.hideWatchedContent) {
         CatalogRepository.load(
             target = target,
         )
     }
 
-    LaunchedEffect(gridState, target, homeCatalogSettingsUiState.hideUnreleasedContent) {
+    LaunchedEffect(gridState, target, homeCatalogSettingsUiState.hideUnreleasedContent, homeCatalogSettingsUiState.hideWatchedContent) {
         snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
             .distinctUntilChanged()
             .collect { (index, offset) ->
                 CatalogRepository.saveScrollPosition(
+                    entryKey = entryKey,
                     target = target,
                     firstVisibleItemIndex = index,
                     firstVisibleItemScrollOffset = offset,
@@ -202,8 +208,12 @@ fun CatalogScreen(
     ) {
         val columns = remember(maxWidth) { catalogGridColumnsForWidth(maxWidth) }
 
-        LaunchedEffect(focusedItemIndex, uiState.items.size) {
+        // Keyed on the focused index only. Keying on the item count too made every page that
+        // arrived while the user was wheel-scrolling re-check item 0 (the untouched keyboard
+        // focus), find it off-screen, and snap the grid back to the top.
+        LaunchedEffect(focusedItemIndex) {
             if (uiState.items.isEmpty() || focusedItemIndex !in uiState.items.indices) return@LaunchedEffect
+            if (mouseActivity.isMouseActive) return@LaunchedEffect
             val layoutInfo = gridState.layoutInfo
             val isFullyVisible = layoutInfo.visibleItemsInfo.any { item ->
                 item.index == focusedItemIndex &&
@@ -313,6 +323,7 @@ fun CatalogScreen(
                                     watchedKeys = watchedUiState.watchedKeys,
                                     item = item,
                                 ),
+                                isInWatchlist = watchlist.contains(item),
                                 onClick = onPosterClick?.let { { it(item) } },
                                 onLongClick = onPosterLongClick?.let { { it(item) } },
                             )
@@ -386,6 +397,7 @@ private fun CatalogPosterTile(
     cornerRadiusDp: Int,
     hideLabels: Boolean,
     isWatched: Boolean,
+    isInWatchlist: Boolean = false,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -419,7 +431,7 @@ private fun CatalogPosterTile(
                         contentScale = ContentScale.Crop,
                     )
                 }
-                NuvioPosterWatchedOverlay(isWatched = isWatched)
+                NuvioPosterWatchedOverlay(isWatched = isWatched, isInWatchlist = isInWatchlist)
             }
             if (!hideLabels) {
                 Box(

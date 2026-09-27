@@ -13,11 +13,14 @@ import com.nuvio.app.features.details.MetaVideo
 import com.nuvio.app.features.p2p.P2pSettingsUiState
 import com.nuvio.app.features.p2p.P2pStreamingState
 import com.nuvio.app.features.player.skip.NextEpisodeInfo
+import com.nuvio.app.features.player.skip.SkipCaptureSession
 import com.nuvio.app.features.player.skip.SkipInterval
+import com.nuvio.app.features.player.skip.SkipSubmitOffer
 import com.nuvio.app.features.streams.StreamsUiState
 import com.nuvio.app.features.tracking.TrackingMediaReference
 import com.nuvio.app.features.watched.WatchedUiState
 import com.nuvio.app.features.watchprogress.WatchProgressUiState
+import com.nuvio.app.features.watchprogress.isLiveEventContentType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 
@@ -67,7 +70,11 @@ internal class PlayerScreenRuntime(
         get() = disableProgressTracking ||
             playbackSourceFailureActive ||
             isProviderDiagnosticVideoPlayback ||
-            isProviderDiagnosticProbePending
+            isProviderDiagnosticProbePending ||
+            // A live event has no position worth keeping and no tracker that could take a scrobble
+            // for it; see isLiveEventContentType.
+            contentType.isLiveEventContentType() ||
+            parentMetaType.isLiveEventContentType()
     val autoPlayMode: PlayerAutoPlayMode get() = args.autoPlayMode
     val isSeries: Boolean get() = parentMetaType == "series"
 
@@ -255,6 +262,14 @@ internal class PlayerScreenRuntime(
     // Not observable state: only the auto-accept effect touches it, and a recomposition on every
     // accepted segment would buy nothing.
     val autoAcceptedSkipIntervals: MutableSet<String> = mutableSetOf()
+    // One-press SkipDB contribution (see SkipSubmitOffer / SkipCaptureSession). At most one of the
+    // two is non-null: starting a capture drops any offer, and an offer is only made outside a
+    // capture. Both are cleared on episode change.
+    var skipSubmitOffer by mutableStateOf<SkipSubmitOffer?>(null)
+    var skipCaptureSession by mutableStateOf<SkipCaptureSession?>(null)
+    // Identity keys of segments already sent for the loaded episode, so a rewind through the same
+    // chapter intro is not offered twice. Same non-observable reasoning as autoAcceptedSkipIntervals.
+    val submittedSkipSegments: MutableSet<String> = mutableSetOf()
     var parentalWarnings by mutableStateOf<List<ParentalWarning>>(emptyList())
     var showParentalGuide by mutableStateOf(false)
     var parentalGuideHasShown by mutableStateOf(false)

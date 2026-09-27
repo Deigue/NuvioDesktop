@@ -482,6 +482,7 @@ object LibraryRepository {
                 isLoaded = snapshot.hasLoaded,
                 isLoading = snapshot.isLoading,
                 errorMessage = snapshot.errorMessage,
+                savedKeys = snapshot.items.toSavedKeys(),
             )
             startPrefetch(sections)
             return
@@ -509,6 +510,7 @@ object LibraryRepository {
             isLoaded = true,
             isLoading = false,
             errorMessage = null,
+            savedKeys = items.toSavedKeys(),
         )
 
         startPrefetch(sectionsWithCloud)
@@ -717,7 +719,7 @@ private fun LibraryItem.toSyncItem(): LibrarySyncItem = LibrarySyncItem(
     addedAt = savedAtEpochMs,
 )
 
-private fun libraryItemKey(id: String, type: String): String =
+internal fun libraryItemKey(id: String, type: String): String =
     "${type.trim().lowercase()}:${id.trim()}"
 
 private fun String.toPosterShape(): PosterShape =

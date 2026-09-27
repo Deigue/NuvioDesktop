@@ -1,7 +1,6 @@
-package com.nuvio.app.features.tmdb
+package com.nuvio.app.features.posterservice
 
 import com.nuvio.app.features.addons.httpRequestRaw
-import com.nuvio.app.features.mdblist.MdbListSettingsRepository
 
 /**
  * A title the probe below asks for. Any long-established film works; what matters is that a failure
@@ -22,7 +21,8 @@ sealed interface CustomPosterTemplateProbe {
 }
 
 /**
- * Asks the configured poster service for one known title and reports what it said.
+ * Asks the configured poster service for one known title in the given [shape] and reports what it
+ * said.
  *
  * A poster service that answers with an error is otherwise completely silent: the card falls back to
  * the plain poster and the library just looks like the feature does nothing. The failures are
@@ -30,9 +30,12 @@ sealed interface CustomPosterTemplateProbe {
  * answering `400 No TMDB API key available…`, a bad host, an expired subscription — so the fix is to
  * show the answer rather than to guess at it.
  */
-internal suspend fun probeCustomPosterTemplate(settings: TmdbSettings): CustomPosterTemplateProbe {
+internal suspend fun probeCustomPosterTemplate(
+    settings: CustomPosterSettings,
+    shape: CustomPosterShape,
+): CustomPosterTemplateProbe {
     val url = customPosterUrl(
-        settings = settings.copy(libraryPosterEnabled = true),
+        settings = settings.copy(enabled = true),
         imdbId = PROBE_IMDB_ID,
         tmdbId = PROBE_TMDB_ID,
         type = PROBE_TYPE,
@@ -40,7 +43,8 @@ internal suspend fun probeCustomPosterTemplate(settings: TmdbSettings): CustomPo
         anilistId = PROBE_ANILIST_ID,
         kitsuId = PROBE_KITSU_ID,
         malId = PROBE_MAL_ID,
-        mdbListApiKey = MdbListSettingsRepository.snapshot().apiKey,
+        shape = shape,
+        keys = CustomPosterKeys.snapshot(),
     ) ?: return CustomPosterTemplateProbe.Failed(
         "The template has no supported id placeholder to fill in.",
     )

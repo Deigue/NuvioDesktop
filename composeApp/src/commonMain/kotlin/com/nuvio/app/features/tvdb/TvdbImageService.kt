@@ -54,6 +54,20 @@ object TvdbImageService {
     private val imdbIdCache = mutableMapOf<String, String>()
     private val imdbIdCacheMutex = Mutex()
 
+    /**
+     * When a series airs, as TVDB records it: the broadcast slot (`"21:00"`, 24h, may be blank)
+     * and the origin country as an ISO 3166-1 alpha-3 code (`"gbr"`). Either can be missing.
+     */
+    data class TvdbAirSchedule(
+        val airsTime: String?,
+        val originalCountry: String?,
+    )
+
+    // TVDB-numeric-ID → air schedule cache; a failed lookup is cached too (as null) so a series
+    // with no schedule costs one /extended call per run, not one per meta fetch.
+    private val airScheduleCache = mutableMapOf<String, TvdbAirSchedule?>()
+    private val airScheduleCacheMutex = Mutex()
+
     /** Pre-warms the TVDB auth token so it is cached before any image fetch needs it. */
     suspend fun warmToken() {
         val apiKey = TvdbSettingsRepository.snapshot().apiKey.trim().takeIf(String::isNotBlank) ?: return
@@ -88,6 +102,31 @@ object TvdbImageService {
             imdbIdCacheMutex.withLock { imdbIdCache[tvdbId] = imdbId }
         }
         return imdbId
+    }
+
+    /**
+     * The series' broadcast slot and origin country from `/series/{id}/extended`, or null when
+     * there is no TVDB key or the fetch fails. Used to rebuild a real air instant for episodes an
+     * addon could only date (see `repairPlaceholderAirTimes`).
+     */
+    suspend fun fetchAirSchedule(tvdbId: String): TvdbAirSchedule? {
+        val apiKey = TvdbSettingsRepository.snapshot().apiKey.trim().takeIf(String::isNotBlank) ?: return null
+        airScheduleCacheMutex.withLock {
+            if (airScheduleCache.containsKey(tvdbId)) return airScheduleCache[tvdbId]
+        }
+        val token = acquireToken(apiKey) ?: return null
+        val schedule = runCatching {
+            val body = httpGetTextWithHeaders("$BASE_URL/series/$tvdbId/extended", authHeaders(token))
+            val data = json.decodeFromString<TvdbExtendedResponse>(body).data
+            TvdbAirSchedule(
+                airsTime = data?.airsTime?.trim()?.takeIf(String::isNotBlank),
+                originalCountry = (data?.originalCountry ?: data?.originalNetwork?.country)
+                    ?.trim()?.takeIf(String::isNotBlank),
+            )
+        }.onFailure { log.w { "TVDB air schedule fetch failed for series/$tvdbId: ${it.message}" } }
+            .getOrNull()
+        airScheduleCacheMutex.withLock { airScheduleCache[tvdbId] = schedule }
+        return schedule
     }
 
     fun clearCache() {
@@ -301,6 +340,14 @@ private data class TvdbExtendedResponse(
 @Serializable
 private data class TvdbExtendedData(
     val remoteIds: List<TvdbRemoteId> = emptyList(),
+    val airsTime: String? = null,
+    val originalCountry: String? = null,
+    val originalNetwork: TvdbNetwork? = null,
+)
+
+@Serializable
+private data class TvdbNetwork(
+    val country: String? = null,
 )
 
 @Serializable

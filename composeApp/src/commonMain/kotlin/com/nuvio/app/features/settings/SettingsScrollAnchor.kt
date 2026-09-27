@@ -61,6 +61,7 @@ internal object SettingsScrollAnchor {
     const val ExtraLargePosters = "extra_large_posters"
     const val BufferPreset = "buffer_preset"
     const val SeekThumbnails = "seek_thumbnails"
+    const val RateLimitRecovery = "rate_limit_recovery"
     const val AnimeEnhancements = "anime_enhancements"
     const val AnimeAutoApply = "anime_auto_apply"
     const val AnimeIncludeWesternAnimation = "anime_include_western_animation"

@@ -43,24 +43,51 @@ class DesktopArtworkSizingTest {
             }
         }
         waitForIdle()
-        assertEquals(Size(224, 328), resolver.requestSize)
+        assertEquals(Size(210, 315), resolver.requestSize)
         runOnIdle { density.value = 2f }
         waitForIdle()
-        assertEquals(Size(440, 656), resolver.requestSize)
+        assertEquals(Size(420, 630), resolver.requestSize)
         runOnIdle { cardWidth.value = 300 }
         waitForIdle()
-        assertEquals(Size(624, 936), resolver.requestSize)
+        assertEquals(Size(600, 900), resolver.requestSize)
     }
 
     @Test
-    fun `an unbounded axis stays intrinsic and focus headroom is never undersized`() {
+    fun `an unbounded axis stays intrinsic and bounded axes decode at the exact slot size`() {
         assertEquals(Dimension.Undefined, desktopArtworkSize(Size(Dimension.Pixels(210), Dimension.Undefined)).height)
-        assertEquals(Dimension.Pixels(224), desktopArtworkSize(Size(Dimension.Pixels(210), Dimension.Undefined)).width)
+        assertEquals(Dimension.Pixels(210), desktopArtworkSize(Size(Dimension.Pixels(210), Dimension.Undefined)).width)
         // Neither axis bounded would otherwise reach the decoder as Size.ORIGINAL.
         assertEquals(Size(1536, 1536), desktopArtworkSize(Size.ORIGINAL))
         for (pixels in listOf(34, 52, 210, 420, 630, 1920, 3840)) {
-            assertTrue(desktopArtworkDimension(pixels) >= pixels * 1.04)
-            assertTrue(desktopArtworkDimension(pixels) < pixels * 1.04 + 8)
+            assertEquals(pixels, desktopArtworkDimension(pixels))
+        }
+    }
+
+    @Test
+    fun `a one pixel drift keeps the request but a new bucket does not`() {
+        assertTrue(Size(414, 621).sameArtworkBucketAs(Size(410, 617)))
+        assertTrue(!Size(414, 621).sameArtworkBucketAs(Size(420, 621)))
+        assertTrue(!Size(414, 621).sameArtworkBucketAs(null))
+    }
+
+    @Test
+    fun `lanczos reduction keeps flat colour flat and lands on the exact size`() {
+        val source = org.jetbrains.skia.Bitmap().apply { allocN32Pixels(500, 750) }
+        org.jetbrains.skia.Canvas(source).clear(0xFF3366CC.toInt())
+        val image = org.jetbrains.skia.Image.makeFromBitmap(source)
+        try {
+            for ((w, h) in listOf(414 to 621, 207 to 311, 100 to 150)) {
+                val out = image.reduceHighQuality(w, h)
+                assertEquals(w, out.width)
+                assertEquals(h, out.height)
+                for ((x, y) in listOf(0 to 0, w / 2 to h / 2, w - 1 to h - 1)) {
+                    assertEquals(0xFF3366CC.toInt(), out.getColor(x, y))
+                }
+                out.close()
+            }
+        } finally {
+            image.close()
+            source.close()
         }
     }
 
@@ -81,8 +108,8 @@ class DesktopArtworkSizingTest {
             val request = ImageRequest.Builder(context).data(file).memoryCacheKey("same-artwork")
                 .scale(Scale.FILL).nuvioArtworkRequestSize(250, 375).build()
             val small = loader.execute(request) as SuccessResult
-            assertTrue(small.image.width in 260..270)
-            assertTrue(small.image.height in 390..405)
+            assertEquals(250, small.image.width)
+            assertEquals(375, small.image.height)
             assertTrue(small.image.size < large.image.size / 4)
             assertNotEquals(large.memoryCacheKey, small.memoryCacheKey)
             assertEquals(DataSource.MEMORY_CACHE, (loader.execute(request) as SuccessResult).dataSource)

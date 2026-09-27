@@ -40,6 +40,7 @@ import com.nuvio.app.features.p2p.P2pStreamingState
 import com.nuvio.app.features.p2p.formatP2pMegabytes
 import com.nuvio.app.features.p2p.formatP2pSpeed
 import com.nuvio.app.features.player.skip.SKIP_SEGMENT_TYPES
+import com.nuvio.app.features.player.skip.SkipKeyActions
 import com.nuvio.app.features.player.skip.SkipIntroRepository
 import com.nuvio.app.features.streams.AddonStreamGroup
 import com.nuvio.app.features.streams.StreamItem
@@ -346,8 +347,12 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         desktopAnimeSvpEnabled = playerSettingsUiState.desktopAnimeSvpEnabled,
         playbackInfoPanelEnabled = playerSettingsUiState.desktopPlaybackInfoPanelEnabled,
         activeSubtitleLabel = activePlaybackSubtitleLabel(),
-        seekThumbnailsEnabled = playerSettingsUiState.desktopSeekThumbnailsEnabled &&
-            playerSettingsUiState.desktopBufferPreset != DesktopBufferPreset.Metered,
+        seekThumbnailsEnabled = seekThumbnailsAllowed(
+            mode = playerSettingsUiState.desktopSeekThumbnailMode,
+            bufferPreset = playerSettingsUiState.desktopBufferPreset,
+            sourceUrl = activeSourceUrl,
+            isTorrent = activeTorrentInfoHash != null,
+        ),
         seekStepSeconds = playerSettingsUiState.seekStepSeconds,
         tapToUnlockLabel = stringResource(Res.string.compose_player_tap_to_unlock),
         playbackErrorTitle = stringResource(Res.string.compose_player_playback_error),
@@ -457,6 +462,12 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         mouseMoveRevealsControlsEnabled = playerSettingsUiState.mouseMoveRevealsControlsEnabled,
         streamFailoverEnabled = playerSettingsUiState.streamFailoverEnabled,
         legacyHudEnabled = playerSettingsUiState.desktopLegacyHudEnabled,
+        minimalHudEnabled = playerSettingsUiState.desktopMinimalHudEnabled,
+        minimalHudPillsEnabled = playerSettingsUiState.desktopMinimalHudPillsEnabled,
+        ultraHudEnabled = playerSettingsUiState.desktopUltraHudEnabled,
+        officialHudEnabled = playerSettingsUiState.desktopOfficialHudEnabled,
+        seekHandleEnabled = playerSettingsUiState.desktopSeekHandleEnabled,
+        hudVignetteEnabled = playerSettingsUiState.desktopHudVignetteEnabled,
         alwaysShowClock = playerSettingsUiState.desktopAlwaysShowClockEnabled,
         playbackSpeedFineIncrementsEnabled = playerSettingsUiState.desktopPlaybackSpeedFineIncrementsEnabled,
         playbackSpeedToggleLow = playerSettingsUiState.playbackSpeedToggleLow,
@@ -532,10 +543,21 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         openingMessage = p2pInitialLoadingMessage,
         openingProgress = p2pInitialLoadingProgress,
         skipPromptVisible = nativeSkipInterval != null && !playerControlsLocked,
-        skipPromptLabel = skipPromptLabel(nativeSkipInterval?.type),
+        skipPromptLabel = skipPromptLabel(
+            type = nativeSkipInterval?.type,
+            landsOnPostCredits = nativeSkipInterval?.let { activeSkipLanding(it).landsOnPostCredits } == true,
+            isMovie = !isSeries,
+        ),
         skipPromptStartMs = ((nativeSkipInterval?.startTime ?: 0.0) * 1000).toLong().coerceAtLeast(0L),
         skipPromptEndMs = ((nativeSkipInterval?.endTime ?: 0.0) * 1000).toLong().coerceAtLeast(0L),
         skipPromptDismissed = skipIntervalDismissed,
+        skipKeyAction = resolveSkipKeyAction(
+            skipPromptActionable = nativeSkipInterval != null && !playerControlsLocked && !skipIntervalDismissed,
+            nextEpisodeActionable = nextEpisodeForControls != null && !playerControlsLocked &&
+                nextEpisodeForControls.hasAired && !manualSwitchIsNonSequential,
+        ),
+        skipSubmitToast = skipSubmitToastCopy(),
+        skipSubmitToastDismissible = isSkipSubmitToastDismissible(),
         nextEpisodeVisible = nextEpisodeForControls != null && !playerControlsLocked,
         nextEpisodeHeaderLabel = stringResource(Res.string.player_next_episode),
         nextEpisodeTitle = nextEpisodeForControls?.let {
@@ -965,6 +987,11 @@ private fun PlayerScreenRuntime.handlePlayerControlsAction(action: PlayerControl
         }
         PlayerControlsAction.RevealLockedOverlay -> revealLockedOverlay()
         PlayerControlsAction.Back -> {
+            // Escape with a submission toast asking something closes the toast, not the player.
+            if (isSkipSubmitToastDismissible()) {
+                dismissSkipSubmitToast()
+                return true
+            }
             flushWatchProgress()
             args.onBack()
         }
@@ -1142,6 +1169,11 @@ private fun PlayerScreenRuntime.handlePlayerControlsEvent(type: String, value: D
             submitIntroStatusMessage = null
         }
         "submitIntroCommit" -> submitIntroFromPlayerControls()
+        SkipKeyActions.SUBMIT_OFFER,
+        SkipKeyActions.CAPTURE_START,
+        SkipKeyActions.CAPTURE_MARK_END,
+        SkipKeyActions.CAPTURE_SUBMIT,
+        "skipSubmitDismiss" -> handleSkipSubmitEvent(type)
         "skipInterval" -> {
             val interval = activeSkipInterval ?: return true
             acceptSkipInterval(interval)
@@ -1479,8 +1511,6 @@ private fun PlayerScreenRuntime.requestEpisodeStreamsForPlayerControls(
 private fun PlayerScreenRuntime.submitIntroFromPlayerControls() {
     if (isSubmitIntroSubmitting) return
     val imdbId = activeSubmitIntroImdbId()
-    val season = activeSeasonNumber
-    val episode = activeEpisodeNumber
     val start = submitIntroStartTimeSec
     val end = submitIntroEndTimeSec
     // A null season/episode is a film, which SkipDB accepts — only the timings have to be valid.
@@ -1490,21 +1520,9 @@ private fun PlayerScreenRuntime.submitIntroFromPlayerControls() {
     }
     isSubmitIntroSubmitting = true
     submitIntroStatusMessage = null
-    // The runtime is what lets SkipDB match these timings to the right cut later, so it is sent
-    // with the submission exactly as it is sent with a lookup.
-    val durationSeconds = playbackSnapshot.durationMs.takeIf { it > 0L }?.let { it / 1000L }
-    scope.launch {
-        val outcome = SkipIntroRepository.submitSegment(
-            imdbId = imdbId,
-            season = season,
-            episode = episode,
-            startSec = start,
-            endSec = end,
-            segmentType = submitIntroSegmentType,
-            durationSeconds = durationSeconds,
-        )
+    submitSkipSegment(start, end, submitIntroSegmentType) { accepted, message ->
         isSubmitIntroSubmitting = false
-        if (outcome.accepted) {
+        if (accepted) {
             submitIntroStartTimeSec = 0.0
             submitIntroEndTimeSec = 0.0
             submitIntroStartTimeStr = "00:00"
@@ -1515,26 +1533,32 @@ private fun PlayerScreenRuntime.submitIntroFromPlayerControls() {
         } else {
             // SkipDB explains itself — an overlap, a failed validation, a rate limit — and that is
             // far more actionable than a generic failure line.
-            submitIntroStatusMessage = outcome.message
+            submitIntroStatusMessage = message
         }
     }
 }
 
-private fun PlayerScreenRuntime.activeSubmitIntroImdbId(): String? =
+internal fun PlayerScreenRuntime.activeSubmitIntroImdbId(): String? =
     activeVideoId?.split(":")?.firstOrNull()?.takeIf { it.startsWith("tt") }
         ?: parentMetaId.takeIf { it.startsWith("tt") }
         ?: metaUiState.meta?.id?.takeIf { it.startsWith("tt") }
 
 @Composable
-private fun skipPromptLabel(type: String?): String =
+private fun skipPromptLabel(type: String?, landsOnPostCredits: Boolean, isMovie: Boolean): String =
     when (type?.lowercase()) {
         "intro", "op", "mixed-op" -> stringResource(Res.string.player_skip_intro)
-        "outro", "ed", "mixed-ed", "credits" -> stringResource(Res.string.player_skip_outro)
+        "outro", "ed", "mixed-ed", "credits" -> stringResource(
+            when {
+                landsOnPostCredits -> Res.string.player_skip_to_post_credits
+                isMovie -> Res.string.player_skip_credits
+                else -> Res.string.player_skip_outro
+            },
+        )
         "recap" -> stringResource(Res.string.player_skip_recap)
         else -> stringResource(Res.string.player_skip)
     }
 
-private fun formatPlayerControlsSeconds(seconds: Double): String {
+internal fun formatPlayerControlsSeconds(seconds: Double): String {
     val totalSeconds = seconds
         .takeIf { it.isFinite() && it >= 0.0 }
         ?.toLong()
@@ -2016,6 +2040,7 @@ private fun BoxScope.RenderPlaybackOverlays(
             activeSkipInterval = activeSkipInterval.takeUnless {
                 isDesktop || isProviderDiagnosticVideoPlayback
             },
+            skipLandsOnPostCredits = activeSkipInterval?.let { activeSkipLanding(it).landsOnPostCredits } == true,
             skipIntervalDismissed = skipIntervalDismissed,
             controlsVisible = controlsVisible,
             onSkipInterval = { interval -> acceptSkipInterval(interval) },

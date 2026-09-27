@@ -643,6 +643,22 @@ internal fun PlayerScreenRuntime.tryFailoverToNextSource(
                     })
                     return@launch
                 }
+                // A rate limit with nothing else to try (one source, or only the throttled
+                // provider's): the stream itself is fine, so let the engine reconnect it if the
+                // user's Rate Limit Recovery mode allows, rather than closing the player.
+                if (rateLimited && failedAttemptStillCurrent() &&
+                    playerController?.reconnectAfterRateLimit(message) == true
+                ) {
+                    failedIdentityKey?.let(failoverTriedIdentityKeys::remove)
+                    // The engine keeps the dead demuxer stopped until the reopen renders, so the
+                    // synthetic-EOF guard can stand down just as on its own reconnect path.
+                    playbackSourceFailureActive = false
+                    StreamFailoverLog.event("sources_exhausted_reconnecting", buildJsonObject {
+                        put("trigger", trigger.wireName)
+                        put("triedSourceCount", failoverTriedIdentityKeys.size)
+                    })
+                    return@launch
+                }
                 // Nothing left to try — fall back to the normal unrecoverable-failure exit.
                 StreamFailoverLog.event("sources_exhausted", buildJsonObject {
                     put("trigger", trigger.wireName)

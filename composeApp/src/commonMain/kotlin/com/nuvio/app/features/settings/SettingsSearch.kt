@@ -192,6 +192,7 @@ private fun settingsSearchEntries(
     val tmdbPage = resolve(Res.string.compose_settings_page_tmdb_enrichment)
     val mdbListPage = resolve(Res.string.compose_settings_page_mdblist_ratings)
     val qualiCachePage = resolve(Res.string.compose_settings_page_qualicache)
+    val posterServicePage = resolve(Res.string.compose_settings_page_poster_service)
     val simklPage = resolve(Res.string.compose_settings_page_simkl)
     val yamtrackPage = resolve(Res.string.compose_settings_page_yamtrack)
     val lightsPage = resolve(Res.string.compose_settings_page_lights)
@@ -1200,6 +1201,7 @@ private fun settingsSearchEntries(
         PlaybackSearchRow("games-igdb-client-id", resolve(Res.string.settings_games_igdb_client_id), resolve(Res.string.settings_games_igdb_client_id_description), resolve(Res.string.settings_games_section_metadata)),
         PlaybackSearchRow("games-igdb-client-secret", resolve(Res.string.settings_games_igdb_client_secret), resolve(Res.string.settings_games_igdb_client_secret_description), resolve(Res.string.settings_games_section_metadata)),
         PlaybackSearchRow("games-backdrop-style", resolve(Res.string.settings_games_backdrop_style), resolve(Res.string.settings_games_backdrop_style_description), resolve(Res.string.settings_games_section_presentation)),
+        PlaybackSearchRow("games-close-after-launch", resolve(Res.string.settings_games_close_after_launch), resolve(Res.string.settings_games_close_after_launch_description), resolve(Res.string.settings_games_section_launching)),
         PlaybackSearchRow("games-rows", resolve(Res.string.settings_games_section_rows), resolve(Res.string.settings_games_rows_description), resolve(Res.string.settings_games_section_rows)),
         PlaybackSearchRow("games-steamgriddb-key", resolve(Res.string.settings_games_steamgriddb_key), resolve(Res.string.settings_games_steamgriddb_key_description), resolve(Res.string.settings_games_section_artwork)),
     ).forEach { row ->
@@ -1328,6 +1330,12 @@ private fun settingsSearchEntries(
                 anchor = SettingsScrollAnchor.SeekThumbnails,
             ) else null,
             if (isDesktop) PlaybackSearchRow(
+                "desktop-rate-limit-recovery",
+                resolve(Res.string.settings_playback_desktop_rate_limit_recovery),
+                resolve(Res.string.settings_playback_desktop_rate_limit_recovery_search),
+                anchor = SettingsScrollAnchor.RateLimitRecovery,
+            ) else null,
+            if (isDesktop) PlaybackSearchRow(
                 "desktop-anime-mode",
                 resolve(Res.string.settings_playback_desktop_anime_mode),
                 anchor = SettingsScrollAnchor.AnimeEnhancements,
@@ -1400,9 +1408,19 @@ private fun settingsSearchEntries(
                 resolve(Res.string.settings_playback_subtitle_track_kind_search_hint),
             ),
             PlaybackSearchRow(
+                "strip-sdh",
+                resolve(Res.string.settings_playback_strip_sdh),
+                resolve(Res.string.settings_playback_strip_sdh_description),
+            ),
+            PlaybackSearchRow(
                 "addon-subtitle-startup",
                 resolve(Res.string.settings_playback_addon_subtitle_startup_mode),
                 resolve(Res.string.settings_playback_addon_subtitle_startup_fast_description),
+            ),
+            PlaybackSearchRow(
+                "prefer-addon-subtitles",
+                resolve(Res.string.settings_playback_prefer_addon_subtitles),
+                resolve(Res.string.settings_playback_prefer_addon_subtitles_description),
             ),
             PlaybackSearchRow(
                 "reject-subtitle-keywords",
@@ -1497,6 +1515,11 @@ private fun settingsSearchEntries(
                 "skip-auto-accept",
                 resolve(Res.string.settings_playback_skip_auto_accept),
                 resolve(Res.string.settings_playback_skip_auto_accept_chapters_description),
+            ),
+            PlaybackSearchRow(
+                "skip-movie-credits-post-credits",
+                resolve(Res.string.settings_playback_skip_movie_credits_to_post_credits),
+                resolve(Res.string.settings_playback_skip_movie_credits_to_post_credits_description),
             ),
             PlaybackSearchRow("anime-skip", resolve(Res.string.settings_playback_anime_skip), resolve(Res.string.settings_playback_anime_skip_description)),
             PlaybackSearchRow(
@@ -1631,6 +1654,7 @@ private fun settingsSearchEntries(
         ),
         PlaybackSearchRow("poster-hide-labels", resolve(Res.string.settings_poster_hide_labels)),
         PlaybackSearchRow("action-preview", resolve(Res.string.settings_poster_action_preview), resolve(Res.string.settings_poster_action_preview_description)),
+        PlaybackSearchRow("poster-watchlist-badge", resolve(Res.string.settings_poster_watchlist_badge), resolve(Res.string.settings_poster_watchlist_badge_description)),
         PlaybackSearchRow("card-depth", resolve(Res.string.settings_poster_card_depth), resolve(Res.string.settings_poster_card_depth_description), sectionOverride = cardDepthSection),
         PlaybackSearchRow("card-depth-edge", resolve(Res.string.settings_poster_card_depth_edge), sectionOverride = cardDepthSection),
         PlaybackSearchRow("card-depth-sheen", resolve(Res.string.settings_poster_card_depth_sheen), sectionOverride = cardDepthSection),
@@ -1657,6 +1681,7 @@ private fun settingsSearchEntries(
         PlaybackSearchRow("home-hero-badge-priority", "Hero info priority", "Choose which hero badges are preferred first.", anchor = SettingsScrollAnchor.HeroBadgePriority),
         PlaybackSearchRow("home-hero-release-status", "Only show unavailable release status", "Show release status only for cinema and production titles.", anchor = SettingsScrollAnchor.HeroReleaseStatus),
         PlaybackSearchRow("home-hide-unreleased", resolve(Res.string.layout_hide_unreleased), resolve(Res.string.layout_hide_unreleased_sub)),
+        PlaybackSearchRow("home-hide-watched", resolve(Res.string.layout_hide_watched), resolve(Res.string.layout_hide_watched_sub)),
         PlaybackSearchRow("home-hide-catalog-underline", resolve(Res.string.settings_homescreen_hide_catalog_underline), resolve(Res.string.settings_homescreen_hide_catalog_underline_description)),
         PlaybackSearchRow("home-row-shuffle", resolve(Res.string.settings_homescreen_row_shuffle), resolve(Res.string.settings_homescreen_row_shuffle_description)),
         PlaybackSearchRow("home-display-mode", "Display Mode", "Basic, Adaptive, Adaptive Ambient, or TV Mode.", anchor = SettingsScrollAnchor.DisplayMode),
@@ -1670,6 +1695,7 @@ private fun settingsSearchEntries(
         PlaybackSearchRow("home-hover-preview", resolve(Res.string.settings_home_hover_preview), resolve(Res.string.settings_home_hover_preview_description)),
         PlaybackSearchRow("home-catalog-see-more", resolve(Res.string.settings_home_see_more_arrows), resolve(Res.string.settings_home_see_more_arrows_description)),
         PlaybackSearchRow("home-catalog-row-numbers", "Number catalog rows", "Append each row's position to its name, including collections."),
+        PlaybackSearchRow("home-catalog-provider-tag", "Show catalog provider", "Tag each catalog row with the addon that supplies it."),
         PlaybackSearchRow("hero-backdrop-crossfade", "Backdrop crossfade", "How long the hero backdrop takes to fade when moving between titles."),
         PlaybackSearchRow("home-tv-row-transition", "Row change", "Cut, cross-fade, or cross-fade with a nudge when TV Mode moves between rows."),
         PlaybackSearchRow("home-tv-full-backdrop", "Full backdrop", "Extend the TV Mode backdrop to the bottom of the screen and let the rows float over it."),
@@ -1700,6 +1726,7 @@ private fun settingsSearchEntries(
         PlaybackSearchRow("meta-discovery-badges", resolve(Res.string.settings_meta_discovery_badges), resolve(Res.string.settings_meta_discovery_badges_description)),
         PlaybackSearchRow("meta-blur-episodes", resolve(Res.string.settings_meta_blur_unwatched_episodes), resolve(Res.string.settings_meta_blur_unwatched_episodes_description)),
         PlaybackSearchRow("meta-episode-ratings", resolve(Res.string.settings_meta_episode_ratings), resolve(Res.string.settings_meta_episode_ratings_description)),
+        PlaybackSearchRow("meta-overall-ratings", resolve(Res.string.settings_meta_overall_ratings), resolve(Res.string.settings_meta_overall_ratings_description)),
         PlaybackSearchRow("meta-actions", resolve(Res.string.settings_meta_actions), resolve(Res.string.settings_meta_actions_description)),
         PlaybackSearchRow("meta-overview", resolve(Res.string.settings_meta_overview), resolve(Res.string.settings_meta_overview_description)),
         PlaybackSearchRow("meta-production", resolve(Res.string.settings_meta_production), resolve(Res.string.settings_meta_production_description)),
@@ -1744,6 +1771,13 @@ private fun settingsSearchEntries(
         icon = Icons.Rounded.Link,
     )
     addPage(
+        page = SettingsPage.PosterService,
+        key = "poster-service",
+        title = posterServicePage,
+        description = resolve(Res.string.settings_integrations_poster_service_description),
+        icon = Icons.Rounded.Link,
+    )
+    addPage(
         page = SettingsPage.Debrid,
         key = "debrid",
         title = debridPage,
@@ -1758,9 +1792,6 @@ private fun settingsSearchEntries(
         PlaybackSearchRow("tmdb-hero-images", "Hero backdrop & logo", "Choose addon artwork, TMDB artwork, or TVDB artwork for TV and anime.", "HERO BACKDROP & LOGO", anchor = SettingsScrollAnchor.TmdbHeroImages),
         PlaybackSearchRow("tmdb-language", resolve(Res.string.settings_tmdb_preferred_language), resolve(Res.string.settings_tmdb_preferred_language_description), resolve(Res.string.settings_tmdb_section_localization)),
         PlaybackSearchRow("tmdb-filename-catalogs", "Resolve filenames via TMDB", "Look up catalog rows that arrive as raw release filenames (TorBox, AIOStreams library) by name and year.", "FILENAME-ONLY CATALOGS"),
-        PlaybackSearchRow("tmdb-library-posters", resolve(Res.string.settings_tmdb_library_posters_title), resolve(Res.string.settings_tmdb_library_posters_description), resolve(Res.string.settings_tmdb_library_posters_section)),
-        PlaybackSearchRow("tmdb-poster-template", resolve(Res.string.settings_tmdb_poster_template), resolve(Res.string.settings_tmdb_poster_template_description), resolve(Res.string.settings_tmdb_library_posters_section)),
-        PlaybackSearchRow("tmdb-library-posters-test", resolve(Res.string.settings_tmdb_library_posters_test_title), resolve(Res.string.settings_tmdb_library_posters_test_description), resolve(Res.string.settings_tmdb_library_posters_section)),
         PlaybackSearchRow("tmdb-trailers", resolve(Res.string.settings_tmdb_module_trailers), resolve(Res.string.settings_tmdb_module_trailers_description), tmdbModulesSection),
         PlaybackSearchRow("tmdb-artwork", resolve(Res.string.settings_tmdb_module_artwork), resolve(Res.string.settings_tmdb_module_artwork_description), tmdbModulesSection),
         PlaybackSearchRow("tmdb-basic-info", resolve(Res.string.settings_tmdb_module_basic_info), resolve(Res.string.settings_tmdb_module_basic_info_description), tmdbModulesSection),
@@ -1802,6 +1833,26 @@ private fun settingsSearchEntries(
             description = row.description,
             pageLabel = mdbListPage,
             section = row.sectionOverride ?: resolve(Res.string.settings_mdb_section_title),
+            icon = Icons.Rounded.Link,
+        )
+    }
+
+    val posterServiceSection = resolve(Res.string.settings_poster_service_section)
+    val posterServiceTemplatesSection = resolve(Res.string.settings_poster_service_templates_section)
+    listOf(
+        PlaybackSearchRow("poster-service-enable", resolve(Res.string.settings_poster_service_title), resolve(Res.string.settings_poster_service_description), posterServiceSection),
+        PlaybackSearchRow("poster-service-poster-template", resolve(Res.string.settings_poster_service_poster_template), resolve(Res.string.settings_poster_service_poster_template_description), posterServiceTemplatesSection),
+        PlaybackSearchRow("poster-service-landscape-template", resolve(Res.string.settings_poster_service_landscape_template), resolve(Res.string.settings_poster_service_landscape_template_description), posterServiceTemplatesSection),
+        PlaybackSearchRow("poster-service-test", resolve(Res.string.settings_poster_service_test_poster_title), resolve(Res.string.settings_poster_service_test_description), posterServiceTemplatesSection),
+        PlaybackSearchRow("poster-service-screens", resolve(Res.string.settings_poster_service_screens_section), resolve(Res.string.settings_poster_service_screen_details_description), resolve(Res.string.settings_poster_service_screens_section)),
+    ).forEach { row ->
+        addRow(
+            page = SettingsPage.PosterService,
+            key = row.key,
+            title = row.title,
+            description = row.description,
+            pageLabel = posterServicePage,
+            section = row.sectionOverride ?: posterServiceSection,
             icon = Icons.Rounded.Link,
         )
     }

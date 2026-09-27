@@ -1,5 +1,81 @@
 # Changelog
 
+## 1.15.0 - 2026-09-27
+
+### Added
+
+- **Screensaver** - a new settings category that dims the screen, or shuts the PC down, after a period of inactivity. Browsing and playback have separate delays, it can optionally stay active during playback, and shutdown only happens after an on-screen 30-second countdown while Nuvio is the app in front.
+- **Lights Out** - under Integrations, Nuvio can dim smart lights when playback starts and restore them afterwards, through the Govee cloud API or a webhook of your own, limited to a daily time window if you want.
+- **Gamepad Support** - controllers can navigate the whole app and the player, including an on-screen keyboard for text fields. DualSense is tested; DualShock 4 and Xbox controllers are expected to work but are untested, so please report issues. Off by default.
+- **Season Recaps** - with an AI provider connected in Discover, long-press an episode or season to get a spoiler-free recap of everything before it.
+- **Player Controls Layouts** - alongside Standard and Legacy, the player can use a new Minimal layout (with optional scrim), an Ultra mini layout, or upstream Nuvio's own player UI. The layout can be swapped during playback, the vignette can be hidden while the controls are shown, the seek icon was redesigned and can be turned off, and a slider controls icon size.
+- **Hide Watched Content** - watched titles can be hidden almost everywhere in the app. Search, Local Library, Because You Watched, Continue Watching, and Up Next are left alone, and titles disappear as soon as you finish or mark them watched rather than after a restart.
+- **Watched and Watchlist Indicators** - an optional watchlist marker on posters (the watched marker takes priority), and watched markers in the player's episode panel to match the details page.
+- **Nuvio Engine P2P** - the mobile app's torrent streaming engine is ported as an option alongside TorrServer, with its own cache and speed profiles, and has been tuned for faster starts and smoother seeking.
+- **Custom Backend** - upstream's self-hosted server support is ported, so you can sign in against your own Nuvio backend.
+- **Custom Colour Profile** - direct control over each component of the colour profile. Like the presets, it applies to SDR only.
+- **Genre Breakdown** - hovering a genre on the hero or details page shows the title's sub-genres and themes.
+- **Badge Browsing** - clicking some discovery badges opens a list of other titles with the same badge.
+- **Right-Click Back** - right-clicking inside a nested screen (a collection, a badge list, a production company) goes back, unless you right-click something that has its own right-click action. Right-click also dismisses intro and outro skip prompts.
+- **Cinematic Backdrop Fade** - an optional, adjustable fade between hero backdrops, which also reduces flicker on OLED screens from rapid brightness changes.
+- **TV Mode Row Transitions** - changing rows in TV mode can nudge or fade.
+- **Catalog Source Tags** - Home rows can show a faint tag naming the addon that returned the catalog.
+- **Next Episode Without Autoplay** - the next-episode bubble can open the sources panel instead of starting playback.
+- **Click-To-Open Notches** - the sources notch and the top notch can require a click instead of opening on hover.
+- **Prefer External Subtitles** - an option to prefer addon subtitles over the file's embedded ones.
+- **Seek Thumbnail Modes** - seek-bar thumbnails can be Off, Local (only for files on this PC and servers on your home network, never debrid streams or torrents), or Streaming (every source, as before). Local avoids the extra requests that can get you rate limited while seeking. An existing On setting becomes Streaming.
+- **Rate Limit Recovery** - a new setting under Automatic Stream Failover for what happens when a debrid host rate-limits a stream you are already watching: Off, Prefer Failover (the default: fail over if Stream Failover is on, and reconnect when it is off or finds no other source), or Prefer Reconnect. TorBox links reconnect instantly by switching to another TorBox server, since TorBox blocks the rate-limited server for over an hour; other hosts reopen after two configurable waits. Playback resumes where you were seeking to.
+- **Custom Posters, Matching Upstream** - custom poster URLs now work like the official Nuvio apps: the same patterns (RPDB, AIOMetadata-style, PostersPlus and so on) can be pasted in, and they apply across Home, Collections, Library, Search, the details page, and Discover, with a toggle for each. Continue Watching is off by default and can be set to Base art (replaces the poster and backdrop but keeps episode stills) or All (custom art on every card). With Appearance sync on, the pattern and screen choices sync with your other Nuvio apps. It has its own Integrations page instead of living inside TMDB Enrichment, and still accepts a separate landscape URL. If the service has no art for a title, the normal poster is shown.
+- **Calendar Improvements** - Calendar opens from Settings, is fetched in the background shortly after launch so it opens instantly, and the SIMKL calendar is cached for 12 hours.
+- **Game Mode Additions** - Game Mode now uses the TV mode interface, supports custom rows (unreleased, on pause, and so on), `.lnk` shortcuts, game client protocols, Steam as a metadata and backdrop source, adding games by scanning a folder, and optionally closing Nuvio after a game launches to free memory.
+- **Home Add To Library** - Home now matches the details page: left-click adds to your current library, right-click opens a list.
+- **Discord Rich Presence Options** - new options in the integration settings, inspired by Codeine's changes.
+- **Single Instance** - Nuvio HTPC only runs once; opening it again brings the existing window to the front.
+- **New Icon And Start Screen** - a unique HTPC icon and a new start screen gradient that follows the Nuvio logo.
+
+### Improved
+
+- **Upstream Merges** - a batch of improvements from upstream Nuvio: faster stream lists, QuickJS 1.0.15 for plugins, collection sorting, the sources panel, binge-group reuse default, episode runtimes from addons, Rotten Tomatoes icons, rating visibility, skip segments and post-credits scenes, parallel addon subtitle loading, SDH stripping, and TV aggregate credits.
+- **Performance** - a large optimization pass on Adaptive Ambient, animated collection GIFs, artwork, and general browsing; loading is much faster after the first launch of a build; the app now idles properly instead of wasting GPU time; and startup no longer waits for a sleeping downloads drive to spin up.
+- **Appearance From Your Nuvio Account** - new installs sync Appearance by default, so signing in brings over your accent colour, custom poster pattern, and card depth from the official apps. Card depth now syncs with them too. Existing installs keep their current sync choices.
+- **White Theme** - selected and hovered menu items are marked in gold instead of near-black, making it a black, white and gold theme.
+- **New Install Defaults** - Up Next gets its own row, and the backdrop crossfade defaults to 500 ms.
+- **Continue Watching** - updates without restarting the app, and returning shows can appear in Up Next even if you have not watched them in a while.
+- **Settings Panel** - a reworked layout with section navigation in the sidebar and card-style pages, plus shorter wording where the extra text wasn't adding anything.
+- **Subtitle Positioning** - subtitles move up out of the way when the player controls are shown, the auto-move logic is tighter, and the bottom offset setting now sits right below font size.
+- **Sources Panel** - the in-player sources panel is larger, sits closer to where it opens, and stays open when you change source.
+- **Poster Caching** - poster cache lifetimes sent by the poster addon are respected before posters are refreshed.
+- **Scaling** - TV mode handles app scaling much better, and the app UI slider now goes 50% either way instead of 25%.
+- **Discover** - a category type option, see-more arrows, a dropdown that scrolls properly outside TV mode, and no more accidental poster clicks while choosing a category.
+- **Seeking And Rate Limits** - seek-bar previews are only requested once the pointer rests on the timeline, and pause for five minutes after a rate limit. A TorBox server that rate-limited you is avoided for the rest of the session instead of being opened again.
+- **Audio Passthrough** - a passthrough failure is detected and passthrough is turned off for that playback, instead of hanging or cycling through stream failover.
+- **Plugins** - duplicate plugins are removed and requests time out after 20 seconds instead of 60.
+- **Season Auto-Downloads** - friendlier season auto-download behaviour based on a user report from Deigue, and Deigue's fix for detecting existing anime folders is merged.
+- **QualiCache** - many QualiCache fixes, and the default minimum trust is now Medium instead of High.
+- **P2P** - further performance work on P2P streaming.
+- **Logging** - log lines carry timestamps, image loading is logged, and log rotation no longer breaks logging.
+- **Update Notes** - the in-app patch notes render GitHub markdown properly.
+- **Smaller Touches** - infinite scroll loads more consistently, long text fields scroll instead of pushing the save button off screen, the player icon stack becomes vertical in narrow windows, the startup gradient no longer shows dithering, the hero fade between items is more consistent, detail-page thumbnails are no longer clipped when enlarged, IMDb episode rating numbers line up, and the Emmy winners and nominees list is up to date.
+
+### Fixed
+
+- **Collections** - collections no longer jump around while loading (the first catalog to respond briefly replaced the top one), and collection position and poster depth bugs are fixed.
+- **Live Sports In Continue Watching** - live sports streams no longer sync to Continue Watching.
+- **Subtitle Language** - turning subtitles on no longer replaces your preferred subtitle language.
+- **Scroll Position** - some menus no longer jump back to the top.
+- **"You're Watching" Logo** - a failed logo request falls back to text instead of showing garbage.
+- **Custom Themes** - a custom theme could be overridden.
+- **Detail Screen Banding** - fixed banding on dark detail-page backgrounds.
+- **Continue Watching Thumbnails** - fixed a thumbnail caching bug.
+- **Anime Cache Refresh** - anime didn't trigger a cache refresh.
+- **Next Up** - fixed a Next Up bug.
+- **Steam Posters** - the Steam poster endpoint works again.
+- **Setup Wizard Trailers** - trailers no longer play while the setup wizard is open.
+- **App Icon** - changing upstream Nuvio's app icon no longer changes Nuvio HTPC's.
+- **New Users Coming From Official Nuvio** - anyone who had used the official Nuvio desktop app was treated as upgrading from an old Nuvio HTPC, so they never got the setup wizard or the new-install defaults such as the always-visible top bar.
+- **"Debrid Rate Limited" Sticking To A Title** - with Reuse Last Link on, a provider's rate-limit or error placeholder could be saved as the title's link and replayed on every open. Placeholder links are never saved now, and old ones are cleared. A single error answer from a stream resolver also no longer disables Nuvio's redirect handling for that resolver for a week, which made every later seek hit the resolver again.
+- **Settings Sync With Official Apps** - syncing settings from Nuvio HTPC could erase settings the official apps have added since, such as their custom poster pattern and card depth style. Those are now left untouched.
+
 ## 1.14.0 - 2026-09-05
 
 ### Added

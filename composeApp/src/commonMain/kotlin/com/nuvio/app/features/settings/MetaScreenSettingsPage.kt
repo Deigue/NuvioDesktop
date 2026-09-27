@@ -53,6 +53,7 @@ import com.nuvio.app.features.details.MetaEpisodeCardStyle
 import com.nuvio.app.features.details.MetaScreenSectionItem
 import com.nuvio.app.features.details.MetaScreenBackgroundMode
 import com.nuvio.app.features.details.MetaScreenSectionKey
+import com.nuvio.app.features.details.EpisodeRatingsVisibility
 import com.nuvio.app.features.details.MetaScreenSettingsRepository
 import com.nuvio.app.features.details.MetaScreenSettingsUiState
 import com.nuvio.app.features.player.HERO_TV_TRAILER_DELAY_VALUES
@@ -115,6 +116,11 @@ import nuvio.composeapp.generated.resources.settings_meta_background_normal
 import nuvio.composeapp.generated.resources.settings_meta_background_title
 import nuvio.composeapp.generated.resources.settings_meta_episode_ratings
 import nuvio.composeapp.generated.resources.settings_meta_episode_ratings_description
+import nuvio.composeapp.generated.resources.settings_meta_episode_ratings_hide
+import nuvio.composeapp.generated.resources.settings_meta_episode_ratings_hide_unwatched
+import nuvio.composeapp.generated.resources.settings_meta_episode_ratings_show
+import nuvio.composeapp.generated.resources.settings_meta_overall_ratings
+import nuvio.composeapp.generated.resources.settings_meta_overall_ratings_description
 import nuvio.composeapp.generated.resources.settings_meta_hero_trailer_background
 import nuvio.composeapp.generated.resources.settings_meta_hero_trailer_background_backdrop
 import nuvio.composeapp.generated.resources.settings_meta_hero_trailer_background_black
@@ -259,13 +265,36 @@ internal fun LazyListScope.metaScreenSettingsContent(
                     onCheckedChange = { MetaScreenSettingsRepository.setBlurUnwatchedEpisodes(it) },
                 )
                 SettingsGroupDivider(isTablet = isTablet)
-                SettingsSwitchRow(
+                SettingsSegmentedChoiceRow(
                     title = stringResource(Res.string.settings_meta_episode_ratings),
                     description = stringResource(Res.string.settings_meta_episode_ratings_description),
-                    checked = uiState.episodeRatingsEnabled,
+                    options = listOf(
+                        SettingsChoiceOption(
+                            EpisodeRatingsVisibility.SHOW_ALL,
+                            stringResource(Res.string.settings_meta_episode_ratings_show),
+                        ),
+                        SettingsChoiceOption(
+                            EpisodeRatingsVisibility.HIDE_UNWATCHED_EPISODES,
+                            stringResource(Res.string.settings_meta_episode_ratings_hide_unwatched),
+                        ),
+                        SettingsChoiceOption(
+                            EpisodeRatingsVisibility.HIDE_EPISODES,
+                            stringResource(Res.string.settings_meta_episode_ratings_hide),
+                        ),
+                    ),
+                    selectedValue = uiState.episodeRatingsVisibility,
                     isTablet = isTablet,
                     modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("meta-episode-ratings")),
-                    onCheckedChange = MetaScreenSettingsRepository::setEpisodeRatingsEnabled,
+                    onSelected = MetaScreenSettingsRepository::setEpisodeRatingsVisibility,
+                )
+                SettingsGroupDivider(isTablet = isTablet)
+                SettingsSwitchRow(
+                    title = stringResource(Res.string.settings_meta_overall_ratings),
+                    description = stringResource(Res.string.settings_meta_overall_ratings_description),
+                    checked = uiState.showOverallRatings,
+                    isTablet = isTablet,
+                    modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("meta-overall-ratings")),
+                    onCheckedChange = MetaScreenSettingsRepository::setShowOverallRatings,
                 )
             }
         }

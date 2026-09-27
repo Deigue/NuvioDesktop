@@ -3,6 +3,7 @@ package com.nuvio.app.features.player.desktop
 import androidx.compose.ui.graphics.Color
 import co.touchlab.kermit.Logger
 import com.nuvio.app.core.storage.DesktopStorage
+import com.nuvio.app.features.player.DesktopHudLayout
 import com.nuvio.app.features.player.PlayerControlAddonSubtitleItem
 import com.nuvio.app.features.player.PlayerControlAudioTrackItem
 import com.nuvio.app.features.player.PlayerControlBuiltInSubtitleItem
@@ -36,6 +37,7 @@ import com.nuvio.app.features.player.PlayerPlaybackSnapshot
 import com.nuvio.app.features.player.PlayerResizeMode
 import com.nuvio.app.features.player.PlayerShortcutAction
 import com.nuvio.app.features.player.PlayerShortcutsRepository
+import com.nuvio.app.features.player.playerShortcutKeyCodeLabel
 import com.nuvio.app.features.player.PlayerSettingsRepository
 import com.nuvio.app.features.player.SUBTITLE_ASS_SCALE_MAX
 import com.nuvio.app.features.player.SUBTITLE_ASS_SCALE_MIN
@@ -65,6 +67,7 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.swing.SwingUtilities
 import kotlin.concurrent.Volatile
 import kotlin.concurrent.thread
+import kotlin.math.floor
 
 /**
  * mpv audio-filter chain applied to trailer playback (hero previews, fullscreen trailers, and
@@ -89,7 +92,7 @@ internal class NativePlayerController(
 
     private companion object {
         val json = Json { ignoreUnknownKeys = true }
-        const val CONTROLS_PAGE_REVISION = "20260914-seek-thumbs-2"
+        const val CONTROLS_PAGE_REVISION = "20260926-thumb-settle-1"
         const val MPV_STARTUP_ERROR_EVENT_PREFIX = "mpvStartupError:"
         const val MPV_PLAYBACK_ERROR_EVENT_PREFIX = "mpvPlaybackError:"
 
@@ -130,6 +133,11 @@ internal class NativePlayerController(
     private var transientMessageForNextAttach: Pair<String, String>? = null
     @Volatile
     private var pendingSubtitleStyle: SubtitleStyleState? = null
+    // Top of the HUD's visible chrome as a percentage of the window height from the top, reported
+    // by the overlay while the chrome is up and 0 while it is hidden. Subtitles whose bottom edge
+    // would fall below it are lifted onto it for as long as it is there; see
+    // effectiveSubtitlePosition.
+    private var hudSubtitleClearancePercent = 0.0
     @Volatile
     private var pendingSubtitleDelayMs: Int? = null
     @Volatile
@@ -139,6 +147,14 @@ internal class NativePlayerController(
     // in effect right now (auto-applied preset vs Off) before any session force exists.
     @Volatile
     var isAnimeContentDetected = false
+    // Where the last definitively failed seek was headed (the bridge reports it just before the
+    // error). Read by the engine's rate-limit recovery; cleared by every attach.
+    @Volatile
+    var lastSeekFailureTargetMs: Long? = null
+        private set
+    // Installed by the desktop engine for each attach; see reconnectAfterRateLimit.
+    @Volatile
+    var rateLimitFailoverFallback: ((String) -> Boolean)? = null
     private var controlsState = PlayerControlsState()
     private var lastSentControlsStructureKey: PlayerControlsState? = null
     private var lastSentMediaSessionKey: String? = null
@@ -224,6 +240,10 @@ internal class NativePlayerController(
                     add("ytdl=no")
                 }
                 if (enableUserMpvOptions) addAll(buildDesktopUserMpvOptions(initialPlaybackSpeed))
+                // An init option rather than a runtime property: mpv filters text subtitles as it
+                // parses them, so it has to be set before the first track loads. Only ever turned
+                // on here, never forced off, so an mpv.conf that enables it keeps working.
+                if (PlayerSettingsRepository.uiState.value.stripSdhSubtitles) add("sub-filter-sdh=yes")
                 mediaTitle.takeIf(String::isNotBlank)?.let { title ->
                     // Unlike mpv's inferred media-title this never exposes the resolved URL. Keep
                     // it after custom options so the app's presentation/security boundary wins.
@@ -248,6 +268,7 @@ internal class NativePlayerController(
             restoreVolume = restoreVolume,
         )
         pendingSource = pending
+        lastSeekFailureTargetMs = null
         host.onPeerReady = { attachPending() }
         if (host.isDisplayable) {
             attachPending()
@@ -416,6 +437,9 @@ internal class NativePlayerController(
             playerShortcutKeyCodes = PlayerShortcutAction.entries.associate { action ->
                 action.id to PlayerShortcutsRepository.keyCode(action)
             },
+            skipIntervalKeyLabel = playerShortcutKeyCodeLabel(
+                PlayerShortcutsRepository.keyCode(PlayerShortcutAction.SkipInterval),
+            ),
         )
         if (!controlsJsonIsWellFormed(controlsJson)) return
         NativePlayerBridge.updateControls(current, controlsJson)
@@ -535,6 +559,9 @@ internal class NativePlayerController(
     override fun showTransientMessage(title: String, value: String) {
         showPresetPill(title, value)
     }
+
+    override fun reconnectAfterRateLimit(message: String): Boolean =
+        rateLimitFailoverFallback?.invoke(message) ?: false
 
     override fun showTransientMessageAfterNextAttach(title: String, value: String) {
         // A source switch tears the native surface (and its controls page) down, so a pill shown
@@ -803,22 +830,24 @@ internal class NativePlayerController(
     }
 
     /**
-     * Triggers the skip-intro/outro action if the skip prompt is currently on screen (Tab hotkey,
-     * matching the official client). Returns true if a skip was dispatched so the caller can consume
-     * the key; false when no skip is available (so Tab keeps its normal behavior).
+     * The skip key (Tab by default, Start on a pad): skips the prompt on screen, plays the next
+     * episode, or drives the SkipDB submission toast — whichever `skipKeyAction` resolved to when
+     * the controls state was last built (see PlayerScreenRuntime.resolveSkipKeyAction). Returns
+     * true if something was dispatched so the caller consumes the key; false when there was
+     * nothing to do, so the key keeps its normal behaviour.
      */
     fun triggerSkipIntervalIfAvailable(): Boolean {
-        return when {
-            controlsState.skipPromptVisible && !controlsState.skipPromptDismissed -> {
-                dispatchKeyboardShortcut("skipInterval", 0.0)
-                true
-            }
-            controlsState.nextEpisodeVisible && controlsState.nextEpisodePlayable -> {
-                dispatchKeyboardShortcut("playNextEpisode", 0.0)
-                true
-            }
-            else -> false
-        }
+        val action = controlsState.skipKeyAction
+        if (action.isEmpty()) return false
+        dispatchKeyboardShortcut(action, 0.0)
+        return true
+    }
+
+    /** Escape while the submission toast is asking something dismisses it instead of leaving. */
+    fun dismissSkipSubmitToastIfShown(): Boolean {
+        if (!controlsState.skipSubmitToastDismissible) return false
+        dispatchKeyboardShortcut("skipSubmitDismiss", 0.0)
+        return true
     }
 
     fun openKeyboardPanel(panel: String) {
@@ -871,6 +900,10 @@ internal class NativePlayerController(
                 transientMessageForNextAttach = null
                 showPresetPill(pillTitle, pillValue, durationMs = 5000)
             }
+        }
+        if (type == "seekFailureTargetMs") {
+            lastSeekFailureTargetMs = value.toLong().coerceAtLeast(0L)
+            return
         }
         val errorPrefix = when {
             type.startsWith(MPV_STARTUP_ERROR_EVENT_PREFIX) -> MPV_STARTUP_ERROR_EVENT_PREFIX
@@ -939,13 +972,16 @@ internal class NativePlayerController(
             PlayerSettingsRepository.setDesktopUiScalePercent(value.toInt())
             return
         }
+        if (type == "selectDesktopHudLayout") {
+            DesktopHudLayout.entries.getOrNull(value.toInt())?.let(PlayerSettingsRepository::setDesktopHudLayout)
+            return
+        }
         if (type == "seekThumbnail") {
             // Belt and braces with the HUD flag: the preview decoder is a second stream opened
             // against the same host, so a stale controls page must not be able to start it.
-            val settings = PlayerSettingsRepository.uiState.value
-            if (!settings.desktopSeekThumbnailsEnabled ||
-                settings.desktopBufferPreset == DesktopBufferPreset.Metered
-            ) {
+            // controlsState carries the runtime's verdict (mode, Metered preset, local vs
+            // streaming source), so this cannot disagree with what the HUD was told.
+            if (!controlsState.seekThumbnailsEnabled || SeekThumbnailRateLimitGate.isSuppressed()) {
                 return
             }
             handle.takeIf { it != 0L }?.let { current ->
@@ -1024,6 +1060,15 @@ internal class NativePlayerController(
             "cursorVisibility" -> {
                 val current = handle.takeIf { it != 0L } ?: return
                 NativePlayerBridge.setCursorHidden(current, value == 0.0)
+            }
+            "hudSubtitleClearance" -> {
+                val percent = value.coerceIn(0.0, 100.0)
+                if (percent == hudSubtitleClearancePercent) return
+                hudSubtitleClearancePercent = percent
+                val current = handle.takeIf { it != 0L } ?: return
+                val style = pendingSubtitleStyle ?: return
+                NativePlayerBridge.setMpvProperty(current, "sub-pos", effectiveSubtitlePosition(style).toString())
+                forceVideoRedraw()
             }
             else -> {
                 if (type == "fileLoaded") {
@@ -1471,7 +1516,7 @@ internal class NativePlayerController(
             outlineSize = if (style.outlineEnabled) style.outlineWidth.toFloat() else 0f,
             bold = style.bold,
             fontSize = style.toMpvSubtitleFontSize(),
-            subPos = style.toMpvSubtitlePosition(),
+            subPos = effectiveSubtitlePosition(style),
             fontName = style.fontFamily,
         )
         // mpv's sub-shadow-color is an alias of sub-back-color. applySubtitleStyle writes the
@@ -1483,6 +1528,24 @@ internal class NativePlayerController(
             forceVideoRedraw()
         }
         reapplyCustomSubtitleOverrides(current)
+    }
+
+    /**
+     * The user's subtitle position, or — while the HUD is showing and the subtitles would reach
+     * into its chrome — the highest position whose bottom edge still sits on the clearance line
+     * the overlay reported. mpv puts a text subtitle's bottom edge at `sub-pos`% of the height
+     * less `sub-margin-y` (22 by default, in 720p-relative units, i.e. a fixed 22/720 of the
+     * height at any window size), and multi-line text grows upward from that edge — so it is the
+     * only thing that can collide with the controls, whatever the font size. Solving for the edge
+     * rather than the block means a subtitle that already clears the chrome, or one only just
+     * under it, moves not at all or by exactly the overlap.
+     */
+    private fun effectiveSubtitlePosition(style: SubtitleStyleState): Int {
+        val base = style.toMpvSubtitlePosition()
+        val clearance = hudSubtitleClearancePercent
+        if (clearance <= 0.0) return base
+        val ceiling = floor(clearance + 100.0 * MPV_DEFAULT_SUB_MARGIN_Y / 720.0).toInt().coerceIn(0, 150)
+        return minOf(base, ceiling)
     }
 
     private fun reapplyCustomSubtitleOverrides(current: Long) {
@@ -1661,6 +1724,10 @@ private fun Color.toMpvColorString(): String {
 // cannot render subtitles invisibly small or absurdly large.
 private fun SubtitleStyleState.toMpvSubtitleAssScale(): Double =
     assScalePercent.coerceIn(SUBTITLE_ASS_SCALE_MIN, SUBTITLE_ASS_SCALE_MAX) / 100.0
+
+// mpv's default `sub-margin-y`; nothing in the player sets it, and it has no property getter on
+// the bridge. Only effectiveSubtitlePosition depends on it, and only to a fraction of a percent.
+private const val MPV_DEFAULT_SUB_MARGIN_Y = 22.0
 
 private fun SubtitleStyleState.toMpvSubtitlePosition(): Int =
     (100 - (bottomOffset / 2)).coerceIn(0, 150)
@@ -1907,6 +1974,7 @@ internal fun payloadExcerptAroundFailure(payload: String, message: String): Stri
 private fun PlayerControlsState.toControlsJson(
     appFullscreenKeyCode: Int,
     playerShortcutKeyCodes: Map<String, Int>,
+    skipIntervalKeyLabel: String,
 ): String =
     buildString {
         append('{')
@@ -2166,6 +2234,18 @@ private fun PlayerControlsState.toControlsJson(
         append(',')
         appendJsonField("legacyHudEnabled", legacyHudEnabled)
         append(',')
+        appendJsonField("minimalHudEnabled", minimalHudEnabled)
+        append(',')
+        appendJsonField("minimalHudPillsEnabled", minimalHudPillsEnabled)
+        append(',')
+        appendJsonField("ultraHudEnabled", ultraHudEnabled)
+        append(',')
+        appendJsonField("officialHudEnabled", officialHudEnabled)
+        append(',')
+        appendJsonField("seekHandleEnabled", seekHandleEnabled)
+        append(',')
+        appendJsonField("hudVignetteEnabled", hudVignetteEnabled)
+        append(',')
         appendJsonField("alwaysShowClock", alwaysShowClock)
         append(',')
         appendJsonField("playbackSpeedFineIncrementsEnabled", playbackSpeedFineIncrementsEnabled)
@@ -2215,6 +2295,26 @@ private fun PlayerControlsState.toControlsJson(
         appendJsonField("skipPromptEndMs", skipPromptEndMs)
         append(',')
         appendJsonField("skipPromptDismissed", skipPromptDismissed)
+        append(',')
+        appendJsonField("skipKeyAction", skipKeyAction)
+        append(',')
+        appendJsonField("skipIntervalKeyLabel", skipIntervalKeyLabel)
+        append(',')
+        appendJsonField("skipSubmitToastVisible", skipSubmitToast.visible)
+        append(',')
+        appendJsonField("skipSubmitToastPhase", skipSubmitToast.phase)
+        append(',')
+        appendJsonField("skipSubmitToastTitle", skipSubmitToast.title)
+        append(',')
+        appendJsonField("skipSubmitToastDetail", skipSubmitToast.detail)
+        append(',')
+        appendJsonField("skipSubmitToastHint", skipSubmitToast.hint)
+        append(',')
+        appendJsonField("skipSubmitToastAccepted", skipSubmitToast.accepted)
+        append(',')
+        appendJsonField("skipSubmitToastKey", skipSubmitToast.key)
+        append(',')
+        appendJsonField("skipSubmitToastDismissible", skipSubmitToastDismissible)
         append(',')
         appendJsonField("nextEpisodeVisible", nextEpisodeVisible)
         append(',')

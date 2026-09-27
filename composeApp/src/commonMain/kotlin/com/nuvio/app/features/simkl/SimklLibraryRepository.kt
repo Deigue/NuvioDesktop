@@ -8,9 +8,10 @@ import com.nuvio.app.features.library.LibraryItem
 import com.nuvio.app.features.metadata.MediaIdResolver
 import com.nuvio.app.features.metadata.isAnimeNativeId
 import com.nuvio.app.features.metadata.toSimklIds
-import com.nuvio.app.features.tmdb.TmdbSettingsRepository
-import com.nuvio.app.features.tmdb.customPosterTemplateUsesNativeAnimeId
-import com.nuvio.app.features.tmdb.resolveCustomPosterIds
+import com.nuvio.app.features.posterservice.CustomPosterScreen
+import com.nuvio.app.features.posterservice.CustomPosterSettingsRepository
+import com.nuvio.app.features.posterservice.customPosterTemplateUsesNativeAnimeId
+import com.nuvio.app.features.posterservice.resolveCustomPosterIds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -395,7 +396,7 @@ internal object SimklLibraryRepository {
      * return season 1's art for every season.
      */
     private suspend fun LibraryItem.withPosterServiceIds(meta: MetaDetails?): LibraryItem {
-        val settings = TmdbSettingsRepository.snapshot()
+        val settings = CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Library)
         if (id.isAnimeNativeId() && !settings.customPosterTemplateUsesNativeAnimeId()) return this
         val resolved = resolveCustomPosterIds(
             settings = settings,

@@ -46,5 +46,14 @@ internal class MouseActivityState {
     }
 }
 
+/**
+ * [startInactive] is for screens that mount under a stationary cursor (navigating in or back):
+ * the first synthetic re-entry is recorded but ignored, so hover can't move focus off the
+ * starting or restored position until the mouse genuinely moves.
+ */
 @Composable
-internal fun rememberMouseActivityState(): MouseActivityState = remember { MouseActivityState() }
+internal fun rememberMouseActivityState(startInactive: Boolean = false): MouseActivityState = remember {
+    MouseActivityState().apply {
+        if (startInactive) onKeyboardNavigation(ignoreNextMouseMove = true)
+    }
+}

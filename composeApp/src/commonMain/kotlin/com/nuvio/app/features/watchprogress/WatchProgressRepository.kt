@@ -546,6 +546,9 @@ object WatchProgressRepository {
             "Loaded watch progress for profile $profileId: entries=${entriesByVideoId.size} " +
                 "deltaInitialized=$deltaInitialized cursor=$deltaCursorEventId lastPush=$lastSuccessfulPushEpochMs"
         }
+        // Rows stored before live events were excluded; cleaned out of the file too, so this is a
+        // one-time cost per profile rather than a log line every launch.
+        if (dropLiveEventEntries()) persist()
         publish()
         resolveRemoteMetadata(useStartupGrace = true)
     }
@@ -758,6 +761,8 @@ object WatchProgressRepository {
             lastSuccessfulPushEpochMs = lastSuccessfulPushEpochMs,
             pullStartedEpochMs = pullStartedEpochMs,
         ).toMutableMap()
+        // The server may still hold rows pushed before live events were excluded.
+        dropLiveEventEntries()
         if (resetDeltaState) {
             deltaCursorEventId = 0L
             deltaInitialized = false
@@ -786,6 +791,7 @@ object WatchProgressRepository {
                 WATCH_PROGRESS_DELTA_OPERATION_UPSERT -> {
                     val current = entriesByVideoId[event.videoId]
                     val updated = event.toProgressSyncRecord().toWatchProgressEntry(cached = current)
+                    if (updated.isLiveEventEntry()) return@forEach
                     if (current != updated) {
                         entriesByVideoId[event.videoId] = updated
                         changed = true
@@ -1394,6 +1400,10 @@ object WatchProgressRepository {
         if (!isCompleted && !shouldStoreWatchProgress(positionMs = positionMs, durationMs = durationMs)) {
             return
         }
+        // The player already withholds these; this keeps a future caller from storing one either.
+        if (session.contentType.isLiveEventContentType() || session.parentMetaType.isLiveEventContentType()) {
+            return
+        }
 
         val useMdbListProgress = shouldUseMdbListProgress()
         val useSimklProgress = shouldUseSimklProgress()
@@ -1562,6 +1572,19 @@ object WatchProgressRepository {
             entries = sortedEntries,
             hasLoadedRemoteProgress = hasLoadedRemoteProgress,
         )
+    }
+
+    /**
+     * Removes every live-event row from the local map; true when there was one. Live events are
+     * never written any more (see [isLiveEventContentType]), but a store or a sync server that
+     * predates that rule can still hand them back.
+     */
+    private fun dropLiveEventEntries(): Boolean {
+        val live = entriesByVideoId.values.filter { it.isLiveEventEntry() }.map { it.videoId }
+        if (live.isEmpty()) return false
+        live.forEach { entriesByVideoId.remove(it) }
+        log.d { "Dropped ${live.size} live-event watch progress entries: $live" }
+        return true
     }
 
     private fun persist() {

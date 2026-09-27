@@ -31,6 +31,19 @@ sealed interface CatalogTarget {
         override val contentType: String,
         override val supportsPagination: Boolean = false,
     ) : CatalogTarget
+
+    /**
+     * A generated Discover row ("Because you watched …", an AI row) opened in full. These rows are
+     * built in memory rather than served by an addon, so "See all" reads the row back out of
+     * [com.nuvio.app.features.discover.DiscoverRecommendationsRepository] by its key instead of
+     * fetching a catalog.
+     */
+    data class DiscoverRow(
+        val rowKey: String,
+        override val contentType: String,
+    ) : CatalogTarget {
+        override val supportsPagination: Boolean = false
+    }
 }
 
 @Serializable
@@ -38,4 +51,5 @@ enum class CatalogTargetKind {
     ADDON,
     LIBRARY,
     COLLECTION_SOURCE,
+    DISCOVER_ROW,
 }

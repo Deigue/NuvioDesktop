@@ -369,6 +369,21 @@ private inline fun desktopStartupStep(name: String, block: () -> Unit) {
 }
 
 fun main() {
+    // Before the log file or any store is opened: a second copy of Nuvio sharing the data directory
+    // corrupts the log rotation and the image disk cache (see DesktopSingleInstance). The player
+    // smoke harness is exempt — it is a deliberate side-by-side dev launch with its own window.
+    val smokeLaunch = !(System.getProperty("nuvio.desktop.smokePlayerUrl")
+        ?: System.getenv("NUVIO_DESKTOP_SMOKE_PLAYER_URL")).isNullOrBlank()
+    if (!smokeLaunch) {
+        val claim = DesktopSingleInstance.claim(com.nuvio.app.core.storage.DesktopStorage.rootDir)
+        if (claim is DesktopSingleInstance.Outcome.Secondary) {
+            System.err.println(
+                "Nuvio is already running; " +
+                    if (claim.signalled) "asked it to come forward and exiting." else "exiting."
+            )
+            System.exit(0)
+        }
+    }
     configureDesktopFileLogging()
     // Opt-in: dumps raw addon stream payloads so unparsed fields are visible. See
     // StreamPayloadDiagnostics — off by default, since it logs whole stream objects.
@@ -476,6 +491,7 @@ fun main() {
             P2pStreamingEngine.shutdown()
             exitApplication()
         }
+        DesktopApplicationExit.install(exitDesktopApplication)
 
         Window(
             onCloseRequest = {
@@ -524,6 +540,22 @@ fun main() {
                     ?: return@LaunchedEffect
                 val images = withContext(Dispatchers.IO) { loadDesktopWindowIconImages(iconUrl) }
                 if (images.isNotEmpty()) window.iconImages = images
+            }
+            // A second launch of Nuvio lands here instead of opening its own window. Same restore
+            // as the tray's "Open Nuvio": the window may be hidden to the tray or iconified.
+            DisposableEffect(window) {
+                DesktopSingleInstance.onActivate = {
+                    EventQueue.invokeLater {
+                        window.isVisible = true
+                        if (window.extendedState and Frame.ICONIFIED != 0) {
+                            window.extendedState = Frame.NORMAL
+                        }
+                        window.toFront()
+                        window.requestFocus()
+                        DesktopIdleHeapTrim.onWindowVisibilityChanged(visible = true)
+                    }
+                }
+                onDispose { DesktopSingleInstance.onActivate = null }
             }
             DisposableEffect(window, closeToTray) {
                 val uninstallTray = if (closeToTray) {

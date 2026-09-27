@@ -33,6 +33,7 @@ import nuvio.composeapp.generated.resources.compose_settings_page_discover
 import nuvio.composeapp.generated.resources.compose_settings_page_playback
 import nuvio.composeapp.generated.resources.random_play_title
 import nuvio.composeapp.generated.resources.compose_settings_page_qualicache
+import nuvio.composeapp.generated.resources.compose_settings_page_poster_service
 import nuvio.composeapp.generated.resources.compose_settings_page_plugins
 import nuvio.composeapp.generated.resources.compose_settings_page_root
 import nuvio.composeapp.generated.resources.compose_settings_page_streams
@@ -205,6 +206,11 @@ internal enum class SettingsPage(
     ),
     QualiCache(
         titleRes = Res.string.compose_settings_page_qualicache,
+        category = SettingsCategory.General,
+        parentPage = Integrations,
+    ),
+    PosterService(
+        titleRes = Res.string.compose_settings_page_poster_service,
         category = SettingsCategory.General,
         parentPage = Integrations,
     ),

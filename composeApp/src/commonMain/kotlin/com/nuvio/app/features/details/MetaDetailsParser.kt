@@ -276,7 +276,8 @@ internal object MetaDetailsParser {
                 season = video.int("season"),
                 episode = video.int("episode"),
                 overview = video.string("overview") ?: video.string("description"),
-                runtime = video.int("runtime"),
+                // Addons send this as a number, a numeric string or text like "45 min" / "1h 30m".
+                runtime = parseRuntimeMinutes((video["runtime"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()),
                 streams = video.embeddedStreams(),
             )
         }

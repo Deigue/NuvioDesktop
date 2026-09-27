@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.nuvio.app.DesktopApplicationExit
 import com.nuvio.app.core.ui.NuvioPosterCard
 import com.nuvio.app.core.ui.NuvioShelfSection
 import com.nuvio.app.core.ui.navigationKey
@@ -94,11 +95,11 @@ import com.nuvio.app.features.home.components.immersiveHeroContentOffsetY
 import com.nuvio.app.features.home.components.immersiveHeroSideScrimStops
 import com.nuvio.app.features.home.components.immersiveRowBodyEnter
 import com.nuvio.app.features.home.components.immersiveRowBodyExit
+import com.nuvio.app.features.home.components.immersiveRowFadeBounds
 import com.nuvio.app.features.home.components.immersiveRowTransition
 import com.nuvio.app.features.home.components.immersiveShelfScrimStops
 import com.nuvio.app.features.home.immersiveCatalogPosterBaseWidthDp
 import com.nuvio.app.features.home.immersiveShelfHeightDp
-import com.nuvio.app.features.home.IMMERSIVE_SHELF_BOTTOM_PADDING_DP
 import com.nuvio.app.features.home.IMMERSIVE_SHELF_TOP_PADDING_DP
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -241,6 +242,16 @@ actual fun GameModeScreen(
     fun launchGame(game: GameEntry) {
         controller.launch(game).onSuccess { pid ->
             message = if (pid != null) "Started ${game.title}  •  PID $pid" else "Started ${game.title}"
+            if (settings.closeAfterLaunch) {
+                // The process (or the shell hand-off for a protocol/shortcut launch) is already
+                // under way; the pause is only so the status line is readable before the window
+                // goes, and so a launcher that re-execs itself is not racing our exit.
+                message = "Started ${game.title}  •  closing Nuvio"
+                scope.launch {
+                    delay(CloseAfterLaunchDelayMs)
+                    withContext(Dispatchers.Main) { DesktopApplicationExit.request() }
+                }
+            }
         }.onFailure { error ->
             message = error.message ?: "Could not start ${game.title}"
         }
@@ -497,6 +508,9 @@ actual fun GameModeScreen(
 /** How long the wheel is ignored after a row step; the same lock TV Mode uses. */
 private const val ImmersiveWheelLockMs = 220L
 
+/** Pause between a successful game start and Nuvio exiting when "close after launch" is on. */
+private const val CloseAfterLaunchDelayMs = 1_500L
+
 @Composable
 private fun GameLibraryContent(
     shelfRows: List<GameShelfRow>,
@@ -596,7 +610,8 @@ private fun GameLibraryContent(
                 )
                 .padding(
                     top = IMMERSIVE_SHELF_TOP_PADDING_DP.dp,
-                    bottom = IMMERSIVE_SHELF_BOTTOM_PADDING_DP.dp,
+                    // Applied inside each row instead; see immersiveRowFadeBounds.
+                    bottom = 0.dp,
                 ),
             contentAlignment = Alignment.TopStart,
         ) {
@@ -623,6 +638,7 @@ private fun GameLibraryContent(
                 NuvioShelfSection(
                     title = shelfRow.row.name,
                     entries = shelfRow.games,
+                    modifier = Modifier.immersiveRowFadeBounds(),
                     headerHorizontalPadding = sectionPadding,
                     rowContentPadding = PaddingValues(horizontal = sectionPadding),
                     showHeaderAccent = showHeaderAccent,

@@ -68,6 +68,10 @@ data class DiscoverUiState(
     val isLoading: Boolean = false,
     val nextSkip: Int? = null,
     val consecutiveDuplicatePages: Int = 0,
+    // Whether the selected catalog pages, as learned from its first response: a full page means
+    // it does even when the manifest never advertised `skip`. The browser row keys its
+    // infinite-scroll mode off this, so it agrees with the feed that actually fetches the pages.
+    val paginates: Boolean = false,
     val emptyStateReason: DiscoverEmptyStateReason? = null,
     val errorMessage: String? = null,
 ) {

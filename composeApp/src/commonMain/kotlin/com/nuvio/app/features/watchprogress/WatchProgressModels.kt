@@ -186,6 +186,15 @@ data class ContinueWatchingItem(
     val logo: String? = null,
     val poster: String? = null,
     val background: String? = null,
+    /**
+     * Poster-service art, applied on Home only (see `withCachedCustomPosters`). Kept beside
+     * [poster]/[background] rather than replacing them, so the card's artwork chain still falls
+     * back to the original art when the service has none.
+     */
+    val customPoster: String? = null,
+    val customLandscape: String? = null,
+    /** Custom art outranks the episode still too (the poster service's Continue Watching "All"). */
+    val customArtFirst: Boolean = false,
     val seasonNumber: Int? = null,
     val episodeNumber: Int? = null,
     val episodeTitle: String? = null,

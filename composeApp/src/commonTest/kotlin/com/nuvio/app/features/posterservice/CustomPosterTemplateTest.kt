@@ -1,4 +1,4 @@
-package com.nuvio.app.features.tmdb
+package com.nuvio.app.features.posterservice
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -25,10 +25,9 @@ private const val STREMIO_ANIME_TEMPLATE =
     "https://postersplus.stremio.ru/poster?tmdb_id={tmdb_id}&imdb_id={imdb_id}" +
         "&stremio_id={id}&type={type}"
 
-private fun settings(template: String, enabled: Boolean = true, apiKey: String = "") = TmdbSettings(
-    apiKey = apiKey,
-    libraryPosterEnabled = enabled,
-    libraryPosterUrlTemplate = template,
+private fun settings(template: String, enabled: Boolean = true) = CustomPosterSettings(
+    enabled = enabled,
+    posterUrlTemplate = template,
 )
 
 class CustomPosterTemplateTest {
@@ -112,11 +111,11 @@ class CustomPosterTemplateTest {
     @Test
     fun `key placeholders are filled from the user's own keys`() {
         val url = customPosterUrl(
-            settings = settings(KEYED_TEMPLATE, apiKey = "tmdb-key-value"),
+            settings = settings(KEYED_TEMPLATE),
             imdbId = "tt0120689",
             tmdbId = "497",
             type = "movie",
-            mdbListApiKey = "mdblist-key-value",
+            keys = CustomPosterKeys(tmdbApiKey = "tmdb-key-value", mdbListApiKey = "mdblist-key-value"),
         )
 
         assertEquals(
@@ -131,11 +130,10 @@ class CustomPosterTemplateTest {
         // Opposite of the id rule: an instance holding its own TMDB key serves `tmdb_key=` exactly
         // as it serves the parameter being absent, so refusing to build the URL would break it.
         val url = customPosterUrl(
-            settings = settings(KEYED_TEMPLATE, apiKey = ""),
+            settings = settings(KEYED_TEMPLATE),
             imdbId = "tt0120689",
             tmdbId = "497",
             type = "movie",
-            mdbListApiKey = null,
         )
 
         assertEquals(
@@ -148,11 +146,11 @@ class CustomPosterTemplateTest {
     @Test
     fun `a missing id still suppresses a keyed template`() {
         val url = customPosterUrl(
-            settings = settings(KEYED_TEMPLATE, apiKey = "tmdb-key-value"),
+            settings = settings(KEYED_TEMPLATE),
             imdbId = "tt0120689",
             tmdbId = null,
             type = "movie",
-            mdbListApiKey = "mdblist-key-value",
+            keys = CustomPosterKeys(tmdbApiKey = "tmdb-key-value", mdbListApiKey = "mdblist-key-value"),
         )
 
         assertNull(url)
@@ -252,4 +250,79 @@ class CustomPosterTemplateTest {
         assertNull(url)
     }
 
+
+    @Test
+    fun `the landscape template fills landscapePoster and leaves the portrait poster alone`() {
+        val preview = com.nuvio.app.features.home.MetaPreview(
+            id = "tmdb:497",
+            type = "movie",
+            name = "The Green Mile",
+            poster = "https://image.tmdb.org/t/p/w500/plain.jpg",
+            banner = "https://image.tmdb.org/t/p/w1280/backdrop.jpg",
+        )
+
+        val styled = preview.withCustomPosters(
+            settings = CustomPosterSettings(
+                enabled = true,
+                landscapeUrlTemplate = "https://posters.example/landscape/{type}/{tmdb_id}",
+            ),
+            imdbId = null,
+            tmdbId = 497,
+        )
+
+        assertEquals("https://posters.example/landscape/movie/497", styled.landscapePoster)
+        assertEquals(preview.poster, styled.poster)
+        assertNull(styled.posterFallback)
+        assertEquals(preview.banner, styled.banner)
+    }
+
+    @Test
+    fun `both templates apply independently to one preview`() {
+        val preview = com.nuvio.app.features.home.MetaPreview(
+            id = "tmdb:497",
+            type = "movie",
+            name = "The Green Mile",
+            poster = "plain",
+        )
+
+        val styled = preview.withCustomPosters(
+            settings = CustomPosterSettings(
+                enabled = true,
+                posterUrlTemplate = "https://posters.example/p/{tmdb_id}",
+                landscapeUrlTemplate = "https://posters.example/l/{imdb_id}",
+            ),
+            imdbId = "tt0120689",
+            tmdbId = 497,
+        )
+
+        assertEquals("https://posters.example/p/497", styled.poster)
+        assertEquals("plain", styled.posterFallback)
+        assertEquals("https://posters.example/l/tt0120689", styled.landscapePoster)
+    }
+
+    @Test
+    fun `id requirements are read across both active templates`() {
+        val settings = CustomPosterSettings(
+            enabled = true,
+            posterUrlTemplate = "https://posters.example/p/{tmdb_id}",
+            landscapeUrlTemplate = "https://posters.example/l/{imdb_id}",
+        )
+        assertTrue(settings.customPosterTemplateNeedsImdbId())
+        assertTrue(settings.customPosterTemplateNeedsTmdbId())
+        assertTrue(!settings.copy(landscapeUrlTemplate = "").customPosterTemplateNeedsImdbId())
+        assertTrue(!settings.copy(enabled = false).customPosterTemplateNeedsTmdbId())
+    }
+
+    @Test
+    fun `a landscape request against a blank landscape template yields nothing`() {
+        val url = customPosterUrl(
+            settings = settings(QUERY_TEMPLATE),
+            imdbId = "tt0120689",
+            tmdbId = "497",
+            type = "movie",
+            shape = CustomPosterShape.Landscape,
+        )
+
+        assertNull(url)
+    }
 }

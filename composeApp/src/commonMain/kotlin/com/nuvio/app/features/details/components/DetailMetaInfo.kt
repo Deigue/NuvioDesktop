@@ -53,6 +53,8 @@ import com.nuvio.app.features.mdblist.MdbListMetadataService.PROVIDER_MAL
 import com.nuvio.app.features.mdblist.MdbListMetadataService.PROVIDER_TMDB
 import com.nuvio.app.features.mdblist.MdbListMetadataService.PROVIDER_TOMATOES
 import com.nuvio.app.features.mdblist.MdbListMetadataService.PROVIDER_TRAKT
+import com.nuvio.app.features.mdblist.RottenTomatoesStatus
+import com.nuvio.app.features.mdblist.rottenTomatoesStatus
 import nuvio.composeapp.generated.resources.*
 import nuvio.composeapp.generated.resources.rating_audience_score
 import nuvio.composeapp.generated.resources.rating_imdb
@@ -75,6 +77,8 @@ import kotlin.math.roundToInt
 fun DetailMetaInfo(
     meta: MetaDetails,
     modifier: Modifier = Modifier,
+    /** Off hides the addon's own IMDb score; the MDBList row follows the MDBList provider settings. */
+    showOverallRatings: Boolean = true,
 ) {
     Column(
         modifier = modifier
@@ -87,6 +91,7 @@ fun DetailMetaInfo(
         val ageBadge = meta.ageRating?.trim()?.takeIf { it.isNotBlank() }
         val hasMdbImdbRating = meta.externalRatings.any { it.source == PROVIDER_IMDB }
         val validImdbRating = meta.imdbRating
+            ?.takeIf { showOverallRatings }
             ?.takeIf { raw -> raw.toDoubleOrNull()?.let { it > 0.0 } == true }
         val hasMetaRow = releaseLine != null ||
             runtimeText != null ||
@@ -242,15 +247,20 @@ internal fun RatingsRow(
                         modifier = Modifier.size(width = visuals.logoWidth, height = 16.dp),
                     )
                 } else if (visuals.logo != null) {
+                    // The certified badges carry a wreath/ribbon that is unreadable at 16.dp.
+                    val logoHeight = when (rating.rottenTomatoesStatus) {
+                        RottenTomatoesStatus.CERTIFIED_FRESH, RottenTomatoesStatus.VERIFIED_HOT -> 24.dp
+                        else -> 16.dp
+                    }
                     Image(
                         // 48px sources drawn at 16.dp — a 3x reduction at the density a 1080p
                         // window runs at. No FilterQuality setting fixes that on its own: every
                         // one of them is a single unmipped sample, so the reduction drops most of
                         // the source and stair-steps these logos' fine shapes. The shared painter
                         // box-halves first, which is what actually makes them clean.
-                        painter = rememberNuvioDownscaledPainter(imageResource(visuals.logo)),
+                        painter = rememberNuvioDownscaledPainter(imageResource(visuals.logoFor(rating))),
                         contentDescription = visuals.displayName,
-                        modifier = Modifier.size(width = visuals.logoWidth, height = 16.dp),
+                        modifier = Modifier.size(width = maxOf(visuals.logoWidth, logoHeight), height = logoHeight),
                     )
                 } else {
                     MalRatingSourceLabel(
@@ -379,6 +389,18 @@ private data class RatingVisuals(
     val valueColor: Color,
     val format: (Double) -> String,
 )
+
+/** Rotten Tomatoes sources swap to the badge for their score (fresh / rotten / certified, …). */
+private fun RatingVisuals.logoFor(rating: MetaExternalRating): DrawableResource =
+    when (rating.rottenTomatoesStatus) {
+        RottenTomatoesStatus.FRESH -> Res.drawable.rating_rotten_tomatoes
+        RottenTomatoesStatus.ROTTEN -> Res.drawable.rating_rotten_tomatoes_rotten
+        RottenTomatoesStatus.CERTIFIED_FRESH -> Res.drawable.rating_rotten_tomatoes_certified
+        RottenTomatoesStatus.HOT -> Res.drawable.rating_audience_score
+        RottenTomatoesStatus.STALE -> Res.drawable.rating_audience_stale
+        RottenTomatoesStatus.VERIFIED_HOT -> Res.drawable.rating_audience_verified_hot
+        null -> checkNotNull(logo)
+    }
 
 private val ratingVisuals = listOf(
     RatingVisuals(

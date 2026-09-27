@@ -112,6 +112,7 @@ internal fun desktopSettingsSidebarSubItems(
             subPage(SettingsPage.TmdbEnrichment),
             subPage(SettingsPage.MdbListRatings),
             subPage(SettingsPage.QualiCache),
+            subPage(SettingsPage.PosterService),
             subPage(SettingsPage.Debrid),
             subPage(SettingsPage.TraktAuthentication),
             subPage(SettingsPage.SimklAuthentication),

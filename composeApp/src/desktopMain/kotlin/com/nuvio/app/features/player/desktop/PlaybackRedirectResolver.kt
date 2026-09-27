@@ -2,8 +2,7 @@ package com.nuvio.app.features.player.desktop
 
 import co.touchlab.kermit.Logger
 import com.nuvio.app.core.storage.DesktopStorage
-import com.nuvio.app.features.player.isExplicitProviderDiagnosticVideoUrl
-import com.nuvio.app.features.player.playbackSourceFailure
+import com.nuvio.app.features.player.isPlaybackPlaceholderUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.URI
@@ -126,7 +125,9 @@ internal object PlaybackRedirectResolver {
         PlaybackRedirectResolution.Outcome.NoRedirect,
         PlaybackRedirectResolution.Outcome.CacheableRedirect,
     )
-    private val verdictStore by lazy { DesktopStorage.store("nuvio_playback_redirect_verdicts") }
+    // v2: verdicts written before a 4xx/5xx probe answer was classified Failed may hold a bogus
+    // NoRedirect for a resolver that really redirects, so they are dropped rather than trusted.
+    private val verdictStore by lazy { DesktopStorage.store("nuvio_playback_redirect_verdicts_v2") }
 
     private fun rememberedVerdict(endpoint: String): EndpointVerdict? {
         endpointVerdicts[endpoint]?.let { return it }
@@ -150,9 +151,14 @@ internal object PlaybackRedirectResolver {
         }
     }
 
+    /**
+     * [forceProbe] skips the endpoint-verdict memory: a mid-playback recovery must know what the
+     * resolver answers *now* (a working redirect, or its status clip) before reopening it.
+     */
     suspend fun resolve(
         sourceUrl: String,
         sourceHeaders: Map<String, String>,
+        forceProbe: Boolean = false,
     ): PlaybackRedirectResolution = withContext(Dispatchers.IO) {
         val normalized = sourceUrl.trim()
         val isHttp = normalized.startsWith("http://", ignoreCase = true) ||
@@ -164,7 +170,7 @@ internal object PlaybackRedirectResolver {
             )
         }
         val endpoint = endpointKey(normalized)
-        rememberedVerdict(endpoint)?.let { verdict ->
+        rememberedVerdict(endpoint)?.takeUnless { forceProbe }?.let { verdict ->
             val expired = verdict.outcome == PlaybackRedirectResolution.Outcome.Failed &&
                 System.currentTimeMillis() - verdict.atMs > FAILED_VERDICT_TTL_MS
             if (expired) {
@@ -201,7 +207,22 @@ internal object PlaybackRedirectResolver {
                 )
             }
             val location = response.location
-            if (response.statusCode !in 300..399 || location == null) break
+            if (response.statusCode !in 300..399 || location == null) {
+                // Only a 2xx says anything about the endpoint. A 4xx/5xx (a throttled resolver's
+                // 429, a gateway's 502) is a transient answer about *this* request; classifying
+                // it NoRedirect would persist for a week and switch pinning off for the whole
+                // resolver, so every later seek would re-run its resolve — the very thing that
+                // earns the next 429.
+                if (response.statusCode !in 200..299) {
+                    log.w { "probe got HTTP ${response.statusCode} hop=$hops host=${hostOf(current)}" }
+                    return PlaybackRedirectResolution.unchanged(
+                        normalized,
+                        PlaybackRedirectResolution.Outcome.Failed,
+                        hops,
+                    )
+                }
+                break
+            }
 
             hops += 1
             everyRedirectCacheable = everyRedirectCacheable &&
@@ -221,28 +242,15 @@ internal object PlaybackRedirectResolver {
 
         val outcome = when {
             hops == 0 -> PlaybackRedirectResolution.Outcome.NoRedirect
-            isExplicitProviderDiagnosticVideoUrl(current) ||
-                playbackSourceFailure(current) != null ||
-                isProviderStatusClipUrl(current) ->
-                PlaybackRedirectResolution.Outcome.Placeholder
+            // AIOStreams answers a resolve whose whole failover chain failed with a 307 onto its
+            // own `/static/<status>.mp4` (429.mp4 for a rate limit). It must not be pinned: the
+            // source URL is what a retry re-resolves, and the next resolve may well succeed.
+            isPlaybackPlaceholderUrl(current) -> PlaybackRedirectResolution.Outcome.Placeholder
             everyRedirectCacheable -> PlaybackRedirectResolution.Outcome.CacheableRedirect
             else -> PlaybackRedirectResolution.Outcome.Pinned
         }
         val playbackUrl = if (outcome == PlaybackRedirectResolution.Outcome.Pinned) current else normalized
         return PlaybackRedirectResolution(normalized, playbackUrl, hops, outcome)
-    }
-
-    /**
-     * AIOStreams answers a usenet resolve that went wrong with a 307 onto its own
-     * `…/download_failed.mp4` (and siblings) — a real 120 s clip the diagnostic path already
-     * recognises by duration. It must not be pinned: the source URL is what the retry re-resolves.
-     */
-    internal fun isProviderStatusClipUrl(url: String): Boolean {
-        val file = runCatching { URI(url).path.orEmpty() }.getOrDefault("")
-            .substringAfterLast('/')
-            .lowercase(Locale.ROOT)
-        return file.endsWith(".mp4") &&
-            (file.contains("failed") || file.contains("error") || file.contains("status"))
     }
 
     /** Host plus up to three leading path segments; the resolver, not the specific link. */

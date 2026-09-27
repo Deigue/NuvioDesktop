@@ -1,5 +1,7 @@
 package com.nuvio.app.features.details
 
+import com.nuvio.app.features.posterservice.CustomPosterScreen
+import com.nuvio.app.features.posterservice.rememberCustomPosters
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -222,8 +224,18 @@ fun MetaDetailsScreen(
     modifier: Modifier = Modifier,
 ) {
     val uiState by MetaDetailsRepository.uiState.collectAsStateWithLifecycle()
-    val displayedMeta = uiState.meta?.takeIf { it.type == type && it.id == id }
+    val repositoryMeta = uiState.meta?.takeIf { it.type == type && it.id == id }
         ?: MetaDetailsRepository.peek(type, id)
+    // Collection parts take the poster service here; More Like This already has it from the repository.
+    val collectionItems = rememberCustomPosters(
+        repositoryMeta?.collectionItems.orEmpty(),
+        CustomPosterScreen.Details,
+    )
+    val displayedMeta = remember(repositoryMeta, collectionItems) {
+        repositoryMeta?.takeIf { it.collectionItems !== collectionItems && it.collectionItems.isNotEmpty() }
+            ?.copy(collectionItems = collectionItems)
+            ?: repositoryMeta
+    }
     val metaScreenSettingsUiState by remember {
         MetaScreenSettingsRepository.ensureLoaded()
         MetaScreenSettingsRepository.uiState
@@ -383,10 +395,10 @@ fun MetaDetailsScreen(
         displayedMeta?.id,
         displayedMeta?.videos,
         deferredMetaWorkAllowed,
-        metaScreenSettingsUiState.episodeRatingsEnabled,
+        metaScreenSettingsUiState.episodeRatingsVisibility.showRatings,
     ) {
         val metaForRatings = displayedMeta
-        if (!metaScreenSettingsUiState.episodeRatingsEnabled) {
+        if (!metaScreenSettingsUiState.episodeRatingsVisibility.showRatings) {
             episodeImdbRatings = emptyMap()
             return@LaunchedEffect
         }
@@ -2204,6 +2216,7 @@ fun MetaDetailsScreen(
                                             progressByVideoId = progressByVideoId,
                                             watchedKeys = watchedUiState.watchedKeys,
                                             episodeRatings = episodeImdbRatings,
+                                            episodeRatingsVisibility = metaScreenSettingsUiState.episodeRatingsVisibility,
                                             blurUnwatchedEpisodes = metaScreenSettingsUiState.blurUnwatchedEpisodes,
                                             onEpisodeClick = onEpisodePlayClick,
                                             onEpisodeLongPress = { video -> selectedEpisodeForActions = video },
@@ -3462,7 +3475,7 @@ private fun ConfiguredMetaSections(
                 )
             }
             MetaScreenSectionKey.OVERVIEW -> {
-                DetailMetaInfo(meta = meta)
+                DetailMetaInfo(meta = meta, showOverallRatings = settings.showOverallRatings)
             }
             MetaScreenSectionKey.PRODUCTION -> {
                 if (hasProductionSection) {
@@ -3515,6 +3528,7 @@ private fun ConfiguredMetaSections(
                         progressByVideoId = progressByVideoId,
                         watchedKeys = watchedKeys,
                         episodeRatings = episodeImdbRatings,
+                        episodeRatingsVisibility = settings.episodeRatingsVisibility,
                         blurUnwatchedEpisodes = blurUnwatchedEpisodes,
                         onEpisodeClick = onEpisodeClick,
                         onEpisodeLongPress = onEpisodeLongPress,

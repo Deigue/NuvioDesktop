@@ -47,6 +47,9 @@ fun HomeCatalogRowSection(
     // 1-based position of this row among the home content rows, appended to the header when the
     // "Number catalog rows" setting is on. Null on every surface that isn't the home row list.
     rowNumber: Int? = null,
+    // Addon name shown as a tag after the title when "Show catalog provider" is on. Passed only
+    // by the home row list; null on every other surface.
+    providerTag: String? = null,
     // TV Mode's row-jump dots, rendered on the header line next to the title. Null everywhere else.
     headerTrailingContent: (@Composable () -> Unit)? = null,
     bodyModifier: Modifier = Modifier,
@@ -78,6 +81,7 @@ fun HomeCatalogRowSection(
             onPosterClick = onPosterClick,
             onPosterLongClick = onPosterLongClick,
             rowNumber = rowNumber,
+            providerTag = providerTag,
             headerTrailingContent = headerTrailingContent,
             bodyModifier = bodyModifier,
             titleContent = titleContent,
@@ -106,6 +110,7 @@ fun HomeCatalogRowSection(
                 onPosterClick = onPosterClick,
                 onPosterLongClick = onPosterLongClick,
                 rowNumber = rowNumber,
+                providerTag = providerTag,
                 headerTrailingContent = headerTrailingContent,
                 bodyModifier = bodyModifier,
                 titleContent = titleContent,
@@ -137,6 +142,7 @@ private fun HomeCatalogRowSectionContent(
     onPosterClick: ((MetaPreview) -> Unit)?,
     onPosterLongClick: ((MetaPreview) -> Unit)?,
     rowNumber: Int?,
+    providerTag: String?,
     headerTrailingContent: (@Composable () -> Unit)?,
     bodyModifier: Modifier,
     titleContent: (@Composable () -> Unit)?,
@@ -163,6 +169,7 @@ private fun HomeCatalogRowSectionContent(
         headerHorizontalPadding = sectionPadding,
         rowContentPadding = PaddingValues(horizontal = sectionPadding),
         showHeaderAccent = !homeCatalogSettings.hideCatalogUnderline,
+        titleTag = providerTag?.takeIf { homeCatalogSettings.catalogProviderTagEnabled && it.isNotBlank() },
         focusedItemIndex = focusedItemIndex,
         onHoverItem = onHoverItem,
         onViewAllClick = onViewAllClick,

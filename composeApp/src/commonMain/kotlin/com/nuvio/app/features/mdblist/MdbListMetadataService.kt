@@ -144,7 +144,12 @@ object MdbListMetadataService {
         val pending = cacheMutex.withLock {
             val loaded = ensureCacheLoaded()
             loaded[cacheKey]?.let { entry ->
-                if (entry.expiresAtMs > now) return MdbListEnrichmentData(entry.ratings, entry.keywords)
+                if (entry.expiresAtMs > now) {
+                    return MdbListEnrichmentData(
+                        entry.ratings.withRottenTomatoesCertification(entry.keywords),
+                        entry.keywords,
+                    )
+                }
             }
             if (rateLimitedUntilMs > now) return MdbListEnrichmentData()
             inFlightRequests[cacheKey] ?: CompletableDeferred<MdbListEnrichmentData>().also { deferred ->
@@ -250,7 +255,7 @@ object MdbListMetadataService {
             MetaExternalRating(source = providerId, value = value)
         }
         val keywords = parsed.keywords.mapNotNull { it.name }.filter { it.isNotBlank() }
-        return MdbListEnrichmentData(ratings, keywords)
+        return MdbListEnrichmentData(ratings.withRottenTomatoesCertification(keywords), keywords)
     }
 
     /**

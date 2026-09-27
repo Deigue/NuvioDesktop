@@ -231,7 +231,7 @@ fun SearchScreen(
         }
     }
 
-    LaunchedEffect(addonRefreshKey, homeCatalogSettingsUiState.hideUnreleasedContent) {
+    LaunchedEffect(addonRefreshKey, homeCatalogSettingsUiState.hideUnreleasedContent, homeCatalogSettingsUiState.hideWatchedContent) {
         SearchRepository.refreshDiscover(addonsUiState.addons)
     }
 

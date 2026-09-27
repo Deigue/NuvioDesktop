@@ -195,6 +195,17 @@ class ImageDiskCacheStrategyTest {
     }
 
     @Test
+    fun `the reported age does not count against the backstop`() = runBlocking<Unit> {
+        // artworks.thetvdb.com: no Cache-Control at all, but CloudFront has held it for five months.
+        // The backstop is our own policy about how long to trust a stable URL, so only the time we
+        // have held the entry counts — otherwise it is stale on arrival and revalidates on every read.
+        val cached = response(code = 200, "age" to "12704009", "etag" to "\"x\"")
+            .copy(responseMillis = System.currentTimeMillis() - 10 * 86_400_000L)
+
+        assertEquals(cached, ImageDiskCacheStrategy.read(cached, request, options).response)
+    }
+
+    @Test
     fun `no-cache without a validator is re-downloaded on every read`() = runBlocking<Unit> {
         val cached = response(code = 200, "cache-control" to "no-cache")
             .copy(responseMillis = System.currentTimeMillis())

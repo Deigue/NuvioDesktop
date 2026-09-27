@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CheckCircleOutline
@@ -46,6 +47,7 @@ import com.nuvio.app.features.home.MetaPreview
 import kotlinx.coroutines.launch
 import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.episodes_cd_watched
+import nuvio.composeapp.generated.resources.poster_cd_in_watchlist
 import nuvio.composeapp.generated.resources.hero_add_to_library
 import nuvio.composeapp.generated.resources.hero_mark_unwatched
 import nuvio.composeapp.generated.resources.hero_mark_watched
@@ -301,11 +303,39 @@ fun NuvioAnimatedWatchedBadge(
     }
 }
 
+/** The watchlist counterpart of [NuvioWatchedBadge]: same size and corner, a bookmark instead. */
+@Composable
+fun NuvioWatchlistBadge(
+    modifier: Modifier = Modifier,
+) {
+    val tokens = MaterialTheme.nuvio
+    Box(
+        modifier = modifier
+            .size(NuvioTokens.Icon.md)
+            .clip(tokens.shapes.avatar)
+            .background(tokens.colors.surfaceCard.copy(alpha = 0.92f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Default.Bookmark,
+            contentDescription = stringResource(Res.string.poster_cd_in_watchlist),
+            tint = tokens.colors.textPrimary,
+            modifier = Modifier.size(NuvioTokens.Icon.xs),
+        )
+    }
+}
+
+/**
+ * The poster's top-right corner: the watched tick, or — only when the title is not watched, so the
+ * two never stack — the optional watchlist bookmark. Watched wins because it is the stronger
+ * statement; a title both saved and finished reads as finished.
+ */
 @Composable
 fun BoxScope.NuvioPosterWatchedOverlay(
     isWatched: Boolean,
     modifier: Modifier = Modifier,
     padding: Dp = NuvioTokens.Space.s6,
+    isInWatchlist: Boolean = false,
 ) {
     NuvioAnimatedWatchedBadge(
         isVisible = isWatched,
@@ -313,6 +343,16 @@ fun BoxScope.NuvioPosterWatchedOverlay(
             .align(Alignment.TopEnd)
             .padding(padding),
     )
+    AnimatedVisibility(
+        visible = isInWatchlist && !isWatched,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = modifier
+            .align(Alignment.TopEnd)
+            .padding(padding),
+    ) {
+        NuvioWatchlistBadge()
+    }
 }
 
 @Composable

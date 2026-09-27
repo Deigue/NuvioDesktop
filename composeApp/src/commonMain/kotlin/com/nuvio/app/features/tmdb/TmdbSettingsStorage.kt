@@ -31,10 +31,6 @@ internal expect object TmdbSettingsStorage {
     fun saveUseMoreLikeThis(enabled: Boolean)
     fun loadUseCollections(): Boolean?
     fun saveUseCollections(enabled: Boolean)
-    fun loadLibraryPosterEnabled(): Boolean?
-    fun saveLibraryPosterEnabled(enabled: Boolean)
-    fun loadLibraryPosterUrlTemplate(): String?
-    fun saveLibraryPosterUrlTemplate(template: String)
     fun loadResolveFilenameCatalogs(): Boolean?
     fun saveResolveFilenameCatalogs(enabled: Boolean)
     fun loadHeroImageSource(): String?

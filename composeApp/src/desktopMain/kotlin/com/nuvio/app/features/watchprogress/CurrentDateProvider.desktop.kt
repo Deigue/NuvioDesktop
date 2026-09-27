@@ -2,7 +2,9 @@ package com.nuvio.app.features.watchprogress
 
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 actual object CurrentDateProvider {
     actual fun todayIsoDate(): String = LocalDate.now().toString()
@@ -15,4 +17,13 @@ actual object CurrentDateProvider {
     actual fun startOfLocalDayEpochMs(isoDate: String): Long? = runCatching {
         LocalDate.parse(isoDate).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
     }.getOrNull()
+
+    actual fun zonedWallClockIsoUtc(isoDate: String, hour: Int, minute: Int, zoneId: String): String? =
+        runCatching {
+            LocalDate.parse(isoDate)
+                .atTime(LocalTime.of(hour, minute))
+                .atZone(ZoneId.of(zoneId))
+                .toInstant()
+                .let(DateTimeFormatter.ISO_INSTANT::format)
+        }.getOrNull()
 }

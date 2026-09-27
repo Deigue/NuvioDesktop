@@ -246,6 +246,33 @@ enum class DesktopPlayerNotificationPosition(val webValue: String) {
     }
 }
 
+/**
+ * How the desktop HUD's bottom control bar is composed. Persisted as three booleans
+ * (`desktop_legacy_hud_enabled` / `desktop_minimal_hud_enabled` / `desktop_ultra_hud_enabled`,
+ * plus `desktop_official_hud_enabled`) so the pre-existing legacy toggle keeps its stored value; the repository guarantees at most one
+ * of them is set.
+ *
+ * [Minimal] is the single-row layout: transport, volume and time on the left, tools on the right,
+ * with the seek bar spanning the full width above them.
+ *
+ * [Ultra] strips that down to the seek bar plus two buttons: a gear that opens a frosted-glass
+ * options popover (volume and every tool icon) and a fullscreen toggle. No transport buttons --
+ * the video surface itself is the play/pause control.
+ *
+ * [Official] is the bottom bar of the official Nuvio Desktop player (NuvioMedia/NuvioDesktop,
+ * which shipped it after this fork split off): an accent play button leading a row of round
+ * icon-only tools, and the volume slider plus a "position / duration" readout on the right,
+ * under a thick edge-to-edge seek bar. Only the bottom bar is ported; the header and side chrome
+ * stay this fork's.
+ */
+enum class DesktopHudLayout {
+    Standard,
+    Legacy,
+    Minimal,
+    Ultra,
+    Official,
+}
+
 enum class DesktopBufferPreset(val label: String, val description: String) {
     Metered(
         "Metered",
@@ -256,6 +283,49 @@ enum class DesktopBufferPreset(val label: String, val description: String) {
     Balanced("Balanced", "Keeps a moderate buffer for reliable playback without excessive read-ahead."),
     Resilient("Resilient", "Uses a large buffer for unstable or high-latency connections."),
 }
+
+/**
+ * Seek-bar hover previews come from a second libmpv instance that opens the same stream and issues
+ * one byte-range request per hovered position. Against a debrid CDN those opens are exactly what
+ * gets rate-limited, so previews can be limited to sources the user controls.
+ */
+enum class DesktopSeekThumbnailMode(val label: String, val description: String) {
+    Off("Off", "No preview frames. The hover card still shows the time and chapter."),
+    Local(
+        "Local",
+        "Previews only for files on this PC and servers on your home network. Debrid and other internet streams, and torrents, get none.",
+    ),
+    Streaming(
+        "Streaming",
+        "Previews for every source. Each hovered position is another request to the stream's host, which can get you rate-limited by debrid providers.",
+    ),
+}
+
+/**
+ * What the desktop player does when a stream that was already playing gets an HTTP 429 (almost
+ * always a seek whose range request the host throttled). TorBox's CDN answers that with a per-IP
+ * ban on one `nexus-N` node lasting over an hour (measured 2026-09-26), so for TorBox "reconnect"
+ * means reopening the same link through another node; other hosts are reopened after a wait.
+ */
+enum class DesktopRateLimitRecoveryMode(val label: String, val description: String) {
+    Off(
+        "Off",
+        "Never reconnect. A rate limit fails over to another source if Stream Failover is on, otherwise playback stops.",
+    ),
+    PreferFailover(
+        "Prefer Failover",
+        "Fail over to another source when Stream Failover is on; reconnect only when it is off.",
+    ),
+    PreferReconnect(
+        "Prefer Reconnect",
+        "Reconnect to the same stream first (TorBox links switch server instantly), then fail over.",
+    ),
+}
+
+/** Choices for the two reconnect waits used on hosts other than TorBox. */
+val RATE_LIMIT_RECONNECT_DELAY_VALUES: List<Int> = listOf(3, 5, 10, 20, 30, 60, 120)
+const val RATE_LIMIT_RECONNECT_FIRST_DEFAULT_SECONDS = 5
+const val RATE_LIMIT_RECONNECT_SECOND_DEFAULT_SECONDS = 20
 
 enum class DesktopMpvConfigMode(val label: String, val description: String) {
     Off("Off", "Use Nuvio's mpv configuration and ignore the custom options below."),

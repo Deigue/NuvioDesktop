@@ -148,6 +148,9 @@ import com.nuvio.app.core.ui.PosterZoomAnchorHolder
 import com.nuvio.app.core.ui.NuvioStatusModal
 import com.nuvio.app.core.ui.DesktopNavigationGestureBridge
 import com.nuvio.app.core.ui.DesktopBackRequestSource
+import androidx.compose.runtime.rememberUpdatedState
+import com.nuvio.app.core.ui.PosterZoomOverlayCoordinator
+import com.nuvio.app.core.ui.unclaimedSecondaryClick
 import com.nuvio.app.core.ui.PlatformBackHandler
 import com.nuvio.app.core.ui.platformExitApp
 import com.nuvio.app.core.ui.configurePlatformImageLoader
@@ -283,6 +286,7 @@ import com.nuvio.app.features.search.SearchScreen
 import com.nuvio.app.features.search.SearchRepository
 import com.nuvio.app.features.search.discoverCatalogDisplayLabels
 import com.nuvio.app.features.settings.ApiKeysOnboardingHost
+import com.nuvio.app.features.setup.FirstRunWizardController
 import com.nuvio.app.features.setup.FirstRunWizardHost
 import com.nuvio.app.features.settings.SettingsScreen
 import com.nuvio.app.features.settings.HomescreenSettingsScreen
@@ -384,7 +388,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -505,6 +511,7 @@ data class CatalogRoute(
     val collectionId: String? = null,
     val folderId: String? = null,
     val sourceKey: String? = null,
+    val discoverRowKey: String? = null,
 ) {
     constructor(
         title: String,
@@ -517,6 +524,7 @@ data class CatalogRoute(
             is CatalogTarget.Addon -> CatalogTargetKind.ADDON
             is CatalogTarget.Library -> CatalogTargetKind.LIBRARY
             is CatalogTarget.CollectionSource -> CatalogTargetKind.COLLECTION_SOURCE
+            is CatalogTarget.DiscoverRow -> CatalogTargetKind.DISCOVER_ROW
         }.name,
         contentType = target.contentType,
         supportsPagination = target.supportsPagination,
@@ -528,6 +536,7 @@ data class CatalogRoute(
         collectionId = (target as? CatalogTarget.CollectionSource)?.collectionId,
         folderId = (target as? CatalogTarget.CollectionSource)?.folderId,
         sourceKey = (target as? CatalogTarget.CollectionSource)?.sourceKey,
+        discoverRowKey = (target as? CatalogTarget.DiscoverRow)?.rowKey,
     )
 
     fun toCatalogTarget(): CatalogTarget =
@@ -552,6 +561,11 @@ data class CatalogRoute(
                 sourceKey = requireNotNull(sourceKey),
                 contentType = contentType,
                 supportsPagination = supportsPagination,
+            )
+
+            CatalogTargetKind.DISCOVER_ROW -> CatalogTarget.DiscoverRow(
+                rowKey = requireNotNull(discoverRowKey),
+                contentType = contentType,
             )
         }
 }
@@ -1505,7 +1519,12 @@ private fun MainAppContent(
     // Search, Library, and a collection folder all render the same TV Mode / Adaptive Hero
     // hero as Home, so they count as "home" here too — otherwise their hero trailers could
     // never play.
-    LaunchedEffect(selectedTab, currentBackStackEntry, gameModeActive) {
+    // The setup wizard is the same kind of cover: a centred sheet the native trailer canvas would
+    // paint straight through, on a fresh install where the user is still reading it.
+    val setupWizardVisible by remember {
+        FirstRunWizardController.uiState.map { it.visible }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = FirstRunWizardController.uiState.value.visible)
+    LaunchedEffect(selectedTab, currentBackStackEntry, gameModeActive, setupWizardVisible) {
         val onTabsWithHomeStyleTab = (
             selectedTab == AppScreenTab.Home ||
                 selectedTab == AppScreenTab.Search ||
@@ -1516,7 +1535,9 @@ private fun MainAppContent(
         val onFolderDetail = navController.currentDestination?.hasRoute<FolderDetailRoute>() == true
         // Game mode covers the home screen, and the desktop trailer surface is a native canvas
         // that would paint straight over it — so the hero must count as "not home" while it is up.
-        HomeHeroTrailerGate.setHomeActive((onTabsWithHomeStyleTab || onFolderDetail) && !gameModeActive)
+        HomeHeroTrailerGate.setHomeActive(
+            (onTabsWithHomeStyleTab || onFolderDetail) && !gameModeActive && !setupWizardVisible,
+        )
     }
 
     // Game mode's library takes keyboard focus while it is up, and Compose drops focus entirely
@@ -2387,6 +2408,11 @@ private fun MainAppContent(
                     true
                 },
         ) {
+            // Read from the right-click-back handler at click time, which a plain capture would pin
+            // to the value from whichever composition installed it.
+            val latestPosterOverlayOpen = rememberUpdatedState(
+                selectedPosterActionTarget != null || selectedContinueWatchingForActions != null,
+            )
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -2410,7 +2436,25 @@ private fun MainAppContent(
                 NavHost(
                     navController = navController,
                     startDestination = TabsRoute,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        // Right-click on empty space in a pushed screen (anything with a back arrow)
+                        // acts as Back — the same request the mouse Back button sends. Posters and
+                        // every other right-click action consume the press first, so they win.
+                        .unclaimedSecondaryClick(
+                            enabled = {
+                                val destination = navController.currentDestination
+                                destination != null &&
+                                    !destination.hasRoute<TabsRoute>() &&
+                                    !destination.hasRoute<PlayerRoute>() &&
+                                    navController.previousBackStackEntry != null &&
+                                    latestPosterOverlayOpen.value.not() &&
+                                    !PosterZoomOverlayCoordinator.isVisible
+                            },
+                            onClick = {
+                                DesktopNavigationGestureBridge.requestBack(DesktopBackRequestSource.Mouse)
+                            },
+                        ),
                 ) {
                 composable<TabsRoute> {
                     PlatformBackHandler(
@@ -3838,6 +3882,7 @@ private fun MainAppContent(
                     val route = backStackEntry.toRoute<CatalogRoute>()
                     val target = route.toCatalogTarget()
                     CatalogScreen(
+                        entryKey = backStackEntry.id,
                         title = route.title,
                         subtitle = route.subtitle,
                         target = target,

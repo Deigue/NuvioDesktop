@@ -94,6 +94,13 @@ data class MetaPreview(
     // Deliberately NOT used for navigation, streams or playback: those must keep addressing the
     // provider's own row, which is the whole point of a cloud-library catalog.
     val metaLookupId: String? = null,
+    /**
+     * TMDB/TVDB ids the addon attached to a `tt…`-addressed row (AIOMetadata's `_tmdbId`,
+     * `_tvdbId`). Not derivable otherwise for titles whose TMDB record has no IMDb link — common for
+     * TVDB-sourced shows — so poster services asking for `{tmdb_id}` would get nothing.
+     */
+    val addonTmdbId: Int? = null,
+    val addonTvdbId: String? = null,
     val metaLookupType: String? = null,
     /**
      * True while this copy is a pre-enrichment placeholder: its logo, genres, synopsis, ratings

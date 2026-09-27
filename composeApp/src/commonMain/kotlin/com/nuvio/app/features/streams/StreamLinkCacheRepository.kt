@@ -1,5 +1,6 @@
 package com.nuvio.app.features.streams
 
+import com.nuvio.app.features.player.isPlaybackPlaceholderUrl
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -57,7 +58,10 @@ object StreamLinkCacheRepository {
         bingeGroup: String? = null,
         streamType: String? = null,
     ) {
-        if (url.isNotBlank() && url.hasLikelyExpiringPlaybackCredentials()) {
+        // A provider's error/status placeholder is the outcome of one failed resolve, not the
+        // title's link: caching it would replay "Debrid Rate Limited" on every reopen until the
+        // entry aged out, long after the provider recovered. Drop whatever was there too.
+        if (url.isNotBlank() && (url.hasLikelyExpiringPlaybackCredentials() || isPlaybackPlaceholderUrl(url))) {
             remove(contentKey)
             return
         }
@@ -100,7 +104,9 @@ object StreamLinkCacheRepository {
             StreamLinkCacheStorage.removeEntry(hashedKey(contentKey))
             return null
         }
-        if (entry.url.isNotBlank() && entry.url.hasLikelyExpiringPlaybackCredentials()) {
+        if (entry.url.isNotBlank() &&
+            (entry.url.hasLikelyExpiringPlaybackCredentials() || isPlaybackPlaceholderUrl(entry.url))
+        ) {
             StreamLinkCacheStorage.removeEntry(hashedKey(contentKey))
             return null
         }

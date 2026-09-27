@@ -1,6 +1,8 @@
 package com.nuvio.app.features.games
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -408,6 +410,58 @@ class SteamArtworkTest {
         val results = listOf(SteamSearchApp(appid = "1817070", name = "Marvel's Spider-Man Remastered"))
 
         assertEquals("1817070", selectSteamApp(results, "Marvel s Spider Man Remastered")?.appid)
+    }
+
+    @Test
+    fun readsHashedAndBarePathsOutOfTheStoreManifest() {
+        // Mortal Shell II, as GetItems described it in 2026-09: every file under its own hash, and
+        // the cover called library_capsule rather than library_600x900.
+        val hashed = Json.parseToJsonElement(
+            """
+            {"appid": 2584270, "assets": {
+              "asset_url_format": "steam/apps/2584270/${'$'}{FILENAME}?t=1788251111",
+              "library_capsule": "e92804cbd8a37fbf08e19c55ab6a0ce7f0f25bf5/library_capsule.jpg",
+              "library_capsule_2x": "e92804cbd8a37fbf08e19c55ab6a0ce7f0f25bf5/library_capsule_2x.jpg",
+              "library_hero": "6797ef35ca25b0f2876c8a16bc5f8deffa19dbe1/library_hero.jpg",
+              "community_icon": "43f972f0e64d5d8685563998e050e781e7a61122",
+              "last_modified": 1788251111
+            }}
+            """.trimIndent(),
+        ).jsonObject
+        val manifest = parseSteamStoreAssets(hashed)!!
+
+        assertEquals(2584270L, manifest.appId)
+        assertEquals(
+            "https://shared.steamstatic.com/store_item_assets/steam/apps/2584270/" +
+                "e92804cbd8a37fbf08e19c55ab6a0ce7f0f25bf5/library_capsule_2x.jpg?t=1788251111",
+            manifest.url("library_capsule_2x"),
+        )
+        assertNull(manifest.url("library_hero_2x"))
+        assertNull(manifest.url("community_icon"))
+        assertNull(manifest.url(null))
+
+        // Portal 2: bare file names, which the same format still turns into a working URL.
+        val bare = Json.parseToJsonElement(
+            """
+            {"appid": 620, "assets": {
+              "asset_url_format": "steam/apps/620/${'$'}{FILENAME}?t=1745363004",
+              "library_capsule": "library_600x900.jpg"
+            }}
+            """.trimIndent(),
+        ).jsonObject
+        assertEquals(
+            "https://shared.steamstatic.com/store_item_assets/steam/apps/620/library_600x900.jpg?t=1745363004",
+            parseSteamStoreAssets(bare)!!.url("library_capsule"),
+        )
+    }
+
+    @Test
+    fun yieldsNoManifestForAnAppTheStoreWillNotShow() {
+        val hidden = Json.parseToJsonElement(
+            """{"item_type": 0, "id": 999999999, "success": 15, "visible": false, "appid": 0}""",
+        ).jsonObject
+
+        assertNull(parseSteamStoreAssets(hidden))
     }
 
     @Test

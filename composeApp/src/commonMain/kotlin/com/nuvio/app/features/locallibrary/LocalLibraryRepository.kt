@@ -10,8 +10,9 @@ import com.nuvio.app.features.metadata.hasAnimeNamespacePrefix
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.streams.StreamItem
 import com.nuvio.app.features.tmdb.TmdbService
-import com.nuvio.app.features.tmdb.TmdbSettingsRepository
-import com.nuvio.app.features.tmdb.resolveCustomPosterIds
+import com.nuvio.app.features.posterservice.CustomPosterScreen
+import com.nuvio.app.features.posterservice.CustomPosterSettingsRepository
+import com.nuvio.app.features.posterservice.resolveCustomPosterIds
 import com.nuvio.app.features.trakt.TraktPlatformClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -298,8 +299,8 @@ object LocalLibraryRepository {
      * on screen, and persists — so a library whose ids are complete costs nothing on later scans.
      */
     private suspend fun backfillPosterServiceIds() {
-        val settings = TmdbSettingsRepository.snapshot()
-        if (!settings.libraryPosterEnabled) return
+        val settings = CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Library)
+        if (!settings.isActive) return
         val incomplete = itemsByKey.values.filter { item ->
             // One id present and the other missing: nothing to derive from otherwise, and a
             // native-anime identity deliberately keeps its own per-season art.

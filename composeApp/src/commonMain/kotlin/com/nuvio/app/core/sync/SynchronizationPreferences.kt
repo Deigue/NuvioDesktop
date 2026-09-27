@@ -11,8 +11,8 @@ import kotlinx.serialization.json.Json
 /**
  * Device-local permissions for writing compatible desktop settings to the shared Nuvio profile.
  * These permissions are intentionally not profile scoped and are never included in sync payloads.
- * New desktop installs default to no settings sync so opening the fork cannot silently rewrite the
- * settings used by an official mobile application.
+ * Everything defaults to off so opening the fork cannot silently rewrite the settings used by an
+ * official mobile application — except Appearance on a fresh install (see the desktop storage).
  */
 @Serializable
 data class SynchronizationPreferencesUiState(

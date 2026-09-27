@@ -1,5 +1,8 @@
 package com.nuvio.app.features.collection
 
+import com.nuvio.app.features.posterservice.withCachedCustomPosters
+import com.nuvio.app.features.posterservice.withCustomPosterOverlay
+import com.nuvio.app.features.posterservice.CustomPosterScreen
 import co.touchlab.kermit.Logger
 import com.nuvio.app.features.addons.AddonRepository
 import com.nuvio.app.features.catalog.CatalogPage
@@ -14,7 +17,10 @@ import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.HomeCatalogSection
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.ensureUniqueKeys
+import com.nuvio.app.features.home.WATCHED_FILTER_RESOLVE_BUDGET_MS
+import com.nuvio.app.features.home.WatchedContentFilter
 import com.nuvio.app.features.home.filterReleasedItems
+import com.nuvio.app.features.home.filterUnwatchedItems
 import com.nuvio.app.features.home.stableKey
 import com.nuvio.app.features.trakt.TraktPublicListSourceResolver
 import com.nuvio.app.features.watchprogress.CurrentDateProvider
@@ -95,6 +101,12 @@ object FolderDetailRepository {
 
     private val _uiState = MutableStateFlow(FolderDetailUiState())
     val uiState: StateFlow<FolderDetailUiState> = _uiState.asStateFlow()
+        .withCustomPosterOverlay(CustomPosterScreen.Collections) { settings, keys ->
+            copy(tabs = tabs.map { tab ->
+                val items = tab.items.withCachedCustomPosters(settings, keys)
+                if (items === tab.items) tab else tab.copy(items = items)
+            })
+        }
 
     private val loadJobs = mutableMapOf<Int, Job>()
     private var activeCollectionId: String? = null
@@ -222,8 +234,13 @@ object FolderDetailRepository {
         )
 
         // Load catalog data for each source
-        sources.forEachIndexed { sourceIndex, source ->
-            val tabIndex = if (showAll) sourceIndex + 1 else sourceIndex
+        sources.forEach { source ->
+            // Looked up rather than derived from the source's position: the tab builder above skips
+            // sources it cannot address, and a derived index then pointed every later source at its
+            // neighbour's tab. That left a tab stuck loading, which now also holds back every row
+            // after it (see getCatalogSectionsForRows).
+            val tabIndex = tabs.indexOfFirst { it.source === source }
+            if (tabIndex < 0) return@forEach
             val catalogSource = source.addonCatalogSource()
             val resolvedCatalog = catalogSource?.let { addons.findCollectionCatalog(it) }
             if (!source.isTmdb && !source.isTrakt && resolvedCatalog == null) {
@@ -235,7 +252,7 @@ object FolderDetailRepository {
                         },
                     )
                 }
-                return@forEachIndexed
+                return@forEach
             }
 
             loadTabPage(tabIndex, reset = true)
@@ -295,6 +312,7 @@ object FolderDetailRepository {
                     }
 
                     is CatalogTarget.Library -> false
+                    is CatalogTarget.DiscoverRow -> false
                     null -> false
                 }
         }
@@ -485,11 +503,21 @@ object FolderDetailRepository {
     }
 
     fun getCatalogSectionsForRows(): List<HomeCatalogSection> {
-        val current = _uiState.value
+        // The public view, not _uiState: these rows are what TV Mode and Adaptive collections
+        // render, so they must carry the poster-service overlay like the grid does.
+        val current = uiState.value
         val folder = current.folder ?: return emptyList()
         val collectionId = activeCollectionId ?: return emptyList()
 
-        return current.tabs.filter { !it.isAllTab && it.items.isNotEmpty() }.mapNotNull { tab ->
+        // Rows are published in order: a row appears only once every row before it has finished its
+        // first load (with items, empty, or failed). The sources load in parallel, so publishing
+        // whatever had answered put the fastest catalog in row 1 and then slid the real row 1 in
+        // ahead of it a moment later — TV Mode, which shows row 1 by position, swapped the whole
+        // shelf under the user, and the scrolled layouts jumped.
+        val resolvedInOrder = current.tabs
+            .filter { !it.isAllTab }
+            .takeWhile { tab -> !(tab.isLoading && tab.items.isEmpty()) }
+        return resolvedInOrder.filter { it.items.isNotEmpty() }.mapNotNull { tab ->
             val directSource = tab.source?.let { it.isTmdb || it.isTrakt } == true
             val target = if (directSource) {
                 val sourceKey = tab.sourceKey ?: return@mapNotNull null
@@ -534,9 +562,15 @@ private data class CatalogLoadResult(
 
 private fun Boolean?.orFalse(): Boolean = this == true
 
-private fun CatalogPage.withUnreleasedFilter(): CatalogPage {
-    if (!HomeCatalogSettingsRepository.snapshot().hideUnreleasedContent) return this
-    val filteredItems = items.filterReleasedItems(CurrentDateProvider.todayIsoDate())
+private suspend fun CatalogPage.withUnreleasedFilter(): CatalogPage {
+    val released = if (HomeCatalogSettingsRepository.snapshot().hideUnreleasedContent) {
+        items.filterReleasedItems(CurrentDateProvider.todayIsoDate())
+    } else {
+        items
+    }
+    // The verdict made here sticks for the session, so give it the mappings first.
+    WatchedContentFilter.prepareForLoad(released, resolveBudgetMs = WATCHED_FILTER_RESOLVE_BUDGET_MS)
+    val filteredItems = released.filterUnwatchedItems(WatchedContentFilter.current())
     return if (filteredItems.size == items.size) this else copy(items = filteredItems)
 }
 

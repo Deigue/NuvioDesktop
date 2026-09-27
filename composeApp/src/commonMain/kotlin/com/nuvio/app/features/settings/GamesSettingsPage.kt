@@ -19,6 +19,8 @@ import nuvio.composeapp.generated.resources.settings_games_backdrop_black_shelf
 import nuvio.composeapp.generated.resources.settings_games_backdrop_full
 import nuvio.composeapp.generated.resources.settings_games_backdrop_style
 import nuvio.composeapp.generated.resources.settings_games_backdrop_style_description
+import nuvio.composeapp.generated.resources.settings_games_close_after_launch
+import nuvio.composeapp.generated.resources.settings_games_close_after_launch_description
 import nuvio.composeapp.generated.resources.settings_games_igdb_client_id
 import nuvio.composeapp.generated.resources.settings_games_igdb_client_id_description
 import nuvio.composeapp.generated.resources.settings_games_igdb_client_secret
@@ -30,6 +32,7 @@ import nuvio.composeapp.generated.resources.settings_games_metadata_source_steam
 import nuvio.composeapp.generated.resources.settings_games_metadata_steam_hint
 import nuvio.composeapp.generated.resources.settings_games_missing_credentials
 import nuvio.composeapp.generated.resources.settings_games_section_artwork
+import nuvio.composeapp.generated.resources.settings_games_section_launching
 import nuvio.composeapp.generated.resources.settings_games_section_metadata
 import nuvio.composeapp.generated.resources.settings_games_section_presentation
 import nuvio.composeapp.generated.resources.settings_games_section_rows
@@ -165,6 +168,26 @@ internal fun LazyListScope.gamesSettingsContent(
                     selectedValue = settings.backdropStyle,
                     isTablet = isTablet,
                     onSelected = GameLibrarySettingsRepository::setBackdropStyle,
+                )
+            }
+        }
+    }
+
+    item {
+        SettingsSection(
+            title = stringResource(Res.string.settings_games_section_launching),
+            isTablet = isTablet,
+        ) {
+            SettingsGroup(
+                isTablet = isTablet,
+                modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("games-close-after-launch")),
+            ) {
+                SettingsSwitchRow(
+                    title = stringResource(Res.string.settings_games_close_after_launch),
+                    description = stringResource(Res.string.settings_games_close_after_launch_description),
+                    checked = settings.closeAfterLaunch,
+                    isTablet = isTablet,
+                    onCheckedChange = GameLibrarySettingsRepository::setCloseAfterLaunch,
                 )
             }
         }

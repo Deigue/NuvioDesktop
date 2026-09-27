@@ -15,6 +15,7 @@ object GameLibrarySettingsRepository {
     private var steamGridDbApiKey = ""
     private var backdropStyle = GameBackdropStyle.BlackShelf
     private var metadataSource = GameMetadataSource.Igdb
+    private var closeAfterLaunch = false
 
     fun ensureLoaded() {
         if (hasLoaded) return
@@ -71,6 +72,14 @@ object GameLibrarySettingsRepository {
         GameLibrarySettingsStorage.saveMetadataSource(value.name)
     }
 
+    fun setCloseAfterLaunch(value: Boolean) {
+        ensureLoaded()
+        if (closeAfterLaunch == value) return
+        closeAfterLaunch = value
+        publish()
+        GameLibrarySettingsStorage.saveCloseAfterLaunch(value)
+    }
+
     private fun loadFromDisk() {
         hasLoaded = true
         igdbClientId = GameLibrarySettingsStorage.loadIgdbClientId().orEmpty().trim()
@@ -82,6 +91,7 @@ object GameLibrarySettingsRepository {
         metadataSource = GameLibrarySettingsStorage.loadMetadataSource()
             ?.let { stored -> GameMetadataSource.entries.firstOrNull { it.name == stored } }
             ?: GameMetadataSource.Igdb
+        closeAfterLaunch = GameLibrarySettingsStorage.loadCloseAfterLaunch() ?: false
         publish()
     }
 
@@ -92,6 +102,7 @@ object GameLibrarySettingsRepository {
             steamGridDbApiKey = steamGridDbApiKey,
             backdropStyle = backdropStyle,
             metadataSource = metadataSource,
+            closeAfterLaunch = closeAfterLaunch,
         )
     }
 }

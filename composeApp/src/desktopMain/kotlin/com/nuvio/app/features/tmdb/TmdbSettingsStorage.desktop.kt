@@ -25,12 +25,11 @@ internal actual object TmdbSettingsStorage {
     private const val useSeasonPostersKey = "tmdb_use_season_posters"
     private const val useMoreLikeThisKey = "tmdb_use_more_like_this"
     private const val useCollectionsKey = "tmdb_use_collections"
-    private const val libraryPosterEnabledKey = "tmdb_library_poster_enabled"
-    private const val libraryPosterUrlTemplateKey = "tmdb_library_poster_url"
     private const val resolveFilenameCatalogsKey = "tmdb_resolve_filename_catalogs"
     private const val heroImageSourceKey = "tmdb_hero_image_source"
-    // Custom library posters, filename catalog resolution, and hero image routing are desktop-fork
-    // features. Keep those keys local even when the portable TMDB group is enabled.
+    // Filename catalog resolution and hero image routing are desktop-fork features. Keep those
+    // keys local even when the portable TMDB group is enabled. (The custom poster service, once
+    // here too, now has its own store — CustomPosterSettingsStorage migrates its keys out.)
     private val portableSyncKeys = listOf(
         enabledKey,
         apiKeyKey,
@@ -77,10 +76,6 @@ internal actual object TmdbSettingsStorage {
     actual fun saveUseMoreLikeThis(enabled: Boolean) = saveBoolean(useMoreLikeThisKey, enabled)
     actual fun loadUseCollections(): Boolean? = loadBoolean(useCollectionsKey)
     actual fun saveUseCollections(enabled: Boolean) = saveBoolean(useCollectionsKey, enabled)
-    actual fun loadLibraryPosterEnabled(): Boolean? = loadBoolean(libraryPosterEnabledKey)
-    actual fun saveLibraryPosterEnabled(enabled: Boolean) = saveBoolean(libraryPosterEnabledKey, enabled)
-    actual fun loadLibraryPosterUrlTemplate(): String? = loadString(libraryPosterUrlTemplateKey)
-    actual fun saveLibraryPosterUrlTemplate(template: String) = saveString(libraryPosterUrlTemplateKey, template)
     actual fun loadResolveFilenameCatalogs(): Boolean? = loadBoolean(resolveFilenameCatalogsKey)
     actual fun saveResolveFilenameCatalogs(enabled: Boolean) = saveBoolean(resolveFilenameCatalogsKey, enabled)
     actual fun loadHeroImageSource(): String? = loadString(heroImageSourceKey)

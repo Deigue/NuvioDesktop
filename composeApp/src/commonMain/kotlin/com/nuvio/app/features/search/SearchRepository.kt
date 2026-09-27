@@ -1,5 +1,8 @@
 package com.nuvio.app.features.search
 
+import com.nuvio.app.features.posterservice.withCachedCustomPosters
+import com.nuvio.app.features.posterservice.withCustomPosterOverlay
+import com.nuvio.app.features.posterservice.CustomPosterScreen
 import co.touchlab.kermit.Logger
 import com.nuvio.app.core.i18n.localizedMediaTypeLabel
 import com.nuvio.app.features.addons.AddonCatalog
@@ -18,7 +21,9 @@ import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.HomeCatalogSection
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.ensureUniqueKeys
+import com.nuvio.app.features.home.WatchedContentFilter
 import com.nuvio.app.features.home.filterReleasedItems
+import com.nuvio.app.features.home.filterUnwatchedItems
 import com.nuvio.app.features.watchprogress.CurrentDateProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -39,14 +44,23 @@ object SearchRepository {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _uiState = MutableStateFlow(SearchUiState())
     val uiState: StateFlow<SearchUiState> = _uiState.asStateFlow()
+        .withCustomPosterOverlay(CustomPosterScreen.Search) { settings, keys ->
+            copy(sections = sections.map { section ->
+                val items = section.items.withCachedCustomPosters(settings, keys)
+                if (items === section.items) section else section.copy(items = items)
+            })
+        }
     private val _discoverUiState = MutableStateFlow(DiscoverUiState())
     val discoverUiState: StateFlow<DiscoverUiState> = _discoverUiState.asStateFlow()
+        .withCustomPosterOverlay(CustomPosterScreen.Search) { settings, keys ->
+            copy(items = items.withCachedCustomPosters(settings, keys))
+        }
 
     private var activeJob: Job? = null
     private var activeDiscoverJob: Job? = null
     private var lastRequestKey: String? = null
     private var discoverSources: List<DiscoverCatalogOption> = emptyList()
-    private var lastDiscoverHideUnreleasedContent: Boolean? = null
+    private var lastDiscoverFilterKey: String? = null
 
     fun search(query: String, addons: List<ManagedAddon>) {
         val normalizedQuery = query.trim()
@@ -179,7 +193,7 @@ object SearchRepository {
         activeDiscoverJob?.cancel()
         lastRequestKey = null
         discoverSources = emptyList()
-        lastDiscoverHideUnreleasedContent = null
+        lastDiscoverFilterKey = null
         _uiState.value = SearchUiState()
         _discoverUiState.value = DiscoverUiState()
     }
@@ -189,7 +203,7 @@ object SearchRepository {
         if (activeAddons.isEmpty()) {
             activeDiscoverJob?.cancel()
             discoverSources = emptyList()
-            lastDiscoverHideUnreleasedContent = null
+            lastDiscoverFilterKey = null
             log.d { "Discover refresh aborted: no active addons" }
             _discoverUiState.value = DiscoverUiState(
                 emptyStateReason = DiscoverEmptyStateReason.NoActiveAddons,
@@ -199,10 +213,10 @@ object SearchRepository {
 
         val sources = buildDiscoverSources(activeAddons)
         val current = _discoverUiState.value
-        val hideUnreleasedContent = HomeCatalogSettingsRepository.snapshot().hideUnreleasedContent
+        val filterKey = discoverFilterKey()
         if (
             sources == discoverSources &&
-            lastDiscoverHideUnreleasedContent == hideUnreleasedContent &&
+            lastDiscoverFilterKey == filterKey &&
             current.canReuseDiscoverState(sources)
         ) {
             log.d {
@@ -213,7 +227,7 @@ object SearchRepository {
         }
 
         discoverSources = sources
-        lastDiscoverHideUnreleasedContent = hideUnreleasedContent
+        lastDiscoverFilterKey = filterKey
         if (sources.isEmpty()) {
             activeDiscoverJob?.cancel()
             log.d { "Discover refresh found no compatible discover catalogs" }
@@ -431,6 +445,7 @@ object SearchRepository {
             items = if (reset) emptyList() else current.items,
             nextSkip = if (reset) null else current.nextSkip,
             consecutiveDuplicatePages = if (reset) 0 else current.consecutiveDuplicatePages,
+            paginates = if (reset) selectedCatalog.supportsPagination else current.paginates,
             emptyStateReason = null,
             errorMessage = null,
         )
@@ -443,7 +458,7 @@ object SearchRepository {
                     catalogId = selectedCatalog.catalogId,
                     genre = current.selectedGenre,
                     skip = requestedSkip.takeIf { it > 0 },
-                ).withUnreleasedFilter()
+                ).withUnreleasedFilter().withWatchedFilter()
             }.fold(
                 onSuccess = { page ->
                     val latest = _discoverUiState.value
@@ -474,6 +489,7 @@ object SearchRepository {
                         isLoading = false,
                         nextSkip = paginationState.nextSkip,
                         consecutiveDuplicatePages = paginationState.consecutiveDuplicatePages,
+                        paginates = latest.paginates || supportsPagination,
                         emptyStateReason = if (mergedItems.isEmpty()) DiscoverEmptyStateReason.NoResults else null,
                         errorMessage = null,
                     )
@@ -523,6 +539,21 @@ private fun CatalogPage.withUnreleasedFilter(): CatalogPage {
     if (!HomeCatalogSettingsRepository.snapshot().hideUnreleasedContent) return this
     val filteredItems = items.filterReleasedItems(CurrentDateProvider.todayIsoDate())
     return if (filteredItems.size == items.size) this else copy(items = filteredItems)
+}
+
+/**
+ * Browse feed only — never the query results. Searching is where a watched title is looked up on
+ * purpose, so [toSection] stays unfiltered by design.
+ */
+private fun CatalogPage.withWatchedFilter(): CatalogPage {
+    val filteredItems = items.filterUnwatchedItems(WatchedContentFilter.current())
+    return if (filteredItems.size == items.size) this else copy(items = filteredItems)
+}
+
+/** Both browsing filters, so a toggle in Settings refetches instead of reusing the cached feed. */
+private fun discoverFilterKey(): String {
+    val snapshot = HomeCatalogSettingsRepository.snapshot()
+    return "hideUnreleased=${snapshot.hideUnreleasedContent}|hideWatched=${snapshot.hideWatchedContent}"
 }
 
 private data class SearchCatalogRequest(

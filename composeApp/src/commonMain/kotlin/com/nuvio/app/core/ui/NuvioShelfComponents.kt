@@ -121,6 +121,9 @@ fun <T> NuvioShelfSection(
     // Replaces the header's title text with caller-drawn content (Discover's clickable
     // catalog/genre segments). [title] is still required and still carries the accessibility name.
     titleContent: (@Composable () -> Unit)? = null,
+    // Small muted chip drawn right after the title (Home's optional "catalog provider" tag).
+    // Ignored when [titleContent] replaces the title.
+    titleTag: String? = null,
     // Body fade + overlay, used by Discover to swap the posters for a picker without tearing down
     // the LazyRow (which would lose its scroll position). The row keeps composing at reduced alpha
     // underneath; the overlay draws on top.
@@ -234,6 +237,7 @@ fun <T> NuvioShelfSection(
                 isShuffling = isShuffling,
                 trailingContent = headerTrailingContent,
                 titleContent = titleContent,
+                titleTag = titleTag,
             )
         }
         Box(modifier = bodyModifier.fillMaxWidth()) {
@@ -518,6 +522,7 @@ fun NuvioPosterCard(
     ratingBadgeText: String? = null,
     artworkContent: (@Composable BoxScope.() -> Unit)? = null,
     isWatched: Boolean = false,
+    isInWatchlist: Boolean = false,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -690,7 +695,7 @@ fun NuvioPosterCard(
                 )
             }
 
-            NuvioPosterWatchedOverlay(isWatched = isWatched)
+            NuvioPosterWatchedOverlay(isWatched = isWatched, isInWatchlist = isInWatchlist)
         }
         if (shouldShowTitleBelow) {
             // Label is centered and capped at 65% of the poster width; truncated names are
@@ -740,6 +745,7 @@ private fun NuvioShelfSectionHeader(
     isShuffling: Boolean = false,
     trailingContent: (@Composable () -> Unit)? = null,
     titleContent: (@Composable () -> Unit)? = null,
+    titleTag: String? = null,
 ) {
     val tokens = MaterialTheme.nuvio
     val viewAllPlaceholderModifier = if (onViewAllClick == null) {
@@ -778,15 +784,11 @@ private fun NuvioShelfSectionHeader(
                 if (titleContent != null) {
                     Box(modifier = Modifier.weight(1f)) { titleContent() }
                 } else {
-                    Text(
-                        text = title,
-                        modifier = Modifier
-                            .weight(1f)
-                            .then(titleShuffleModifier),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = tokens.colors.textPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    NuvioShelfTitleWithTag(
+                        title = title,
+                        tag = titleTag,
+                        modifier = Modifier.weight(1f),
+                        titleModifier = titleShuffleModifier,
                     )
                 }
                 NuvioViewAllPill(
@@ -815,16 +817,13 @@ private fun NuvioShelfSectionHeader(
                         titleContent()
                     }
                 } else {
-                    Text(
-                        text = title,
+                    NuvioShelfTitleWithTag(
+                        title = title,
+                        tag = titleTag,
                         modifier = Modifier
                             .align(Alignment.CenterStart)
-                            .widthIn(max = maxWidth * HeaderTitleMaxWidthFraction)
-                            .then(titleShuffleModifier),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = tokens.colors.textPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                            .widthIn(max = maxWidth * HeaderTitleMaxWidthFraction),
+                        titleModifier = titleShuffleModifier,
                     )
                 }
                 trailingContent()
@@ -845,6 +844,52 @@ private fun NuvioShelfSectionHeader(
                         brush = tokens.colors.accentFill,
                         shape = tokens.shapes.chip,
                     ),
+            )
+        }
+    }
+}
+
+/**
+ * The header title with the optional provider tag hanging off its right edge. The title keeps its
+ * ellipsis behaviour and yields width to the tag, which never wraps.
+ */
+@Composable
+private fun NuvioShelfTitleWithTag(
+    title: String,
+    tag: String?,
+    modifier: Modifier = Modifier,
+    titleModifier: Modifier = Modifier,
+) {
+    val tokens = MaterialTheme.nuvio
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(NuvioTokens.Space.s10),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .then(titleModifier),
+            style = MaterialTheme.typography.titleLarge,
+            color = tokens.colors.textPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (!tag.isNullOrBlank()) {
+            Text(
+                text = tag,
+                modifier = Modifier
+                    .background(
+                        color = tokens.colors.textPrimary.copy(alpha = 0.10f),
+                        shape = tokens.shapes.chip,
+                    )
+                    .padding(horizontal = NuvioTokens.Space.s8, vertical = NuvioTokens.Space.s2),
+                style = MaterialTheme.typography.labelMedium,
+                color = tokens.colors.textMuted,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

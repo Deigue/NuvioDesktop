@@ -14,6 +14,7 @@ import coil3.size.Precision
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.SamplingMode
 import org.jetbrains.skia.Image as SkiaImage
+import kotlin.math.roundToInt
 
 /**
  * Decodes still images, reducing them properly on the way rather than leaving that to the draw path.
@@ -22,7 +23,7 @@ import org.jetbrains.skia.Image as SkiaImage
  * with `SamplingMode.DEFAULT`, which is `FilterMipmap(NEAREST, NONE)` — nearest-neighbour. Past
  * about 2x minification a single-pass filter discards most of the source, which is why
  * [ScaledBitmapPainter] used to re-reduce every image from a deliberately oversized 1536 px request,
- * with repeated box-halving and a Mitchell cubic, inside `onDraw`.
+ * with repeated box-halving and a cubic, inside `onDraw`.
  *
  * This moves that reduction to where it belongs — the decode dispatcher — and removes the
  * nearest-neighbour step entirely, so a large source is no longer aliased before the careful pass
@@ -40,8 +41,10 @@ internal class HighQualityBitmapDecoder(
         val encoded = SkiaImage.makeFromEncoded(bytes)
         try {
             val multiplier = reductionMultiplier(encoded.width, encoded.height, options)
-            val targetWidth = (encoded.width * multiplier).toInt().coerceAtLeast(1)
-            val targetHeight = (encoded.height * multiplier).toInt().coerceAtLeast(1)
+            // Rounded, not truncated: 500 * (414 / 500.0) can come out a hair under 414, and one
+            // pixel short of the slot turns the draw's 1:1 blit back into a resample.
+            val targetWidth = (encoded.width * multiplier).roundToInt().coerceAtLeast(1)
+            val targetHeight = (encoded.height * multiplier).roundToInt().coerceAtLeast(1)
 
             val bitmap = if (targetWidth >= encoded.width && targetHeight >= encoded.height) {
                 // Nothing to reduce. Rasterise exactly as Coil would, so the common case (a source
@@ -104,15 +107,21 @@ internal class HighQualityBitmapDecoder(
     }
 }
 
+// Halving is an exact 2x2 box average but a slightly soft pre-filter, while the Lanczos pass costs
+// taps in proportion to the ratio it reduces by. Halving while at least 2x of the target remains
+// leaves Lanczos a 2-4x step: simulated at 97% of a straight Lanczos from source, and it keeps a
+// 2000px poster into a 4K TV Mode card at ~30 ms (decode thread) instead of ~65 ms for the full kernel.
+private const val HalveWhileRatioAtLeast = 2
+
 /**
- * Box-halves until the remaining reduction is under 2x, then one Mitchell pass.
+ * Box-halves while the source is still several times the target, then one area-correct Lanczos pass.
  *
- * The same technique and the same samplers [ScaledBitmapPainter] uses, for the same reason: a cubic
- * reads a fixed 4x4 neighbourhood however far it is reducing, so past 2x it simply discards most of
- * the source. Each halving is an exact 2x2 box average, so nothing is thrown away before the final,
- * well-conditioned step.
+ * This used to halve until under 2x and finish with a Mitchell cubic. Skia's cubic reads a fixed 4x4
+ * neighbourhood, so it only works under 2x, and Mitchell's blur (b = 1/3) is how it avoids aliasing
+ * there: simulated on posters it reached ~80% of ideal sharpness. [lanczosResampleTo] widens its
+ * kernel with the ratio and reaches ~98%.
  */
-private fun SkiaImage.reduceHighQuality(targetWidth: Int, targetHeight: Int): Bitmap {
+internal fun SkiaImage.reduceHighQuality(targetWidth: Int, targetHeight: Int): Bitmap {
     var intermediate: Bitmap? = null
     try {
         var currentWidth = width
@@ -120,8 +129,9 @@ private fun SkiaImage.reduceHighQuality(targetWidth: Int, targetHeight: Int): Bi
         while (true) {
             val halfWidth = currentWidth / 2
             val halfHeight = currentHeight / 2
-            // Stop before either axis would undershoot; the cubic handles the remainder.
-            if (halfWidth < targetWidth || halfHeight < targetHeight) break
+            if (halfWidth < targetWidth * HalveWhileRatioAtLeast ||
+                halfHeight < targetHeight * HalveWhileRatioAtLeast
+            ) break
             val halved = intermediate
                 ?.resampleTo(halfWidth, halfHeight, BoxHalvingSampling)
                 ?: rasterize(halfWidth, halfHeight, BoxHalvingSampling)
@@ -131,17 +141,14 @@ private fun SkiaImage.reduceHighQuality(targetWidth: Int, targetHeight: Int): Bi
             currentHeight = halfHeight
         }
 
+        val source = intermediate ?: rasterize(width, height, SamplingMode.DEFAULT)
+        intermediate = source
         if (currentWidth == targetWidth && currentHeight == targetHeight) {
-            // Halving landed exactly on the target; a further cubic pass would only soften it.
-            intermediate?.let { exact ->
-                intermediate = null
-                return exact
-            }
-            return rasterize(targetWidth, targetHeight, SamplingMode.DEFAULT)
+            // Already there; ownership of the bitmap transfers to the caller.
+            intermediate = null
+            return source
         }
-        return intermediate
-            ?.resampleTo(targetWidth, targetHeight, HighQualityDesktopResampler)
-            ?: rasterize(targetWidth, targetHeight, HighQualityDesktopResampler)
+        return source.lanczosResampleTo(targetWidth, targetHeight)
     } finally {
         intermediate?.close()
     }

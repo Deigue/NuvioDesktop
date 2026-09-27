@@ -26,14 +26,15 @@ import com.nuvio.app.features.discord.DiscordRichPresenceImageFit
 import com.nuvio.app.features.discord.isExternallyFetchableArtworkUrl
 import com.nuvio.app.features.lights.LightsController
 import com.nuvio.app.features.lights.LightsPlaybackSource
-import com.nuvio.app.features.mdblist.MdbListSettingsRepository
 import com.nuvio.app.features.metadata.AnimeArtworkService
 import com.nuvio.app.features.metadata.hasAnimeNamespacePrefix
 import com.nuvio.app.features.metadata.isAnimeNativeId
-import com.nuvio.app.features.tmdb.TmdbSettingsRepository
-import com.nuvio.app.features.tmdb.customPosterTemplateUsesNativeAnimeId
-import com.nuvio.app.features.tmdb.customPosterUrl
-import com.nuvio.app.features.tmdb.resolveCustomPosterIds
+import com.nuvio.app.features.posterservice.CustomPosterKeys
+import com.nuvio.app.features.posterservice.CustomPosterSettingsRepository
+import com.nuvio.app.features.posterservice.CustomPosterShape
+import com.nuvio.app.features.posterservice.customPosterTemplateUsesNativeAnimeId
+import com.nuvio.app.features.posterservice.customPosterUrl
+import com.nuvio.app.features.posterservice.resolveCustomPosterIds
 import com.nuvio.app.features.p2p.P2pSettingsRepository
 import com.nuvio.app.features.p2p.P2pStreamRequest
 import com.nuvio.app.features.p2p.P2pStreamingEngine
@@ -46,6 +47,14 @@ import com.nuvio.app.features.player.skip.SkipIntroRepository
 import com.nuvio.app.features.player.skip.SkipLookupTarget
 import com.nuvio.app.features.player.skip.resolveSkipLookupTarget
 import com.nuvio.app.features.player.skip.identityKey
+import com.nuvio.app.features.player.skip.isOutroKind
+import com.nuvio.app.features.player.skip.isPostCreditsScene
+import com.nuvio.app.features.player.skip.SKIP_CAPTURE_MAX_OPEN_MS
+import com.nuvio.app.features.player.skip.SKIP_SUBMIT_OFFER_BACKWARD_TOLERANCE_SEC
+import com.nuvio.app.features.player.skip.SKIP_SUBMIT_OFFER_FORWARD_TOLERANCE_SEC
+import com.nuvio.app.features.player.skip.SKIP_SUBMIT_OFFER_TIMEOUT_MS
+import com.nuvio.app.features.player.skip.SKIP_SUBMIT_RESULT_TIMEOUT_MS
+import com.nuvio.app.features.player.skip.SkipSubmitToastPhase
 import com.nuvio.app.features.plugins.PluginRepository
 import com.nuvio.app.features.streams.StreamPrefetchService
 import com.nuvio.app.features.streams.BingeGroupCacheRepository
@@ -136,6 +145,12 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
         WatchProgressRepository.ensureLoaded()
 
         providerDiagnosticProbePendingSourceUrl = activeSourceUrl.takeIf(::isProviderPlaybackEndpoint)
+        // A placeholder that reached the player (an older cache entry, or a reuse path that saved
+        // before this guard existed) must not survive to replay on the next open of this title.
+        // The cache would refuse it on read anyway; evicting here also clears the entry now.
+        if (isPlaybackPlaceholderUrl(activeSourceUrl)) {
+            removeFailedStreamFromCache()
+        }
         if (playbackSourceFailure(activeSourceUrl) == PlaybackSourceFailure.DebridRateLimited) {
             val message = getString(Res.string.player_error_debrid_rate_limited)
             providerDiagnosticVideoSourceUrl = activeSourceUrl
@@ -624,8 +639,8 @@ private fun PlayerScreenRuntime.BindDiscordRichPresenceEffect() {
     LaunchedEffect(parentMetaId, parentMetaType, discordSettings.showPlaybackPresence) {
         discordCustomPosterUrl = null
         if (!discordSettings.showPlaybackPresence) return@LaunchedEffect
-        val settings = TmdbSettingsRepository.snapshot()
-        if (!settings.libraryPosterEnabled || settings.libraryPosterUrlTemplate.isBlank()) return@LaunchedEffect
+        val settings = CustomPosterSettingsRepository.snapshot()
+        if (!settings.isActive(CustomPosterShape.Portrait)) return@LaunchedEffect
         val metaId = parentMetaId.trim().takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         val metaType = parentMetaType.trim().takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         if (metaId.isAnimeNativeId() && !settings.customPosterTemplateUsesNativeAnimeId()) return@LaunchedEffect
@@ -644,7 +659,7 @@ private fun PlayerScreenRuntime.BindDiscordRichPresenceEffect() {
             tmdbId = ids.tmdbId?.toString(),
             type = metaType,
             stremioId = metaId,
-            mdbListApiKey = MdbListSettingsRepository.snapshot().apiKey,
+            keys = CustomPosterKeys.snapshot(),
         )
         discordCustomPosterUrl = custom?.takeIf { isExternallyFetchableArtworkUrl(it) }
     }
@@ -1180,6 +1195,9 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
         activeSkipInterval = null
         skipIntervalDismissed = false
         autoAcceptedSkipIntervals.clear()
+        skipSubmitOffer = null
+        skipCaptureSession = null
+        submittedSkipSegments.clear()
         showNextEpisodeCard = false
         nextEpisodeThresholdStableSamples = 0
         nextEpisodeAutoPlayJob?.cancel()
@@ -1271,12 +1289,52 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
             return@LaunchedEffect
         }
         val positionSec = playbackSnapshot.positionMs / 1000.0
+        // A post-credits scene is where skipping the credits lands, never a prompt of its own.
         val current = skipIntervals.firstOrNull { interval ->
-            positionSec >= interval.startTime && positionSec < interval.endTime
+            positionSec >= interval.startTime && positionSec < interval.endTime &&
+                !interval.isPostCreditsScene()
         }
         if (current != activeSkipInterval) {
             activeSkipInterval = current
             if (current != null) skipIntervalDismissed = false
+        }
+    }
+
+    // Submission toast lifetimes. The offer and a result are short-lived; a capture stays open
+    // for as long as marking takes, with only a forgotten-session cap.
+    LaunchedEffect(skipSubmitOffer?.interval, skipSubmitOffer?.phase) {
+        val offer = skipSubmitOffer ?: return@LaunchedEffect
+        val timeout = when (offer.phase) {
+            SkipSubmitToastPhase.OFFER -> SKIP_SUBMIT_OFFER_TIMEOUT_MS
+            SkipSubmitToastPhase.RESULT -> SKIP_SUBMIT_RESULT_TIMEOUT_MS
+            else -> return@LaunchedEffect
+        }
+        delay(timeout)
+        val current = skipSubmitOffer
+        if (current?.interval == offer.interval && current.phase == offer.phase) skipSubmitOffer = null
+    }
+    LaunchedEffect(skipCaptureSession?.startSec, skipCaptureSession?.phase) {
+        val session = skipCaptureSession ?: return@LaunchedEffect
+        val timeout = when (session.phase) {
+            SkipSubmitToastPhase.CAPTURING, SkipSubmitToastPhase.CAPTURED -> SKIP_CAPTURE_MAX_OPEN_MS
+            SkipSubmitToastPhase.RESULT -> SKIP_SUBMIT_RESULT_TIMEOUT_MS
+            else -> return@LaunchedEffect
+        }
+        delay(timeout)
+        if (skipCaptureSession == session) skipCaptureSession = null
+    }
+    // The offer follows the landing point: seeking back into the segment (it landed wrong) or
+    // well past it withdraws the offer before its timer would.
+    LaunchedEffect(playbackSnapshot.positionMs, skipSubmitOffer?.interval) {
+        val offer = skipSubmitOffer ?: return@LaunchedEffect
+        if (offer.phase != SkipSubmitToastPhase.OFFER) return@LaunchedEffect
+        val positionSec = playbackSnapshot.positionMs / 1000.0
+        val landing = offer.interval.endTime
+        val behind = positionSec < landing - SKIP_SUBMIT_OFFER_BACKWARD_TOLERANCE_SEC
+        val ahead = positionSec > landing + SKIP_SUBMIT_OFFER_FORWARD_TOLERANCE_SEC
+        when {
+            !offer.landed && !behind && !ahead -> skipSubmitOffer = offer.copy(landed = true)
+            offer.landed && (behind || ahead) -> skipSubmitOffer = null
         }
     }
 
@@ -1297,7 +1355,14 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
         if (!initialLoadCompleted || !playbackSnapshot.isPlaying || pausedOverlayVisible) {
             return@LaunchedEffect
         }
-        if (!playerSettingsUiState.skipAutoAcceptMode.accepts(interval)) return@LaunchedEffect
+        // Outros are otherwise never auto-accepted (skipping one usually ends the file). A film's
+        // credits are the one exception, opted into, and only when the landing is a scene after
+        // them — there skipping keeps the viewer in the film rather than ending it.
+        val acceptsCreditsToScene = playerSettingsUiState.skipMovieCreditsToPostCredits &&
+            !isSeries && interval.isOutroKind() && activeSkipLanding(interval).landsOnPostCredits
+        if (!acceptsCreditsToScene && !playerSettingsUiState.skipAutoAcceptMode.accepts(interval)) {
+            return@LaunchedEffect
+        }
         if (!autoAcceptedSkipIntervals.add(interval.identityKey())) return@LaunchedEffect
         acceptSkipInterval(interval)
     }

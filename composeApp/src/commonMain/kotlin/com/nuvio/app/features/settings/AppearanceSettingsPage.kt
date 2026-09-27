@@ -411,6 +411,7 @@ internal fun LazyListScope.appearanceSettingsContent(
                     posterHighlightMode = posterCardStyleUiState.posterHighlightMode,
                     hideLabelsEnabled = posterCardStyleUiState.hideLabelsEnabled,
                     zoomActionPreviewEnabled = posterCardStyleUiState.zoomActionPreviewEnabled,
+                    watchlistBadgeEnabled = posterCardStyleUiState.watchlistBadgeEnabled,
                     onWidthSelected = PosterCardStyleRepository::setWidthDp,
                     onCornerRadiusSelected = PosterCardStyleRepository::setCornerRadiusDp,
                     onCatalogLandscapeModeChange = PosterCardStyleRepository::setCatalogLandscapeModeEnabled,

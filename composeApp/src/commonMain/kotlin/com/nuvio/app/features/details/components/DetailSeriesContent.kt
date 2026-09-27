@@ -78,6 +78,7 @@ import com.nuvio.app.core.ui.NuvioShelfItemSlot
 import com.nuvio.app.core.ui.desktopHorizontalListNavigation
 import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.core.ui.secondaryClick
+import com.nuvio.app.features.details.EpisodeRatingsVisibility
 import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.details.MetaEpisodeCardStyle
 import com.nuvio.app.features.details.MetaTrailer
@@ -119,6 +120,7 @@ fun DetailSeriesContent(
     progressByVideoId: Map<String, WatchProgressEntry> = emptyMap(),
     watchedKeys: Set<String> = emptySet(),
     episodeRatings: Map<Pair<Int, Int>, Double> = emptyMap(),
+    episodeRatingsVisibility: EpisodeRatingsVisibility = EpisodeRatingsVisibility.SHOW_ALL,
     blurUnwatchedEpisodes: Boolean = false,
     onEpisodeClick: ((MetaVideo) -> Unit)? = null,
     onEpisodeLongPress: ((MetaVideo) -> Unit)? = null,
@@ -195,6 +197,7 @@ fun DetailSeriesContent(
                         fallbackImage = meta.background ?: meta.poster,
                         progressByVideoId = progressByVideoId,
                         episodeRatings = episodeRatings,
+                        episodeRatingsVisibility = episodeRatingsVisibility,
                         blurUnwatchedEpisodes = blurUnwatchedEpisodes,
                         downloadedEpisodeVideoIds = downloadedEpisodeVideoIds,
                         focusedEpisodeIndex = focusedEpisodeIndex,
@@ -465,6 +468,7 @@ fun DetailSeriesContent(
                             fallbackImage = meta.background ?: meta.poster,
                             progressByVideoId = progressByVideoId,
                             episodeRatings = episodeRatings,
+                            episodeRatingsVisibility = episodeRatingsVisibility,
                             blurUnwatchedEpisodes = blurUnwatchedEpisodes,
                             downloadedEpisodeVideoIds = downloadedEpisodeVideoIds,
                             // Only resume-scroll to the preferred episode on the season the
@@ -498,6 +502,7 @@ fun DetailSeriesContent(
                                         fallbackImage = meta.background ?: meta.poster,
                                         progressEntry = episodeProgressEntry,
                                         imdbRating = episode.seasonEpisodeKey()?.let { episodeRatings[it] },
+                                        episodeRatingsVisibility = episodeRatingsVisibility,
                                         isDownloaded = episode.playbackVideoId(meta.id) in downloadedEpisodeVideoIds,
                                         isWatched = episodeProgressEntry?.isEffectivelyCompleted == true ||
                                             WatchingState.isEpisodeWatched(
@@ -974,6 +979,7 @@ private fun EpisodeHorizontalRow(
     fallbackImage: String?,
     progressByVideoId: Map<String, WatchProgressEntry>,
     episodeRatings: Map<Pair<Int, Int>, Double>,
+    episodeRatingsVisibility: EpisodeRatingsVisibility,
     blurUnwatchedEpisodes: Boolean,
     /** Playback video ids that resolve to a file in the local library. */
     downloadedEpisodeVideoIds: Set<String>,
@@ -1062,6 +1068,7 @@ private fun EpisodeHorizontalRow(
                     fallbackImage = fallbackImage,
                     progressEntry = episodeProgressEntry,
                     imdbRating = episode.seasonEpisodeKey()?.let { episodeRatings[it] },
+                    episodeRatingsVisibility = episodeRatingsVisibility,
                     isDownloaded = episodeVideoId in downloadedEpisodeVideoIds,
                     isWatched = episodeProgressEntry?.isEffectivelyCompleted == true ||
                         WatchingState.isEpisodeWatched(
@@ -1109,6 +1116,7 @@ private fun EpisodeHorizontalCard(
     fallbackImage: String?,
     progressEntry: WatchProgressEntry?,
     imdbRating: Double?,
+    episodeRatingsVisibility: EpisodeRatingsVisibility = EpisodeRatingsVisibility.SHOW_ALL,
     isWatched: Boolean,
     isDownloaded: Boolean,
     blurUnwatchedEpisodes: Boolean,
@@ -1117,7 +1125,10 @@ private fun EpisodeHorizontalCard(
     onLongPress: (() -> Unit)? = null,
 ) {
     val cardShape = RoundedCornerShape(metrics.cornerRadius)
-    val ratingLabel = remember(imdbRating) { imdbRating?.takeIf { it > 0.0 }?.let(::formatEpisodeRating) }
+    val ratingLabel = remember(imdbRating, episodeRatingsVisibility, isWatched) {
+        imdbRating?.takeIf { it > 0.0 && episodeRatingsVisibility.showRating(isWatched) }
+            ?.let(::formatEpisodeRating)
+    }
     val formattedDate = remember(video.released) { video.released?.let { formatEpisodeThumbnailDate(it) } }
     Box(
         modifier = Modifier
@@ -1556,12 +1567,17 @@ private fun CompactMetaPreviewLandscapeCard(
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
             .clickable(onClick = onClick),
     ) {
+        // A poster-service landscape poster is art cut for this card with the title already in
+        // it, so it wins over the cropped backdrop and the card draws nothing on top of it — the
+        // same rule the shelf's landscape cards follow (see `landscapeCardTitleOverlay`).
+        val artIncludesTitle = !item.landscapePoster.isNullOrBlank()
         AsyncImage(
-            model = item.banner ?: item.posterFallback ?: item.poster,
+            model = item.landscapePoster ?: item.banner ?: item.posterFallback ?: item.poster,
             contentDescription = item.name,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
         )
+        if (artIncludesTitle) return@Box
 
         Box(
             modifier = Modifier
@@ -1985,6 +2001,7 @@ private fun EpisodeListCard(
     fallbackImage: String?,
     progressEntry: WatchProgressEntry?,
     imdbRating: Double?,
+    episodeRatingsVisibility: EpisodeRatingsVisibility = EpisodeRatingsVisibility.SHOW_ALL,
     isWatched: Boolean,
     isDownloaded: Boolean,
     blurUnwatchedEpisodes: Boolean,
@@ -1994,7 +2011,10 @@ private fun EpisodeListCard(
     onLongPress: (() -> Unit)? = null,
 ) {
     val cardShape = RoundedCornerShape(sizing.cardRadius)
-    val ratingLabel = remember(imdbRating) { imdbRating?.takeIf { it > 0.0 }?.let(::formatEpisodeRating) }
+    val ratingLabel = remember(imdbRating, episodeRatingsVisibility, isWatched) {
+        imdbRating?.takeIf { it > 0.0 && episodeRatingsVisibility.showRating(isWatched) }
+            ?.let(::formatEpisodeRating)
+    }
     val formattedDate = remember(video.released) { video.released?.let { formatEpisodeThumbnailDate(it) } }
     Box(
         modifier = modifier

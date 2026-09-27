@@ -103,6 +103,7 @@ object RandomPlayCollectionPool {
             sources = sources,
             addons = addons,
             hideUnreleasedContent = settings.hideUnreleasedContent,
+            hideWatchedContent = settings.hideWatchedContent,
         )
         if (force || requestKey != loadedRequestKey) {
             activeJob?.cancel()
@@ -215,8 +216,10 @@ object RandomPlayCollectionPool {
     private suspend fun PoolSource.toSection(addons: List<ManagedAddon>): HomeCatalogSection? {
         val key = "$RANDOM_PLAY_COLLECTION_SECTION_PREFIX$routeKey"
         val hideUnreleased = HomeCatalogSettingsRepository.snapshot().hideUnreleasedContent
+        val watchedFilter = WatchedContentFilter.current()
         fun List<MetaPreview>.filtered(): List<MetaPreview> =
-            if (hideUnreleased) filterReleasedItems(CurrentDateProvider.todayIsoDate()) else this
+            (if (hideUnreleased) filterReleasedItems(CurrentDateProvider.todayIsoDate()) else this)
+                .filterUnwatchedItems(watchedFilter)
 
         if (source.isTmdb || source.isTrakt) {
             val page = if (source.isTmdb) {
@@ -269,9 +272,12 @@ object RandomPlayCollectionPool {
         sources: List<PoolSource>,
         addons: List<ManagedAddon>,
         hideUnreleasedContent: Boolean,
+        hideWatchedContent: Boolean,
     ): String = buildString {
         append("hideUnreleased=")
         append(hideUnreleasedContent)
+        append("|hideWatched=")
+        append(hideWatchedContent)
         append("|sources=")
         sources.forEach { source ->
             append(source.routeKey)

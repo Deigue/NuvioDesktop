@@ -86,6 +86,7 @@ fun HomescreenSettingsScreen(
             heroBadgeScale = homescreenSettingsUiState.heroBadgeScale,
             heroReleaseStatusUnavailableOnly = homescreenSettingsUiState.heroReleaseStatusUnavailableOnly,
             hideUnreleasedContent = homescreenSettingsUiState.hideUnreleasedContent,
+            hideWatchedContent = homescreenSettingsUiState.hideWatchedContent,
             hideCatalogUnderline = homescreenSettingsUiState.hideCatalogUnderline,
             catalogRowShuffleEnabled = homescreenSettingsUiState.catalogRowShuffleEnabled,
             adaptiveHeroEnabled = homescreenSettingsUiState.adaptiveHeroEnabled,

@@ -3,13 +3,15 @@ package com.nuvio.app.features.catalog
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.PosterShape
 import com.nuvio.app.features.locallibrary.FilenameParser
-import com.nuvio.app.features.mdblist.MdbListSettingsRepository
 import com.nuvio.app.features.metadata.pickBestTmdbMatch
 import com.nuvio.app.features.tmdb.TmdbSearchResult
 import com.nuvio.app.features.tmdb.TmdbService
+import com.nuvio.app.features.posterservice.CustomPosterKeys
+import com.nuvio.app.features.posterservice.CustomPosterScreen
+import com.nuvio.app.features.posterservice.CustomPosterSettings
+import com.nuvio.app.features.posterservice.CustomPosterSettingsRepository
+import com.nuvio.app.features.posterservice.customPosterUrl
 import com.nuvio.app.features.tmdb.TmdbSettingsRepository
-import com.nuvio.app.features.tmdb.customPosterTemplateNeedsImdbId
-import com.nuvio.app.features.tmdb.customPosterUrl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -42,8 +44,13 @@ internal object FilenameMetaResolver {
     private data class ResolvedTitle(
         val title: String,
         val year: Int?,
-        val poster: String?,
-        val posterFallback: String?,
+        /**
+         * The plain TMDB poster. Poster-service art is not cached here: Home, Search and the other
+         * screens apply it per screen from [lookupId] (see `withCachedCustomPosters`), and
+         * [resolveNames] applies it for the cloud library at read time.
+         */
+        val tmdbPoster: String?,
+        val tmdbId: Int,
         val backdrop: String?,
         val overview: String?,
         /** Metadata identity of the matched title — see [MetaPreview.metaLookupId]. */
@@ -101,15 +108,19 @@ internal object FilenameMetaResolver {
         val resolved = resolveAll(queries.map { it.second }.distinctBy { it.cacheKey })
         if (resolved.isEmpty()) return emptyMap()
 
+        val posterSettings = CustomPosterSettingsRepository.snapshot(CustomPosterScreen.Library)
+        val posterKeys = CustomPosterKeys.snapshot()
         return buildMap {
             queries.forEach { (name, query) ->
                 val match = resolved[query.cacheKey] ?: return@forEach
+                val custom = match.cloudLibraryCustomPoster(posterSettings, posterKeys)
                 put(
                     name,
                     ResolvedName(
                         displayName = query.displayName(match.title),
-                        poster = match.poster,
-                        posterFallback = match.posterFallback,
+                        poster = custom ?: match.tmdbPoster,
+                        // The custom service may not have art for everything; TMDB backs it up.
+                        posterFallback = match.tmdbPoster.takeIf { custom != null },
                         backdrop = match.backdrop,
                         year = match.year,
                         overview = match.overview,
@@ -187,23 +198,12 @@ internal object FilenameMetaResolver {
     }
 
     private suspend fun TmdbSearchResult.toResolvedTitle(): ResolvedTitle {
-        val settings = TmdbSettingsRepository.snapshot()
-        val tmdbPoster = TmdbService.tmdbImageUrl(posterPath)
         val imdbId = resolveImdbId()
-        val custom = customPosterUrl(
-            settings,
-            imdbId = imdbId.takeIf { settings.customPosterTemplateNeedsImdbId() },
-            tmdbId = id.toString(),
-            type = posterType(),
-            stremioId = "tmdb:$id",
-            mdbListApiKey = MdbListSettingsRepository.snapshot().apiKey,
-        )
         return ResolvedTitle(
             title = displayTitle,
             year = year,
-            poster = custom ?: tmdbPoster,
-            // The custom service may not have art for everything; the plain TMDB poster backs it up.
-            posterFallback = tmdbPoster.takeIf { custom != null },
+            tmdbPoster = TmdbService.tmdbImageUrl(posterPath),
+            tmdbId = id,
             backdrop = TmdbService.tmdbImageUrl(backdropPath, size = "w1280"),
             overview = overview?.takeIf { it.isNotBlank() },
             // IMDb first: it is the id every meta addon, MDBList and the metahub art host speak, so
@@ -226,19 +226,30 @@ internal object FilenameMetaResolver {
 
     private fun TmdbSearchResult.posterType(): String = if (isTv) "series" else "movie"
 
+    private fun ResolvedTitle.cloudLibraryCustomPoster(
+        settings: CustomPosterSettings,
+        keys: CustomPosterKeys,
+    ): String? = customPosterUrl(
+        settings,
+        imdbId = imdbId,
+        tmdbId = tmdbId.toString(),
+        type = lookupType,
+        stremioId = "tmdb:$tmdbId",
+        keys = keys,
+    )
+
     private fun MetaPreview.withResolvedMeta(query: FilenameQuery, match: ResolvedTitle): MetaPreview =
         copy(
             name = query.displayName(match.title),
-            poster = match.poster ?: poster,
-            // Whatever we displaced becomes the fallback, so a custom poster service with a gap in
-            // its coverage falls back to plain TMDB, and a TMDB miss falls back to the addon image.
+            poster = match.tmdbPoster ?: poster,
+            // Whatever we displaced becomes the fallback, so a TMDB miss falls back to the addon image.
             posterFallback = when {
-                match.poster == null -> posterFallback
-                else -> match.posterFallback ?: poster ?: posterFallback
+                match.tmdbPoster == null -> posterFallback
+                else -> poster ?: posterFallback
             },
             // A TMDB poster is portrait. These catalogs often declare landscape/square shapes for
             // what were file thumbnails, and leaving that in place crops the poster in half.
-            posterShape = if (match.poster != null) PosterShape.Poster else posterShape,
+            posterShape = if (match.tmdbPoster != null) PosterShape.Poster else posterShape,
             // Once the filename has a confident TMDB match, its real backdrop outranks any
             // release thumbnail/banner supplied by the cloud catalog. Landscape cards consume
             // this field directly; retaining the source image here made filename resolution look

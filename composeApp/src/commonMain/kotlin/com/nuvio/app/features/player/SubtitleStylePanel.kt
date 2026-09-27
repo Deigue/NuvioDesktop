@@ -187,6 +187,29 @@ private fun StyleControlsCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
+                text = stringResource(Res.string.compose_player_bottom_offset),
+                color = colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            StepperControl(
+                value = style.bottomOffset.toString(),
+                onMinus = { onStyleChanged(style.copy(bottomOffset = (style.bottomOffset - 5).coerceAtLeast(0))) },
+                onPlus = { onStyleChanged(style.copy(bottomOffset = (style.bottomOffset + 5).coerceAtMost(200))) },
+                buttonSize = btnSize,
+                buttonRadius = btnRadius,
+                minWidth = 46.dp,
+                minusIcon = Icons.Rounded.KeyboardArrowDown,
+                plusIcon = Icons.Rounded.KeyboardArrowUp,
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
                 text = stringResource(Res.string.player_subtitle_font),
                 color = colorScheme.onSurfaceVariant,
                 fontSize = 14.sp,
@@ -274,29 +297,6 @@ private fun StyleControlsCard(
             enabled = style.italic,
             onToggle = { onStyleChanged(style.copy(italic = !style.italic)) },
         )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(Res.string.compose_player_bottom_offset),
-                color = colorScheme.onSurfaceVariant,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-            )
-            StepperControl(
-                value = style.bottomOffset.toString(),
-                onMinus = { onStyleChanged(style.copy(bottomOffset = (style.bottomOffset - 5).coerceAtLeast(0))) },
-                onPlus = { onStyleChanged(style.copy(bottomOffset = (style.bottomOffset + 5).coerceAtMost(200))) },
-                buttonSize = btnSize,
-                buttonRadius = btnRadius,
-                minWidth = 46.dp,
-                minusIcon = Icons.Rounded.KeyboardArrowDown,
-                plusIcon = Icons.Rounded.KeyboardArrowUp,
-            )
-        }
 
         // ASS/SSA tracks ignore everything above unless the user asks otherwise, because those
         // scripts carry their own fonts, colours, placement and animation. The two rows here are

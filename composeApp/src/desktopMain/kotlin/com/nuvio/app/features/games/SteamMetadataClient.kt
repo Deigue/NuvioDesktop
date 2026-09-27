@@ -45,12 +45,14 @@ class SteamMetadataClient(
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /**
-     * Search results, from one request.
+     * Search results, from two requests.
      *
      * Deliberately shallow: `storesearch` returns a name, an app id and a capsule image, which is
      * all the result row draws, and fetching full details for twenty hits to fill a list the user
      * will click once would spend the endpoint's rate limit on nothing. [game] fills the rest in
-     * when one is picked.
+     * when one is picked. The one addition is a single batched asset-manifest lookup for the whole
+     * page, because the portrait cover a row draws cannot be guessed for a game filed under the
+     * hashed layout — see [SteamArtworkClient] — and the manifest is cached for [game] anyway.
      */
     suspend fun search(query: String): List<GameMetadata> {
         val term = query.trim()
@@ -68,18 +70,24 @@ class SteamMetadataClient(
         val body = runCatching { json.parseToJsonElement(response.bodyAsText()).jsonObject }
             .getOrElse { throw SteamStoreException("Steam returned something that was not a search result.") }
         val items = body["items"]?.jsonArray ?: return emptyList()
-        return items.mapNotNull { item ->
+        val hits = items.mapNotNull { item ->
             val fields = item.jsonObject
             val appId = fields["id"]?.jsonPrimitive?.content?.toLongOrNull() ?: return@mapNotNull null
             val name = fields["name"]?.jsonPrimitive?.content?.takeIf(String::isNotBlank)
                 ?: return@mapNotNull null
+            Triple(appId, name, fields)
+        }
+        val manifests = artwork.storeAssetsFor(hits.map { it.first })
+        return hits.map { (appId, name, fields) ->
             GameMetadata(
                 id = appId,
                 source = GameMetadataSource.Steam,
                 title = name,
-                // The portrait cover by convention rather than by probe: this is a list the user
-                // scrolls past, and a missing one costs a blank tile, not a wrong match.
-                coverUrl = steamAssetUrls(appId, STEAM_COVER_ASSETS.first().first().fileName).first(),
+                // The portrait cover from the manifest when the store lists it, else by convention
+                // rather than by probe: this is a list the user scrolls past, and a missing one
+                // costs a blank tile, not a wrong match.
+                coverUrl = manifests[appId]?.url(STEAM_COVER_ASSETS.first().first().manifestKey)
+                    ?: steamAssetUrls(appId, STEAM_COVER_ASSETS.first().first().fileName).first(),
                 backdropUrl = null,
                 logoUrl = null,
                 summary = null,

@@ -73,6 +73,14 @@ internal object HomeCatalogParser {
                     carriesAnimeCatalogueId = ANIME_CATALOGUE_ID_FIELDS.any { field ->
                         !meta.string(field).isNullOrBlank()
                     },
+                    // AIOMetadata's `_tmdbId`/`_tvdbId`, and the plainer spellings other addons use.
+                    addonTmdbId = (meta.string("_tmdbId") ?: meta.string("tmdb_id") ?: meta.string("moviedb_id"))
+                        ?.trim()
+                        ?.toIntOrNull()
+                        ?.takeIf { it > 0 },
+                    addonTvdbId = (meta.string("_tvdbId") ?: meta.string("tvdb_id"))
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() && it.all(Char::isDigit) },
                 )
                 if (seenKeys.add(item.stableKey())) {
                     add(item)

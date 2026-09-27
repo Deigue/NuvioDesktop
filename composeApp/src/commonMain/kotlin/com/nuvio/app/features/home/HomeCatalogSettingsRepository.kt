@@ -160,7 +160,7 @@ internal fun migrateHeroInfoPrioritySlots(
  */
 internal const val HERO_CROSSFADE_MIN_MS = 0
 internal const val HERO_CROSSFADE_MAX_MS = 1000
-internal const val HERO_CROSSFADE_DEFAULT_MS = 300
+internal const val HERO_CROSSFADE_DEFAULT_MS = 500
 
 private const val HERO_INFO_LINES_MIN = 0
 private const val HERO_INFO_LINES_MAX = 6
@@ -201,6 +201,7 @@ data class HomeCatalogSettingsUiState(
     val heroBadgeScale: Float = 1f,
     val heroReleaseStatusUnavailableOnly: Boolean = true,
     val hideUnreleasedContent: Boolean = false,
+    val hideWatchedContent: Boolean = false,
     val discoverHideWatched: Boolean = true,
     val discoverBecauseYouWatchedRows: Int = DISCOVER_BECAUSE_ROWS_DEFAULT,
     val discoverFinishWhatYouStartedEnabled: Boolean = true,
@@ -230,6 +231,7 @@ data class HomeCatalogSettingsUiState(
     val hoverPreviewAdaptiveEnabled: Boolean = false,
     val catalogSeeMoreEnabled: Boolean = false,
     val catalogRowNumbersEnabled: Boolean = false,
+    val catalogProviderTagEnabled: Boolean = false,
     val tvRowDotsEnabled: Boolean = false,
     val tvRowDotsAnchor: HomeTvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle,
     val tvRowTransition: HomeTvRowTransition = HomeTvRowTransition.Fade,
@@ -284,6 +286,8 @@ data class HomeCatalogSettingsUiState(
             append('|')
             append(catalogRowNumbersEnabled)
             append('|')
+            append(catalogProviderTagEnabled)
+            append('|')
             append(tvRowDotsEnabled)
             append('|')
             append(tvRowDotsAnchor)
@@ -328,6 +332,7 @@ internal data class HomeCatalogSettingsSnapshot(
     val heroBadgeScale: Float,
     val heroReleaseStatusUnavailableOnly: Boolean,
     val hideUnreleasedContent: Boolean,
+    val hideWatchedContent: Boolean,
     val discoverHideWatched: Boolean,
     val discoverBecauseYouWatchedRows: Int,
     val discoverFinishWhatYouStartedEnabled: Boolean,
@@ -506,6 +511,7 @@ private data class StoredHomeCatalogSettingsPayload(
     val heroBadgeScale: Float = 1f,
     val heroReleaseStatusUnavailableOnly: Boolean = true,
     val hideUnreleasedContent: Boolean = false,
+    val hideWatchedContent: Boolean = false,
     val discoverHideWatched: Boolean = true,
     val discoverBecauseYouWatchedRows: Int = DISCOVER_BECAUSE_ROWS_DEFAULT,
     val discoverFinishWhatYouStartedEnabled: Boolean = true,
@@ -537,6 +543,7 @@ private data class StoredHomeCatalogSettingsPayload(
     val hoverPreviewAdaptiveEnabled: Boolean = false,
     val catalogSeeMoreEnabled: Boolean = false,
     val catalogRowNumbersEnabled: Boolean = false,
+    val catalogProviderTagEnabled: Boolean = false,
     val tvRowDotsEnabled: Boolean = false,
     val tvRowDotsAnchor: HomeTvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle,
     val tvRowTransition: HomeTvRowTransition = HomeTvRowTransition.Fade,
@@ -577,6 +584,7 @@ object HomeCatalogSettingsRepository {
     private var heroBadgeScale = 1f
     private var heroReleaseStatusUnavailableOnly = true
     private var hideUnreleasedContent = false
+    private var hideWatchedContent = false
     private var discoverHideWatched = true
     private var discoverBecauseYouWatchedRows = DISCOVER_BECAUSE_ROWS_DEFAULT
     private var discoverFinishWhatYouStartedEnabled = true
@@ -611,6 +619,7 @@ object HomeCatalogSettingsRepository {
     private var hoverPreviewAdaptiveEnabled = false
     private var catalogSeeMoreEnabled = false
     private var catalogRowNumbersEnabled = false
+    private var catalogProviderTagEnabled = false
     private var tvRowDotsEnabled = false
     private var tvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle
     private var tvRowTransition = HomeTvRowTransition.Fade
@@ -635,6 +644,7 @@ object HomeCatalogSettingsRepository {
         heroBadgeScale = 1f
         heroReleaseStatusUnavailableOnly = true
         hideUnreleasedContent = false
+        hideWatchedContent = false
         discoverHideWatched = true
         discoverBecauseYouWatchedRows = DISCOVER_BECAUSE_ROWS_DEFAULT
         discoverFinishWhatYouStartedEnabled = true
@@ -660,6 +670,7 @@ object HomeCatalogSettingsRepository {
         hoverPreviewAdaptiveEnabled = false
         catalogSeeMoreEnabled = false
         catalogRowNumbersEnabled = false
+        catalogProviderTagEnabled = false
         tvRowDotsEnabled = false
         tvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle
         tvRowTransition = HomeTvRowTransition.Fade
@@ -687,6 +698,7 @@ object HomeCatalogSettingsRepository {
         heroBadgeScale = 1f
         heroReleaseStatusUnavailableOnly = true
         hideUnreleasedContent = false
+        hideWatchedContent = false
         discoverHideWatched = true
         discoverBecauseYouWatchedRows = DISCOVER_BECAUSE_ROWS_DEFAULT
         discoverFinishWhatYouStartedEnabled = true
@@ -712,6 +724,7 @@ object HomeCatalogSettingsRepository {
         hoverPreviewAdaptiveEnabled = false
         catalogSeeMoreEnabled = false
         catalogRowNumbersEnabled = false
+        catalogProviderTagEnabled = false
         tvRowDotsEnabled = false
         tvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle
         tvRowTransition = HomeTvRowTransition.Fade
@@ -768,6 +781,7 @@ object HomeCatalogSettingsRepository {
             heroBadgeScale = heroBadgeScale,
             heroReleaseStatusUnavailableOnly = heroReleaseStatusUnavailableOnly,
             hideUnreleasedContent = hideUnreleasedContent,
+            hideWatchedContent = hideWatchedContent,
             discoverHideWatched = discoverHideWatched,
             discoverBecauseYouWatchedRows = discoverBecauseYouWatchedRows,
             discoverFinishWhatYouStartedEnabled = discoverFinishWhatYouStartedEnabled,
@@ -1129,6 +1143,15 @@ object HomeCatalogSettingsRepository {
         HomeRepository.applyCurrentSettings()
     }
 
+    fun setHideWatchedContent(enabled: Boolean) {
+        ensureLoaded()
+        if (hideWatchedContent == enabled) return
+        hideWatchedContent = enabled
+        publish()
+        persist()
+        HomeRepository.applyCurrentSettings()
+    }
+
     fun setHideCatalogUnderline(enabled: Boolean) {
         ensureLoaded()
         if (hideCatalogUnderline == enabled) return
@@ -1252,6 +1275,15 @@ object HomeCatalogSettingsRepository {
         ensureLoaded()
         if (catalogRowNumbersEnabled == enabled) return
         catalogRowNumbersEnabled = enabled
+        publish()
+        persist()
+    }
+
+    /** Whether each catalog row's header carries a small tag naming the addon that served it. */
+    fun setCatalogProviderTagEnabled(enabled: Boolean) {
+        ensureLoaded()
+        if (catalogProviderTagEnabled == enabled) return
+        catalogProviderTagEnabled = enabled
         publish()
         persist()
     }
@@ -1426,6 +1458,7 @@ object HomeCatalogSettingsRepository {
         heroBadgeScale = 1f
         heroReleaseStatusUnavailableOnly = true
         hideUnreleasedContent = false
+        hideWatchedContent = false
         discoverHideWatched = true
         discoverBecauseYouWatchedRows = DISCOVER_BECAUSE_ROWS_DEFAULT
         discoverFinishWhatYouStartedEnabled = true
@@ -1451,6 +1484,7 @@ object HomeCatalogSettingsRepository {
         hoverPreviewAdaptiveEnabled = false
         catalogSeeMoreEnabled = false
         catalogRowNumbersEnabled = false
+        catalogProviderTagEnabled = false
         tvRowDotsEnabled = false
         tvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle
         tvRowTransition = HomeTvRowTransition.Fade
@@ -1535,6 +1569,7 @@ object HomeCatalogSettingsRepository {
             heroBadgeScale = normalizeHeroBadgeScale(parsedPayload.heroBadgeScale)
             heroReleaseStatusUnavailableOnly = parsedPayload.heroReleaseStatusUnavailableOnly
             hideUnreleasedContent = parsedPayload.hideUnreleasedContent
+            hideWatchedContent = parsedPayload.hideWatchedContent
             discoverHideWatched = parsedPayload.discoverHideWatched
             discoverBecauseYouWatchedRows = parsedPayload.discoverBecauseYouWatchedRows
                 .coerceIn(DISCOVER_BECAUSE_ROWS_RANGE.first, DISCOVER_BECAUSE_ROWS_RANGE.last)
@@ -1578,6 +1613,7 @@ object HomeCatalogSettingsRepository {
             hoverPreviewAdaptiveEnabled = parsedPayload.hoverPreviewAdaptiveEnabled
             catalogSeeMoreEnabled = parsedPayload.catalogSeeMoreEnabled
             catalogRowNumbersEnabled = parsedPayload.catalogRowNumbersEnabled
+            catalogProviderTagEnabled = parsedPayload.catalogProviderTagEnabled
             tvRowDotsEnabled = parsedPayload.tvRowDotsEnabled
             tvRowDotsAnchor = parsedPayload.tvRowDotsAnchor
             tvRowTransition = parsedPayload.tvRowTransition
@@ -1723,6 +1759,7 @@ object HomeCatalogSettingsRepository {
             heroBadgeScale = heroBadgeScale,
             heroReleaseStatusUnavailableOnly = heroReleaseStatusUnavailableOnly,
             hideUnreleasedContent = hideUnreleasedContent,
+            hideWatchedContent = hideWatchedContent,
             // Discover's knobs are read by the repository through `snapshot()`, but the settings
             // page renders from this state — leaving them out here left the rows slider and the
             // hide-watched switch showing their defaults no matter what was saved.
@@ -1760,6 +1797,7 @@ object HomeCatalogSettingsRepository {
             hoverPreviewAdaptiveEnabled = hoverPreviewAdaptiveEnabled,
             catalogSeeMoreEnabled = catalogSeeMoreEnabled,
             catalogRowNumbersEnabled = catalogRowNumbersEnabled,
+            catalogProviderTagEnabled = catalogProviderTagEnabled,
             // Reported raw (not && tvModeEnabled) so the settings row keeps showing what the user
             // saved while the toggle sits disabled outside TV Mode; the shelf gates on the mode.
             tvRowDotsEnabled = tvRowDotsEnabled,
@@ -1841,6 +1879,7 @@ object HomeCatalogSettingsRepository {
                     heroBadgeScale = heroBadgeScale,
                     heroReleaseStatusUnavailableOnly = heroReleaseStatusUnavailableOnly,
                     hideUnreleasedContent = hideUnreleasedContent,
+                    hideWatchedContent = hideWatchedContent,
                     discoverHideWatched = discoverHideWatched,
                     discoverBecauseYouWatchedRows = discoverBecauseYouWatchedRows,
                     discoverFinishWhatYouStartedEnabled = discoverFinishWhatYouStartedEnabled,
@@ -1866,6 +1905,7 @@ object HomeCatalogSettingsRepository {
                     hoverPreviewAdaptiveEnabled = hoverPreviewAdaptiveEnabled,
                     catalogSeeMoreEnabled = catalogSeeMoreEnabled,
                     catalogRowNumbersEnabled = catalogRowNumbersEnabled,
+            catalogProviderTagEnabled = catalogProviderTagEnabled,
                     tvRowDotsEnabled = tvRowDotsEnabled,
                     tvFullBackdropEnabled = tvFullBackdropEnabled,
                     tvRowDotsAnchor = tvRowDotsAnchor,

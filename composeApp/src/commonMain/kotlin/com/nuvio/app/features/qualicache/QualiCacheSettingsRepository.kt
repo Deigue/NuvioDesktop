@@ -13,7 +13,7 @@ object QualiCacheSettingsRepository {
     private var enabled = false
     private var baseUrl = ""
     private var accessKey = ""
-    private var minimumTrust = QualiCacheMinimumTrust.HIGH
+    private var minimumTrust = QualiCacheMinimumTrust.MEDIUM
     private var showResolution = true
     private var showDynamicRange = true
     private var showAudio = true
@@ -112,7 +112,7 @@ object QualiCacheSettingsRepository {
         val storedMinimumTrust = QualiCacheSettingsStorage.loadMinimumTrust()
         minimumTrust = QualiCacheMinimumTrust.fromStorage(storedMinimumTrust)
             ?: legacyMinimumTrust
-            ?: QualiCacheMinimumTrust.HIGH
+            ?: QualiCacheMinimumTrust.MEDIUM
         if (storedMinimumTrust.isNullOrBlank() && legacyMinimumTrust != null) {
             QualiCacheSettingsStorage.saveMinimumTrust(minimumTrust.apiValue)
         }

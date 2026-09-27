@@ -57,9 +57,10 @@ object SkipIntroRepository {
     /**
      * Skip intervals for a film.
      *
-     * SkipDB is the only source consulted: IntroDB, AniSkip and Anime-Skip are all keyed by episode
-     * and have nothing to say about a film. What SkipDB holds for films today is opening title
-     * sequences and end credits.
+     * SkipDB answers first, matched against the runtime of the cut being played. IntroDB fills in
+     * whatever kind SkipDB has nothing for, and is the only source of post-credits scenes, which
+     * are kept whichever source supplied the credits: they only move where skipping those lands.
+     * AniSkip and Anime-Skip are keyed by episode and have nothing for a film.
      */
     suspend fun getMovieSkipIntervals(
         imdbId: String,
@@ -70,8 +71,9 @@ object SkipIntroRepository {
         val cacheKey = "$imdbId:movie:${durationSeconds ?: 0L}"
         cache[cacheKey]?.let { return it }
 
-        return fetchFromSkipDb(imdbId, season = null, episode = null, durationSeconds = durationSeconds)
-            .also { cache[cacheKey] = it }
+        val skipDbResult = fetchFromSkipDb(imdbId, season = null, episode = null, durationSeconds = durationSeconds)
+        val introDbResult = if (introDbConfigured) fetchMovieFromIntroDb(imdbId) else emptyList()
+        return mergeMovieSkipIntervals(skipDbResult, introDbResult).also { cache[cacheKey] = it }
     }
 
     /**
@@ -251,17 +253,11 @@ object SkipIntroRepository {
         }
     }
 
-    private suspend fun fetchFromIntroDb(imdbId: String, season: Int, episode: Int): List<SkipInterval> {
-        return try {
-            val data = SkipIntroApi.getIntroDbSegments(imdbId, season, episode) ?: return emptyList()
-            val start = data.startSec ?: data.startMs?.let { it / 1000.0 }
-            val end = data.endSec ?: data.endMs?.let { it / 1000.0 }
-            if (start == null || end == null || end <= start) return emptyList()
-            listOf(SkipInterval(startTime = start, endTime = end, type = "intro", provider = "introdb"))
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
+    private suspend fun fetchFromIntroDb(imdbId: String, season: Int, episode: Int): List<SkipInterval> =
+        SkipIntroApi.getIntroDbSegments(imdbId, season, episode)?.toEpisodeSkipIntervals().orEmpty()
+
+    private suspend fun fetchMovieFromIntroDb(imdbId: String): List<SkipInterval> =
+        SkipIntroApi.getIntroDbMovieSegments(imdbId)?.toMovieSkipIntervals().orEmpty()
 
     private suspend fun fetchFromAniSkip(malId: String, episode: Int): List<SkipInterval> {
         return try {
@@ -477,4 +473,25 @@ object SkipIntroRepository {
         animeIdsCache.clear()
         animeSkipShowIdCache.clear()
     }
+}
+
+/**
+ * SkipDB's intervals, plus IntroDB's for any kind SkipDB lacks, plus IntroDB's post-credits scenes.
+ * A scene is dropped when it would sit inside the chosen credits: it was placed against IntroDB's
+ * credits, and landing mid-crawl of SkipDB's is worse than not knowing about it.
+ */
+internal fun mergeMovieSkipIntervals(
+    skipDb: List<SkipInterval>,
+    introDb: List<SkipInterval>,
+): List<SkipInterval> {
+    val skipDbKinds = skipDb.mapTo(mutableSetOf()) { it.type.lowercase() }
+    val chosen = skipDb + introDb.filter { interval ->
+        !interval.isPostCreditsScene() && interval.type.lowercase() !in skipDbKinds
+    }
+    val credits = chosen.filter(SkipInterval::isOutroKind)
+    val scenes = introDb.filter { scene ->
+        scene.isPostCreditsScene() &&
+            credits.none { scene.startTime > it.startTime && scene.startTime < it.endTime }
+    }
+    return (chosen + scenes).sortedBy(SkipInterval::startTime)
 }

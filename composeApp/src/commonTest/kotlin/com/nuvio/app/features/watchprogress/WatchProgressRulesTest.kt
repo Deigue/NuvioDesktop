@@ -43,6 +43,26 @@ class WatchProgressRulesTest {
     }
 
     @Test
+    fun `live event types are never resumable but series aliases and custom types are`() {
+        // The sports addon's events, as stored on 2026-09-20: a position inside a thirty-second
+        // live window that can never reach completion.
+        assertTrue("sport".isLiveEventContentType())
+        assertTrue("Sports".isLiveEventContentType())
+        assertTrue(" live ".isLiveEventContentType())
+        assertTrue("events".isLiveEventContentType())
+        assertFalse("tv".isLiveEventContentType())
+        assertFalse("series".isLiveEventContentType())
+        assertFalse("movie".isLiveEventContentType())
+        assertFalse("cloud".isLiveEventContentType())
+        assertFalse(null.isLiveEventContentType())
+
+        val live = entry(videoId = "leaf:f1-3949409", parentMetaId = "leaf:f1-3949409", lastPositionMs = 17_240L, durationMs = 28_788L)
+            .copy(contentType = "sport", parentMetaType = "sport")
+        assertTrue(live.isLiveEventEntry())
+        assertFalse(entry(videoId = "movie", parentMetaId = "movie").isLiveEventEntry())
+    }
+
+    @Test
     fun `resume entry for series picks most recent episode`() {
         val older = entry(videoId = "show:1:1", parentMetaId = "show", seasonNumber = 1, episodeNumber = 1, lastUpdatedEpochMs = 10L)
         val newer = entry(videoId = "show:1:2", parentMetaId = "show", seasonNumber = 1, episodeNumber = 2, lastUpdatedEpochMs = 20L)
