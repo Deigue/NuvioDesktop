@@ -181,19 +181,19 @@ internal actual object DiscordRichPresencePlatform {
         candidates.forEachIndexed { index, candidate ->
             val remaining = candidates.drop(index + 1).firstOrNull()
             val proxied = fittedDiscordImageUrl(candidate)
-            if (!fitsDiscordAssetLimit(proxied)) {
-                println(
-                    "[nuvio-discord] artwork ${artworkHost(candidate)}: proxied URL exceeds " +
-                        "$DISCORD_ASSET_URL_LIMIT chars; sending it unproxied",
-                )
-                return copy(imageUrl = candidate, fallbackImageUrl = remaining)
-            }
+            val proxiedFits = fitsDiscordAssetLimit(proxied)
             val probe = artworkProbeCache[proxied] ?: probeArtworkProxy(proxied).also { result ->
                 artworkProbeCache[proxied] = result
-                println("[nuvio-discord] artwork ${artworkHost(candidate)}: ${result.name.lowercase()}")
+                println(
+                    "[nuvio-discord] artwork ${artworkHost(candidate)}: ${result.name.lowercase()}" +
+                        if (proxiedFits) "" else " (proxied URL exceeds $DISCORD_ASSET_URL_LIMIT chars; sending raw)",
+                )
             }
             when (probe) {
-                ArtworkProbe.Proxied -> return copy(imageUrl = proxied, fallbackImageUrl = remaining)
+                ArtworkProbe.Proxied -> return copy(
+                    imageUrl = if (proxiedFits) proxied else candidate,
+                    fallbackImageUrl = remaining,
+                )
                 ArtworkProbe.ProxyRefused,
                 ArtworkProbe.ProxyUnavailable,
                 -> return copy(imageUrl = candidate, fallbackImageUrl = remaining)
