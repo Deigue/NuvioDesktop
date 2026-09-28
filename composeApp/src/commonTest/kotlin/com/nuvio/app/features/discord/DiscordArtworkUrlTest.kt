@@ -1,6 +1,7 @@
 package com.nuvio.app.features.discord
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -59,5 +60,39 @@ class DiscordArtworkUrlTest {
     fun `ignores userinfo when reading the host`() {
         assertFalse(isExternallyFetchableArtworkUrl("http://user@postersplus:8000/a.jpg"))
         assertTrue(isExternallyFetchableArtworkUrl("https://user@cdn.example.com/a.jpg"))
+    }
+
+    @Test
+    fun `proxy url keeps path characters literal and escapes only what would split the query`() {
+        assertEquals(
+            "https://images.weserv.nl/?url=https://postersplus.stremio.ru/poster?tmdb_id=1%26type=series" +
+                "&w=512&h=512&fit=contain&bg=transparent",
+            fittedDiscordImageUrl("https://postersplus.stremio.ru/poster?tmdb_id=1&type=series"),
+        )
+    }
+
+    @Test
+    fun `query value encoding escapes fragment plus percent space and non-ascii`() {
+        assertEquals("a%23b%2Bc%2520d%20e%C3%A9", encodeArtworkQueryValue("a#b+c%20d eé"))
+    }
+
+    /**
+     * The regression: full form-encoding pushed this ordinary poster-service URL past Discord's
+     * 300-character `large_image` limit (code 4000), so the presence fell back to the Nuvio logo.
+     */
+    @Test
+    fun `a typical poster service url stays within the discord limit once proxied`() {
+        val source = "https://api.ratingposterdb.com/t0-free-rpdb/imdb/poster-default/tt0434706.jpg" +
+            "?fallback=true&lang=en&badges=imdb,tmdb,rt,mc&position=bottom-right&style=modern&size=large" +
+            "&textless=false&ratingsOrder=imdb,tmdb"
+        assertTrue(fitsDiscordAssetLimit(source))
+        assertTrue(fitsDiscordAssetLimit(fittedDiscordImageUrl(source)), fittedDiscordImageUrl(source))
+    }
+
+    @Test
+    fun `asset limit is inclusive at 300 characters`() {
+        assertTrue(fitsDiscordAssetLimit("x".repeat(DISCORD_ASSET_URL_LIMIT)))
+        assertFalse(fitsDiscordAssetLimit("x".repeat(DISCORD_ASSET_URL_LIMIT + 1)))
+        assertFalse(fitsDiscordAssetLimit(null))
     }
 }

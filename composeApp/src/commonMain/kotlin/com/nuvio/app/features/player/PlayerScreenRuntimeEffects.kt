@@ -23,6 +23,7 @@ import com.nuvio.app.features.discord.DiscordRichPresenceActivity
 import com.nuvio.app.features.discord.DiscordRichPresenceController
 import com.nuvio.app.features.discord.DiscordRichPresenceActivityType
 import com.nuvio.app.features.discord.DiscordRichPresenceImageFit
+import com.nuvio.app.features.discord.fitsDiscordAssetLimit
 import com.nuvio.app.features.discord.isExternallyFetchableArtworkUrl
 import com.nuvio.app.features.lights.LightsController
 import com.nuvio.app.features.lights.LightsPlaybackSource
@@ -979,7 +980,7 @@ private fun PlayerScreenRuntime.discordPresenceArtworkCandidates(
     }
     return ordered
         .mapNotNull { it?.trim() }
-        .filter { isExternallyFetchableArtworkUrl(it) }
+        .filter { isExternallyFetchableArtworkUrl(it) && fitsDiscordAssetLimit(it) }
         .distinct()
 }
 
