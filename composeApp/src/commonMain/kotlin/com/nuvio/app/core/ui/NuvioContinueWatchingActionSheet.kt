@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay
@@ -59,6 +60,11 @@ fun NuvioContinueWatchingActionSheet(
     onChooseSource: (() -> Unit)? = null,
     onResync: () -> Unit,
     onRemove: () -> Unit,
+    /** Queues this card in a playlist. Null hides the row. */
+    onAddToPlaylist: (() -> Unit)? = null,
+    /** Queues every card in this card's row, e.g. all of Next Up. Null hides the row. */
+    onAddRowToPlaylist: (() -> Unit)? = null,
+    addRowToPlaylistLabel: String = "",
     zoomAnchor: PosterZoomAnchor? = null,
     zoomHazeState: HazeState? = null,
 ) {
@@ -80,6 +86,9 @@ fun NuvioContinueWatchingActionSheet(
             onChooseSource = onChooseSource,
             onResync = onResync,
             onRemove = onRemove,
+            onAddToPlaylist = onAddToPlaylist,
+            onAddRowToPlaylist = onAddRowToPlaylist,
+            addRowToPlaylistLabel = addRowToPlaylistLabel,
         )
         return
     }
@@ -148,6 +157,22 @@ fun NuvioContinueWatchingActionSheet(
                     onClick = { dismissAfter(onStartFromBeginning) },
                 )
             }
+            if (onAddToPlaylist != null) {
+                NuvioBottomSheetDivider()
+                NuvioBottomSheetActionRow(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    title = "Add to playlist",
+                    onClick = { dismissAfter(onAddToPlaylist) },
+                )
+            }
+            if (onAddRowToPlaylist != null) {
+                NuvioBottomSheetDivider()
+                NuvioBottomSheetActionRow(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    title = addRowToPlaylistLabel,
+                    onClick = { dismissAfter(onAddRowToPlaylist) },
+                )
+            }
             NuvioBottomSheetDivider()
             NuvioBottomSheetActionRow(
                 icon = Icons.Default.Refresh,
@@ -184,6 +209,9 @@ private fun NuvioContinueWatchingZoomActionSheet(
     onChooseSource: (() -> Unit)?,
     onResync: () -> Unit,
     onRemove: () -> Unit,
+    onAddToPlaylist: (() -> Unit)?,
+    onAddRowToPlaylist: (() -> Unit)?,
+    addRowToPlaylistLabel: String,
 ) {
     NuvioPosterZoomActionOverlay(
         imageUrl = anchor?.imageUrl
@@ -234,6 +262,24 @@ private fun NuvioContinueWatchingZoomActionSheet(
                         icon = Icons.Default.Replay,
                         label = stringResource(Res.string.cw_action_start_from_beginning),
                         onSelected = onStartFromBeginning,
+                    ),
+                )
+            }
+            onAddToPlaylist?.let { addToPlaylist ->
+                add(
+                    PosterZoomOverlayAction(
+                        icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                        label = "Add to playlist",
+                        onSelected = addToPlaylist,
+                    ),
+                )
+            }
+            onAddRowToPlaylist?.let { addRow ->
+                add(
+                    PosterZoomOverlayAction(
+                        icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                        label = addRowToPlaylistLabel,
+                        onSelected = addRow,
                     ),
                 )
             }

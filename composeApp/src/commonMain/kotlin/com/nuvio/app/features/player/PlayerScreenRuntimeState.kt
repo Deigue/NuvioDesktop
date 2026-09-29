@@ -76,6 +76,7 @@ internal class PlayerScreenRuntime(
             contentType.isLiveEventContentType() ||
             parentMetaType.isLiveEventContentType()
     val autoPlayMode: PlayerAutoPlayMode get() = args.autoPlayMode
+    val isPlaylistPlayback: Boolean get() = autoPlayMode == PlayerAutoPlayMode.Playlist
     val isSeries: Boolean get() = parentMetaType == "series"
 
     lateinit var scope: CoroutineScope
@@ -93,6 +94,11 @@ internal class PlayerScreenRuntime(
     var addonSubtitles: List<AddonSubtitle> = emptyList()
     var isLoadingAddonSubtitles: Boolean = false
     var downloadingAddonSubtitleId by mutableStateOf<String?>(null)
+    // Result notices (subtitle saved/failed) shown in the native HUD's skip-submit toast slot.
+    // The app-level NuvioToast is drawn by the Compose window, which the mpv surface covers.
+    var playerNoticeToast by mutableStateOf<SkipSubmitToastCopy?>(null)
+    var playerNoticeSerial: Int = 0
+    var externalHandoffInProgress: Boolean = false
 
     var horizontalSafePadding: Dp = 0.dp
     var metrics: PlayerLayoutMetrics = PlayerLayoutMetrics.fromWidth(0.dp)
@@ -276,6 +282,21 @@ internal class PlayerScreenRuntime(
     var playbackStartedForParentalGuide by mutableStateOf(false)
     var nextEpisodeInfo by mutableStateOf<NextEpisodeInfo?>(null)
     var showNextEpisodeCard by mutableStateOf(false)
+    // Playlist playback replaces next-episode binge with "the next thing in the playlist". The
+    // entry is resolved once per player — a playlist edited mid-playback takes effect at the next
+    // advance, which reads the repository afresh.
+    var playlistUpNext by mutableStateOf<com.nuvio.app.features.playlist.PlaylistEntry?>(null)
+    var playlistUpNextHeader by mutableStateOf("")
+    var showPlaylistUpNextCard by mutableStateOf(false)
+    // The next entry's background search (see PlayerPlaylistAdvance.kt) and its result.
+    var playlistAdvanceJob by mutableStateOf<Job?>(null)
+    var playlistPrepared by mutableStateOf<com.nuvio.app.features.playlist.PlaylistHandoff?>(null)
+    // Set once the viewer (or Binge Mode, or the end of the file) wants the next entry played:
+    // the search hands off the moment it has a result instead of holding it.
+    var playlistHandoffRequested by mutableStateOf(false)
+    // Latch: exactly one handoff per player.
+    var playlistHandedOff by mutableStateOf(false)
+    var playlistThresholdStableSamples by mutableStateOf(0)
     // Set while a user-initiated episode switch (next-episode button or episode selector) is
     // loading streams in the background, so the next-episode card can double as "we heard you,
     // loading…" feedback. Holds the episode being switched to — which is NOT necessarily the

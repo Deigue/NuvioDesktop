@@ -53,7 +53,8 @@ object AddonRepository {
     private var initialized = false
     private var pulledFromServer = false
     private var currentProfileId: Int = 1
-    private val activeRefreshJobs = mutableMapOf<String, Job>()
+    // Written on the caller's thread and removed from the job's finally on a worker thread.
+    private val activeRefreshJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
     fun initialize() {
         val effectiveProfileId = resolveEffectiveProfileId(ProfileRepository.activeProfileId)
@@ -266,7 +267,7 @@ object AddonRepository {
 
     fun removeAddon(manifestUrl: String) {
         if (isUsingPrimaryAddonsFromSecondaryProfile()) return
-        log.i { "removeAddon() — $manifestUrl" }
+        log.i { "removeAddon() — ${com.nuvio.app.core.network.redactAddonUrl(manifestUrl)}" }
         _uiState.update { current ->
             current.copy(
                 addons = current.addons.filterNot { it.manifestUrl == manifestUrl },
@@ -367,9 +368,7 @@ object AddonRepository {
                     )
                 }
             } finally {
-                if (activeRefreshJobs[manifestUrl] === refreshJob) {
-                    activeRefreshJobs.remove(manifestUrl)
-                }
+                activeRefreshJobs.remove(manifestUrl, refreshJob)
             }
         }
         activeRefreshJobs[manifestUrl] = refreshJob

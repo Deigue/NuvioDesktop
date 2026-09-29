@@ -18,6 +18,7 @@ import com.nuvio.app.features.streams.StreamScoreContext
 import com.nuvio.app.features.streams.StreamScoreContexts
 import com.nuvio.app.features.streams.StreamAutoPlaySource
 import com.nuvio.app.features.streams.StreamItem
+import com.nuvio.app.features.streams.StreamsUiState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -91,6 +92,8 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
     onNextEpisodeCardVisibleChanged: (Boolean) -> Unit,
     skipSourceCountdown: Boolean = false,
     emptyResultRetriesRemaining: Int = 1,
+    /** False skips a completed download of the next episode (a playlist with local files off). */
+    allowDownloaded: Boolean = true,
 ): Job? {
     val nextVideoId = nextEpisodeInfo?.videoId ?: return null
     val nextVideo = allEpisodes.firstOrNull { video -> video.id == nextVideoId } ?: return null
@@ -98,7 +101,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
     val nextSeasonNumber = nextVideo.playbackSeasonNumber()
     val nextEpisodeNumber = nextVideo.playbackEpisodeNumber()
 
-    val downloadedNextEpisode = DownloadsRepository.findPlayableDownload(
+    val downloadedNextEpisode = if (!allowDownloaded) null else DownloadsRepository.findPlayableDownload(
         parentMetaId = parentMetaId,
         seasonNumber = nextSeasonNumber,
         episodeNumber = nextEpisodeNumber,
@@ -209,6 +212,17 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
             sourceAffinity = sourceAffinity,
             forceRefresh = true,
         )
+        // The episodes panel loads into the same state. A search running while the viewer browses
+        // another episode's sources must not read those streams as this episode's — ignore any
+        // state that belongs to a later load (worst case: no selection, and the retry / source
+        // list takes over, instead of playing the wrong episode).
+        val ownRequestKey = PlayerStreamsRepository.episodeStreamsRequestKey()
+        fun ownState(): StreamsUiState =
+            if (PlayerStreamsRepository.episodeStreamsRequestKey() == ownRequestKey) {
+                PlayerStreamsRepository.episodeStreamsState.value
+            } else {
+                StreamsUiState()
+            }
 
         val installedAddonNames = AddonRepository.uiState.value.addons
             .enabledAddons()
@@ -298,6 +312,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
 
         val innerJob = launch {
             PlayerStreamsRepository.episodeStreamsState.collectLatest { state ->
+                if (PlayerStreamsRepository.episodeStreamsRequestKey() != ownRequestKey) return@collectLatest
                 if (state.groups.isEmpty() && state.isAnyLoading) return@collectLatest
 
                 val allStreams = eligibleAutoPlayStreams(
@@ -352,7 +367,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
                 timeoutElapsed = true
                 if (!autoSelectTriggered) {
                     val allStreams = eligibleAutoPlayStreams(
-                        PlayerStreamsRepository.episodeStreamsState.value.groups.flatMap { it.streams },
+                        ownState().groups.flatMap { it.streams },
                         sourceAffinity,
                     )
                     // Deliberately no give-up branch here: streams having arrived tells us nothing
@@ -381,7 +396,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
                         autoSelectSettled = autoSelectSettled,
                         hasScopedProviderInFlight = {
                             hasScopedAutoPlayProviderInFlight(
-                                groups = PlayerStreamsRepository.episodeStreamsState.value.groups,
+                                groups = ownState().groups,
                                 installedAddonNames = installedAddonNames,
                                 source = effectiveSource,
                                 selectedAddons = effectiveSelectedAddons,
@@ -391,7 +406,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
                     )
                     if (!autoSelectTriggered) {
                         val allStreams = eligibleAutoPlayStreams(
-                            PlayerStreamsRepository.episodeStreamsState.value.groups.flatMap { it.streams },
+                            ownState().groups.flatMap { it.streams },
                             sourceAffinity,
                         )
                         if (allStreams.isNotEmpty()) {
@@ -406,7 +421,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
             timeoutElapsed = true
             if (!autoSelectTriggered) {
                 val allStreams = eligibleAutoPlayStreams(
-                    PlayerStreamsRepository.episodeStreamsState.value.groups.flatMap { it.streams },
+                    ownState().groups.flatMap { it.streams },
                     sourceAffinity,
                 )
                 if (allStreams.isNotEmpty()) {
@@ -417,7 +432,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
             innerJob.cancel()
             if (completed == null && !autoSelectTriggered) {
                 val allStreams = eligibleAutoPlayStreams(
-                    PlayerStreamsRepository.episodeStreamsState.value.groups.flatMap { it.streams },
+                    ownState().groups.flatMap { it.streams },
                     sourceAffinity,
                 )
                 if (allStreams.isNotEmpty()) {
@@ -428,7 +443,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
         }
 
         val selected = selectedStream
-        val finalState = PlayerStreamsRepository.episodeStreamsState.value
+        val finalState = ownState()
         val providerCount = finalState.groups.size
         val loadingProviderCount = finalState.groups.count { it.isLoading }
         val errorProviderCount = finalState.groups.count { !it.error.isNullOrBlank() }
@@ -464,6 +479,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
                 onNextEpisodeCardVisibleChanged = onNextEpisodeCardVisibleChanged,
                 skipSourceCountdown = skipSourceCountdown,
                 emptyResultRetriesRemaining = emptyResultRetriesRemaining - 1,
+                allowDownloaded = allowDownloaded,
             )
             return@launch
         }

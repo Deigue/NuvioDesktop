@@ -231,6 +231,7 @@ data class HomeCatalogSettingsUiState(
     val hoverPreviewAdaptiveEnabled: Boolean = false,
     val catalogSeeMoreEnabled: Boolean = false,
     val catalogRowNumbersEnabled: Boolean = false,
+    val collectionGifsOnFocusOnly: Boolean = false,
     val catalogProviderTagEnabled: Boolean = false,
     val tvRowDotsEnabled: Boolean = false,
     val tvRowDotsAnchor: HomeTvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle,
@@ -285,6 +286,8 @@ data class HomeCatalogSettingsUiState(
             append(catalogSeeMoreEnabled)
             append('|')
             append(catalogRowNumbersEnabled)
+            append('|')
+            append(collectionGifsOnFocusOnly)
             append('|')
             append(catalogProviderTagEnabled)
             append('|')
@@ -543,6 +546,7 @@ private data class StoredHomeCatalogSettingsPayload(
     val hoverPreviewAdaptiveEnabled: Boolean = false,
     val catalogSeeMoreEnabled: Boolean = false,
     val catalogRowNumbersEnabled: Boolean = false,
+    val collectionGifsOnFocusOnly: Boolean = false,
     val catalogProviderTagEnabled: Boolean = false,
     val tvRowDotsEnabled: Boolean = false,
     val tvRowDotsAnchor: HomeTvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle,
@@ -619,6 +623,7 @@ object HomeCatalogSettingsRepository {
     private var hoverPreviewAdaptiveEnabled = false
     private var catalogSeeMoreEnabled = false
     private var catalogRowNumbersEnabled = false
+    private var collectionGifsOnFocusOnly = false
     private var catalogProviderTagEnabled = false
     private var tvRowDotsEnabled = false
     private var tvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle
@@ -670,6 +675,7 @@ object HomeCatalogSettingsRepository {
         hoverPreviewAdaptiveEnabled = false
         catalogSeeMoreEnabled = false
         catalogRowNumbersEnabled = false
+        collectionGifsOnFocusOnly = false
         catalogProviderTagEnabled = false
         tvRowDotsEnabled = false
         tvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle
@@ -724,6 +730,7 @@ object HomeCatalogSettingsRepository {
         hoverPreviewAdaptiveEnabled = false
         catalogSeeMoreEnabled = false
         catalogRowNumbersEnabled = false
+        collectionGifsOnFocusOnly = false
         catalogProviderTagEnabled = false
         tvRowDotsEnabled = false
         tvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle
@@ -1271,6 +1278,15 @@ object HomeCatalogSettingsRepository {
         persist()
     }
 
+    /** Collection folder GIFs play only on the highlighted card; the rest show their first frame. */
+    fun setCollectionGifsOnFocusOnly(enabled: Boolean) {
+        ensureLoaded()
+        if (collectionGifsOnFocusOnly == enabled) return
+        collectionGifsOnFocusOnly = enabled
+        publish()
+        persist()
+    }
+
     fun setCatalogRowNumbersEnabled(enabled: Boolean) {
         ensureLoaded()
         if (catalogRowNumbersEnabled == enabled) return
@@ -1484,6 +1500,7 @@ object HomeCatalogSettingsRepository {
         hoverPreviewAdaptiveEnabled = false
         catalogSeeMoreEnabled = false
         catalogRowNumbersEnabled = false
+        collectionGifsOnFocusOnly = false
         catalogProviderTagEnabled = false
         tvRowDotsEnabled = false
         tvRowDotsAnchor = HomeTvRowDotsAnchor.RowTitle
@@ -1613,6 +1630,7 @@ object HomeCatalogSettingsRepository {
             hoverPreviewAdaptiveEnabled = parsedPayload.hoverPreviewAdaptiveEnabled
             catalogSeeMoreEnabled = parsedPayload.catalogSeeMoreEnabled
             catalogRowNumbersEnabled = parsedPayload.catalogRowNumbersEnabled
+            collectionGifsOnFocusOnly = parsedPayload.collectionGifsOnFocusOnly
             catalogProviderTagEnabled = parsedPayload.catalogProviderTagEnabled
             tvRowDotsEnabled = parsedPayload.tvRowDotsEnabled
             tvRowDotsAnchor = parsedPayload.tvRowDotsAnchor
@@ -1797,6 +1815,7 @@ object HomeCatalogSettingsRepository {
             hoverPreviewAdaptiveEnabled = hoverPreviewAdaptiveEnabled,
             catalogSeeMoreEnabled = catalogSeeMoreEnabled,
             catalogRowNumbersEnabled = catalogRowNumbersEnabled,
+            collectionGifsOnFocusOnly = collectionGifsOnFocusOnly,
             catalogProviderTagEnabled = catalogProviderTagEnabled,
             // Reported raw (not && tvModeEnabled) so the settings row keeps showing what the user
             // saved while the toggle sits disabled outside TV Mode; the shelf gates on the mode.
@@ -1905,6 +1924,7 @@ object HomeCatalogSettingsRepository {
                     hoverPreviewAdaptiveEnabled = hoverPreviewAdaptiveEnabled,
                     catalogSeeMoreEnabled = catalogSeeMoreEnabled,
                     catalogRowNumbersEnabled = catalogRowNumbersEnabled,
+                    collectionGifsOnFocusOnly = collectionGifsOnFocusOnly,
             catalogProviderTagEnabled = catalogProviderTagEnabled,
                     tvRowDotsEnabled = tvRowDotsEnabled,
                     tvFullBackdropEnabled = tvFullBackdropEnabled,

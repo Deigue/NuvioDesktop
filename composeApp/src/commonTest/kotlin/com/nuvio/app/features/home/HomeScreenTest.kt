@@ -148,6 +148,31 @@ class HomeScreenTest {
     }
 
     @Test
+    fun `upcoming row takes only unaired next up episodes, soonest first, independent of next up split`() {
+        val now = requireNotNull(com.nuvio.app.features.watchprogress.parseReleaseDateToEpochMs("2026-09-27T12:30:00Z"))
+        val resume = continueWatchingItem("resume:1:4", "S1E4").copy(isNextUp = false, released = "2099-01-01T00:00:00Z")
+        val aired = continueWatchingItem("aired:1:5", "Up Next - S1E5").copy(released = "2026-09-27T11:00:00Z")
+        val unknown = continueWatchingItem("unknown:1:5", "Up Next - S1E5")
+        val later = continueWatchingItem("later:1:5", "Up Next - S1E5").copy(released = "2026-10-05T00:00:00Z")
+        val sooner = continueWatchingItem("sooner:1:5", "Up Next - S1E5").copy(released = "2026-09-28T00:00:00Z")
+        val items = listOf(later, resume, aired, unknown, sooner)
+
+        val upcomingOnly = splitContinueWatchingRows(items, separateNextUpRow = false, separateUpcomingRow = true, nowEpochMs = now)
+        assertEquals(listOf(resume, aired, unknown), upcomingOnly.continueWatching)
+        assertTrue(upcomingOnly.nextUp.isEmpty())
+        assertEquals(listOf(sooner, later), upcomingOnly.upcoming)
+
+        val both = splitContinueWatchingRows(items, separateNextUpRow = true, separateUpcomingRow = true, nowEpochMs = now)
+        assertEquals(listOf(resume), both.continueWatching)
+        assertEquals(listOf(aired, unknown), both.nextUp)
+        assertEquals(listOf(sooner, later), both.upcoming)
+
+        val nextUpOnly = splitContinueWatchingRows(items, separateNextUpRow = true, separateUpcomingRow = false, nowEpochMs = now)
+        assertEquals(listOf(later, aired, unknown, sooner), nextUpOnly.nextUp)
+        assertTrue(nextUpOnly.upcoming.isEmpty())
+    }
+
+    @Test
     fun `build home continue watching items removes duplicate video ids`() {
         val inProgress = progressEntry(
             videoId = "tt0944947:1:4",

@@ -48,6 +48,8 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -102,6 +104,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
 import com.nuvio.app.core.ui.NuvioAsyncImage as AsyncImage
 import com.nuvio.app.core.ui.nuvioSafeBottomPadding
+import androidx.compose.foundation.BorderStroke
+import com.nuvio.app.core.ui.nuvio
+import com.nuvio.app.features.library.LibraryMenuItem
+import com.nuvio.app.features.library.LibraryNavMenuBorderColor
+import com.nuvio.app.features.library.libraryNavMenuSurfaceColor
 import com.nuvio.app.features.debrid.DebridSettingsRepository
 import com.nuvio.app.features.debrid.DebridSourceInspector
 import com.nuvio.app.features.debrid.DirectDebridPlayableResult
@@ -314,10 +321,20 @@ fun StreamsScreen(
     )
     // The HTPC tab is already ranked and deduped, so it bypasses the per-addon sort entirely.
     // uiState.filteredGroups cannot resolve its synthetic id and would come back empty.
-    val displayGroups = if (uiState.selectedFilter == StreamSourceMerge.HTPC_ADDON_ID) {
+    val filterGroups = if (uiState.selectedFilter == StreamSourceMerge.HTPC_ADDON_ID) {
         listOfNotNull(htpcGroup)
     } else {
         scoreSortedGroups
+    }
+    val streamBadgeSettings by remember {
+        StreamBadgeSettingsRepository.ensureLoaded()
+        StreamBadgeSettingsRepository.uiState
+    }.collectAsStateWithLifecycle()
+    val listSortOrder = streamBadgeSettings.listSortOrder
+    val listCachedFirst = streamBadgeSettings.listCachedFirst
+    // Applied last, over whichever list the chip selected, so it also re-orders the HTPC tab.
+    val displayGroups = remember(filterGroups, listSortOrder, listCachedFirst) {
+        StreamListSort.apply(filterGroups, listSortOrder, listCachedFirst)
     }
     val selectableStreams = remember(displayGroups, debridSettings.canResolvePlayableLinks) {
         orderedStreams(displayGroups)
@@ -386,8 +403,9 @@ fun StreamsScreen(
         }
     }
 
-    // Switching chips replaces the whole list, so the old offset means nothing against the new one.
-    LaunchedEffect(uiState.selectedFilter) {
+    // Switching chips or sort order replaces the whole list, so the old offset means nothing
+    // against the new one.
+    LaunchedEffect(uiState.selectedFilter, listSortOrder, listCachedFirst) {
         streamListState.scrollToItem(0)
     }
 
@@ -1503,16 +1521,22 @@ internal fun ProviderFilterRow(
     val addonGroups = groups.filter { it.streams.isNotEmpty() || it.isLoading }
     if (addonGroups.isEmpty()) return
 
-    LazyRow(
-        state = listState,
+    Row(
         modifier = modifier
             .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+    LazyRow(
+        state = listState,
+        modifier = Modifier
+            .weight(1f)
             .desktopHorizontalListNavigation(
                 state = listState,
                 treatPlainScrollAsHorizontal = true,
                 handlePageAndEdgeKeys = true,
-            )
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            ),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item(key = "all") {
@@ -1542,6 +1566,58 @@ internal fun ProviderFilterRow(
                 isSelected = selectedFilter == group.addonId,
                 onClick = { onFilterSelected(group.addonId) },
             )
+        }
+    }
+    // Outside the scrolling row so it stays reachable however many addons there are.
+    StreamSortChip()
+    }
+}
+
+/**
+ * Sort picker pinned at the end of the filter row. Highlighted while a non-default order is active,
+ * since that order flattens the addon sections and the list would otherwise look unexplained.
+ */
+@Composable
+private fun StreamSortChip() {
+    val settings by remember {
+        StreamBadgeSettingsRepository.ensureLoaded()
+        StreamBadgeSettingsRepository.uiState
+    }.collectAsStateWithLifecycle()
+    val order = settings.listSortOrder
+    val cachedFirst = settings.listCachedFirst
+    var expanded by remember { mutableStateOf(false) }
+    val label = listOfNotNull(
+        order.takeIf { it != StreamListSortOrder.DEFAULT }?.label,
+        "Cached first".takeIf { cachedFirst },
+    ).joinToString(" · ")
+    Box {
+        FilterChip(
+            label = if (label.isEmpty()) "Sort" else "Sort: $label",
+            isSelected = label.isNotEmpty(),
+            onClick = { expanded = true },
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            shape = RoundedCornerShape(20.dp),
+            containerColor = libraryNavMenuSurfaceColor(),
+            tonalElevation = 0.dp,
+            shadowElevation = MaterialTheme.nuvio.elevation.overlay,
+            border = BorderStroke(0.5.dp, LibraryNavMenuBorderColor),
+            modifier = Modifier.width(220.dp),
+        ) {
+            StreamListSortOrder.entries.forEach { option ->
+                LibraryMenuItem(label = option.label, selected = option == order) {
+                    StreamBadgeSettingsRepository.setListSortOrder(option)
+                    expanded = false
+                }
+            }
+            // A toggle, not an order: it stacks on whichever order is picked above, so the menu
+            // stays open to show the check flip.
+            HorizontalDivider(color = LibraryNavMenuBorderColor, modifier = Modifier.padding(vertical = 4.dp))
+            LibraryMenuItem(label = "Cached first", selected = cachedFirst) {
+                StreamBadgeSettingsRepository.setListCachedFirst(!cachedFirst)
+            }
         }
     }
 }

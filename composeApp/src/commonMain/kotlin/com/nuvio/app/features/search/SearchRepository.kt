@@ -437,7 +437,7 @@ object SearchRepository {
         log.d {
             "Discover request reset=$reset addon=${selectedCatalog.addonName} type=${selectedCatalog.type} " +
                 "catalogId=${selectedCatalog.catalogId} catalogKey=${selectedCatalog.key} " +
-                "genre=${current.selectedGenre ?: "<all>"} skip=$requestedSkip url=$requestUrl"
+                "genre=${current.selectedGenre ?: "<all>"} skip=$requestedSkip url=${com.nuvio.app.core.network.redactAddonUrl(requestUrl)}"
         }
 
         _discoverUiState.value = current.copy(

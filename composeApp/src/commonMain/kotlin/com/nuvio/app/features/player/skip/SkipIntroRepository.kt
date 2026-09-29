@@ -4,10 +4,11 @@ import com.nuvio.app.features.player.PlayerSettingsRepository
 
 object SkipIntroRepository {
 
-    private val cache = HashMap<String, List<SkipInterval>>()
-    private val imdbEntriesCache = HashMap<String, List<ArmEntry>>()
-    private val animeIdsCache = HashMap<String, AnimeIds>()
-    private val animeSkipShowIdCache = HashMap<String, String>()
+    // Concurrent: lookups run on several coroutines at once and write across suspensions.
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, List<SkipInterval>>()
+    private val imdbEntriesCache = java.util.concurrent.ConcurrentHashMap<String, List<ArmEntry>>()
+    private val animeIdsCache = java.util.concurrent.ConcurrentHashMap<String, AnimeIds>()
+    private val animeSkipShowIdCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private const val NO_ID = "__none__"
 
     private val introDbConfigured: Boolean

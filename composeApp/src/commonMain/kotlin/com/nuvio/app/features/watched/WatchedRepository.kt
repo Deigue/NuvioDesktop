@@ -80,6 +80,15 @@ object WatchedRepository {
     private var hasLoaded = false
     private var currentProfileId: Int = 1
     private var itemsByKey: MutableMap<String, WatchedItem> = mutableMapOf()
+
+    /**
+     * Guards [itemsByKey]: marks and unmarks run on the EDT while pulls, imports and title
+     * backfills run on [syncScope], and [publish]/[persist] iterate it. Never held across a
+     * suspension or a call into another repository.
+     */
+    private val itemsLock = Any()
+
+    private fun itemSnapshot(): List<WatchedItem> = synchronized(itemsLock) { itemsByKey.values.toList() }
     private var lastSuccessfulPushEpochMs: Long = 0L
     private var deltaCursorEventId: Long = 0L
     private var deltaInitialized: Boolean = false
@@ -100,7 +109,7 @@ object WatchedRepository {
     fun clearLocalState() {
         hasLoaded = false
         currentProfileId = 1
-        itemsByKey.clear()
+        synchronized(itemsLock) { itemsByKey.clear() }
         lastSuccessfulPushEpochMs = 0L
         deltaCursorEventId = 0L
         deltaInitialized = false
@@ -110,7 +119,7 @@ object WatchedRepository {
     private fun loadFromDisk(profileId: Int) {
         currentProfileId = profileId
         hasLoaded = true
-        itemsByKey.clear()
+        synchronized(itemsLock) { itemsByKey.clear() }
 
         val payload = WatchedStorage.loadPayload(profileId).orEmpty().trim()
         if (payload.isNotEmpty()) {
@@ -120,10 +129,11 @@ object WatchedRepository {
             lastSuccessfulPushEpochMs = storedPayload.lastSuccessfulPushEpochMs
             deltaCursorEventId = storedPayload.deltaCursorEventId
             deltaInitialized = storedPayload.deltaInitialized
-            itemsByKey = storedPayload.items
+            val loaded = storedPayload.items
                 .map(WatchedItem::normalizedMarkedAt)
                 .associateBy { watchedItemKey(it.type, it.id, it.season, it.episode) }
                 .toMutableMap()
+            synchronized(itemsLock) { itemsByKey = loaded }
         } else {
             lastSuccessfulPushEpochMs = 0L
             deltaCursorEventId = 0L
@@ -138,7 +148,7 @@ object WatchedRepository {
         TraktSettingsRepository.ensureLoaded()
         currentProfileId = profileId
         val pullStartedEpochMs = WatchedClock.nowEpochMs()
-        val localBeforePull = itemsByKey.values
+        val localBeforePull = itemSnapshot()
             .map(WatchedItem::normalizedMarkedAt)
             .toList()
         val lastPushEpochMs = lastSuccessfulPushEpochMs
@@ -273,10 +283,12 @@ object WatchedRepository {
                     "Provider history import: ${provider.providerId.storageId} returned ${imported.size} rows " +
                         "(local before merge = ${itemsByKey.size})"
                 }
-                val merged = mergeWatchedItemsAdditively(itemsByKey.values, imported)
-                if (merged.size != itemsByKey.size || merged != itemsByKey) {
-                    itemsByKey = merged.toMutableMap()
-                    changed = true
+                synchronized(itemsLock) {
+                    val merged = mergeWatchedItemsAdditively(itemsByKey.values, imported)
+                    if (merged.size != itemsByKey.size || merged != itemsByKey) {
+                        itemsByKey = merged.toMutableMap()
+                        changed = true
+                    }
                 }
             }
         }
@@ -324,31 +336,36 @@ object WatchedRepository {
             }
         if (profileId != currentProfileId) return 0
 
-        val retained = watchedItemsWithoutForeignImports(itemsByKey.values, importProviderId)
-            .filterNot { item ->
-                watchedItemKey(item.type, item.id, item.season, item.episode) in foreignKeys
+        val removed = synchronized(itemsLock) {
+            val retained = watchedItemsWithoutForeignImports(itemsByKey.values, importProviderId)
+                .filterNot { item ->
+                    watchedItemKey(item.type, item.id, item.season, item.episode) in foreignKeys
+                }
+            val removedCount = itemsByKey.size - retained.size
+            if (removedCount > 0) {
+                itemsByKey = retained
+                    .associateBy { item -> watchedItemKey(item.type, item.id, item.season, item.episode) }
+                    .toMutableMap()
             }
-        val removed = itemsByKey.size - retained.size
+            removedCount
+        }
         if (removed <= 0) return 0
-        itemsByKey = retained
-            .associateBy { item -> watchedItemKey(item.type, item.id, item.season, item.episode) }
-            .toMutableMap()
         publish()
         persist()
         return removed
     }
 
     /** Drops rows imported from a provider that no longer owns Continue Watching. */
-    private fun withdrawForeignImportedHistory(importProviderId: TrackingProviderId?): Boolean {
+    private fun withdrawForeignImportedHistory(importProviderId: TrackingProviderId?): Boolean = synchronized(itemsLock) {
         val retained = watchedItemsWithoutForeignImports(
             items = itemsByKey.values,
             importProviderId = importProviderId,
         )
-        if (retained.size == itemsByKey.size) return false
+        if (retained.size == itemsByKey.size) return@synchronized false
         itemsByKey = retained
             .associateBy { item -> watchedItemKey(item.type, item.id, item.season, item.episode) }
             .toMutableMap()
-        return true
+        true
     }
 
     private fun activeWatchedHistoryImportProviderId(): TrackingProviderId? =
@@ -370,12 +387,13 @@ object WatchedRepository {
             pageSize = watchedItemsPageSize,
         )
 
-        itemsByKey = mergeWatchedItemsPreservingUnsynced(
+        val merged = mergeWatchedItemsPreservingUnsynced(
             serverItems = serverItems,
             localItems = localBeforePull,
             lastSuccessfulPushEpochMs = lastPushEpochMs,
             pullStartedEpochMs = pullStartedEpochMs,
         ).toMutableMap()
+        synchronized(itemsLock) { itemsByKey = merged }
         if (resetDeltaState) {
             deltaCursorEventId = 0L
             deltaInitialized = false
@@ -477,7 +495,7 @@ object WatchedRepository {
         events: Collection<WatchedDeltaEvent>,
         lastPushEpochMs: Long,
         pullStartedEpochMs: Long,
-    ) {
+    ) = synchronized(itemsLock) {
         events.forEach { event ->
             val key = watchedItemKey(event.contentType, event.contentId, event.season, event.episode)
             when (event.operation.lowercase()) {
@@ -505,7 +523,7 @@ object WatchedRepository {
     fun toggleWatched(item: WatchedItem) {
         ensureLoaded()
         val key = watchedItemKey(item.type, item.id, item.season, item.episode)
-        if (itemsByKey.containsKey(key)) {
+        if (synchronized(itemsLock) { itemsByKey.containsKey(key) }) {
             unmarkWatched(item)
         } else {
             markWatched(item)
@@ -535,9 +553,11 @@ object WatchedRepository {
         val timestampedItems = items.map { watchedItem ->
             watchedItem.copy(markedAtEpochMs = markedAt)
         }
-        timestampedItems.forEach { watchedItem ->
-            val key = watchedItemKey(watchedItem.type, watchedItem.id, watchedItem.season, watchedItem.episode)
-            itemsByKey[key] = watchedItem
+        synchronized(itemsLock) {
+            timestampedItems.forEach { watchedItem ->
+                val key = watchedItemKey(watchedItem.type, watchedItem.id, watchedItem.season, watchedItem.episode)
+                itemsByKey[key] = watchedItem
+            }
         }
         publish()
         persist()
@@ -581,9 +601,11 @@ object WatchedRepository {
         ensureLoaded()
         if (items.isEmpty()) return
         val removedByKey = mutableMapOf<String, WatchedItem>()
-        items.forEach { watchedItem ->
-            val key = watchedItemKey(watchedItem.type, watchedItem.id, watchedItem.season, watchedItem.episode)
-            itemsByKey.remove(key)?.let { removed -> removedByKey[key] = removed }
+        synchronized(itemsLock) {
+            items.forEach { watchedItem ->
+                val key = watchedItemKey(watchedItem.type, watchedItem.id, watchedItem.season, watchedItem.episode)
+                itemsByKey.remove(key)?.let { removed -> removedByKey[key] = removed }
+            }
         }
         if (removedByKey.isNotEmpty()) {
             publish()
@@ -601,7 +623,7 @@ object WatchedRepository {
         episode: Int? = null,
     ): Boolean {
         ensureLoaded()
-        return itemsByKey.containsKey(watchedItemKey(type, id, season, episode))
+        return synchronized(itemsLock) { itemsByKey.containsKey(watchedItemKey(type, id, season, episode)) }
     }
 
     /**
@@ -617,7 +639,7 @@ object WatchedRepository {
         episode: Int? = null,
     ): Long? {
         ensureLoaded()
-        return itemsByKey[watchedItemKey(type, id, season, episode)]?.markedAtEpochMs
+        return synchronized(itemsLock) { itemsByKey[watchedItemKey(type, id, season, episode)] }?.markedAtEpochMs
     }
 
     fun reconcileSeriesWatchedState(
@@ -705,12 +727,15 @@ object WatchedRepository {
         if (resolved.isBlank() || id.isBlank()) return
         ensureLoaded()
         var changed = false
-        itemsByKey.entries.forEach { (key, item) ->
-            if (item.name.isNotBlank()) return@forEach
-            if (!item.id.equals(id, ignoreCase = true)) return@forEach
-            if (!item.type.equals(type, ignoreCase = true)) return@forEach
-            itemsByKey[key] = item.copy(name = resolved)
-            changed = true
+        synchronized(itemsLock) {
+            itemsByKey.entries.forEach { entry ->
+                val item = entry.value
+                if (item.name.isNotBlank()) return@forEach
+                if (!item.id.equals(id, ignoreCase = true)) return@forEach
+                if (!item.type.equals(type, ignoreCase = true)) return@forEach
+                entry.setValue(item.copy(name = resolved))
+                changed = true
+            }
         }
         if (!changed) return
         log.d { "Backfilled watched title for $type:$id -> $resolved" }
@@ -721,7 +746,7 @@ object WatchedRepository {
     /** Best known display name for a title, from any stored row that has one. */
     fun knownTitleFor(id: String, type: String): String? {
         ensureLoaded()
-        return itemsByKey.values.firstOrNull {
+        return itemSnapshot().firstOrNull {
             it.name.isNotBlank() &&
                 it.id.equals(id, ignoreCase = true) &&
                 it.type.equals(type, ignoreCase = true)
@@ -729,7 +754,7 @@ object WatchedRepository {
     }
 
     private fun publish() {
-        val items = itemsByKey.values
+        val items = itemSnapshot()
             .map(WatchedItem::normalizedMarkedAt)
             .sortedByDescending { it.markedAtEpochMs }
         val watchedKeys = items.mapTo(linkedSetOf()) {
@@ -750,7 +775,7 @@ object WatchedRepository {
             currentProfileId,
             json.encodeToString(
                 StoredWatchedPayload(
-                    items = itemsByKey.values
+                    items = itemSnapshot()
                         .map(WatchedItem::normalizedMarkedAt)
                         .sortedByDescending { it.markedAtEpochMs },
                     lastSuccessfulPushEpochMs = lastSuccessfulPushEpochMs,
@@ -904,7 +929,7 @@ object WatchedRepository {
      */
     private fun rewriteNuvioSeriesHistory(seriesItem: WatchedItem) {
         if (selectedLibraryHistoryWriter() != null) return
-        val remainingEpisodes = itemsByKey.values.filter { item ->
+        val remainingEpisodes = itemSnapshot().filter { item ->
             item.isEpisode && item.contentIdentity() == seriesItem.contentIdentity()
         }
         val profileId = ProfileRepository.activeProfileId

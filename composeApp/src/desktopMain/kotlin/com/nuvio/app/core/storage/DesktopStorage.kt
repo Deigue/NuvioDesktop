@@ -7,10 +7,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
-import java.util.Comparator
 import java.util.Locale
 import java.util.Properties
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.exists
 
 internal object DesktopStorage {
@@ -42,28 +44,17 @@ internal object DesktopStorage {
         stores.getOrPut(name) { Store(rootDir.resolve("$name.properties")) }
     }
 
-    fun wipe(preservedStoreNames: Set<String> = emptySet()) {
-        synchronized(stores) {
-            val iterator = stores.iterator()
-            while (iterator.hasNext()) {
-                val (name, store) = iterator.next()
-                if (name !in preservedStoreNames) {
-                    store.clearInMemory()
-                    iterator.remove()
-                }
-            }
-        }
-        if (!rootDir.exists()) return
-        val preservedFiles = preservedStoreNames
-            .map { name -> rootDir.resolve("$name.properties").normalize() }
-            .toSet()
-        Files.walk(rootDir).use { stream ->
-            stream
-                .sorted(Comparator.reverseOrder())
-                .filter { it != rootDir }
-                .filter { it.normalize() !in preservedFiles }
-                .forEach { path -> runCatching { Files.deleteIfExists(path) } }
-        }
+    /**
+     * Deletes the named stores (memory, file, and `.bak`/`.tmp` siblings) and nothing else.
+     *
+     * Deliberately a list of what to delete rather than what to keep: the data directory also holds
+     * user-authored files (the game library, hero badges), machine settings, the open log file and
+     * the single-instance lock, and a "delete everything except" walk took all of them. The [Store]
+     * objects stay registered, because storage shims cache them at class init; replacing them would
+     * leave two objects writing the same file.
+     */
+    fun wipe(storeNames: Set<String>) {
+        storeNames.forEach { name -> store(name).deleteAll() }
     }
 
     private fun resolveAppDataDir(): Path {
@@ -161,12 +152,55 @@ internal object DesktopStorage {
         }
     }
 
+    /**
+     * Writes are coalesced: [Store.putString] and friends update memory and schedule a flush on this
+     * one background thread [FLUSH_DELAY_MS] later, instead of rewriting the whole file (up to
+     * 3.6 MB) synchronously on the caller's thread — which was often the EDT. [flushAll] runs at
+     * exit (and from a shutdown hook, for paths that call `exitProcess` directly) and before
+     * anything that reads the files off disk, such as the settings backup.
+     */
+    private val flushExecutor: ScheduledExecutorService by lazy {
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "nuvio-storage-flush").apply { isDaemon = true }
+        }.also {
+            Runtime.getRuntime().addShutdownHook(Thread({ flushAll() }, "nuvio-storage-exit-flush"))
+        }
+    }
+
+    private const val FLUSH_DELAY_MS = 1_500L
+    private const val MAX_RETRY_DELAY_MS = 30_000L
+    private val LOAD_RETRY_DELAYS_MS = longArrayOf(50L, 250L, 1_000L)
+
+    /** Writes every store with pending changes, on the calling thread. Safe to call repeatedly. */
+    fun flushAll() {
+        val snapshot = synchronized(stores) { stores.values.toList() }
+        snapshot.forEach { store -> store.flush() }
+    }
+
     internal class Store(
         private val file: Path,
+        private val flushDelayMs: Long = FLUSH_DELAY_MS,
     ) {
+        /** Guards [properties] and the flags; held across disk I/O only for the initial load. */
         private val lock = Any()
+
+        /** Serialises disk writes and deletes of this store's files. Always taken before [lock]. */
+        private val ioLock = Any()
         private val properties = Properties()
         private var loaded = false
+        private var dirty = false
+        private var flushScheduled = false
+        private var consecutiveFailures = 0
+
+        /**
+         * Set when the file exists but could not be read. Every later write would replace the real
+         * contents with whatever little got loaded, so the store keeps working in memory for this
+         * session but never touches the file again.
+         */
+        private var readOnly = false
+
+        private val backupFile: Path get() = file.resolveSibling("${file.fileName}.bak")
+        private val tempFile: Path get() = file.resolveSibling("${file.fileName}.tmp")
 
         fun contains(key: String): Boolean = synchronized(lock) {
             ensureLoaded()
@@ -185,7 +219,12 @@ internal object DesktopStorage {
             } else {
                 properties.setProperty(key, value)
             }
-            persist()
+            markDirty()
+        }
+
+        fun keys(): Set<String> = synchronized(lock) {
+            ensureLoaded()
+            properties.stringPropertyNames()
         }
 
         fun getBoolean(key: String): Boolean? =
@@ -221,25 +260,136 @@ internal object DesktopStorage {
         fun remove(key: String) = synchronized(lock) {
             ensureLoaded()
             properties.remove(key)
-            persist()
+            markDirty()
         }
 
         fun removeAll(keys: Iterable<String>) = synchronized(lock) {
             ensureLoaded()
             keys.forEach(properties::remove)
-            persist()
+            markDirty()
         }
 
-        fun clearInMemory() = synchronized(lock) {
-            properties.clear()
-            loaded = false
+        /**
+         * Drops every key in memory and deletes the file and its `.bak`/`.tmp` siblings. The
+         * [Store] object stays valid (callers cache it at class init), and the next access reloads
+         * from the now-missing file as an empty store.
+         */
+        fun deleteAll() = synchronized(ioLock) {
+            synchronized(lock) {
+                properties.clear()
+                loaded = false
+                dirty = false
+                readOnly = false
+                consecutiveFailures = 0
+            }
+            listOf(file, backupFile, tempFile).forEach { path -> runCatching { Files.deleteIfExists(path) } }
+        }
+
+        /** Writes pending changes now, on the calling thread. */
+        fun flush() = synchronized(ioLock) {
+            val snapshot = synchronized(lock) {
+                flushScheduled = false
+                if (!dirty || readOnly) {
+                    null
+                } else {
+                    dirty = false
+                    // Serialised outside [lock] so readers never wait on the disk.
+                    Properties().also { copy -> copy.putAll(properties) }
+                }
+            } ?: return@synchronized
+            val failure = runCatching { writeToDisk(snapshot) }.exceptionOrNull()
+            synchronized(lock) {
+                if (failure == null) {
+                    if (consecutiveFailures > 0) {
+                        log.i { "store ${file.fileName} written after $consecutiveFailures failed attempt(s)" }
+                    }
+                    consecutiveFailures = 0
+                    return@synchronized
+                }
+                // Typically AccessDenied from MoveFileEx while a scanner, indexer or backup tool has
+                // the target open without FILE_SHARE_DELETE. Throwing would surface in whichever UI
+                // handler happened to call putString (Compose closes the window on an EDT
+                // exception), so keep the change in memory and try again shortly.
+                consecutiveFailures += 1
+                dirty = true
+                val retryMs = (flushDelayMs shl (consecutiveFailures - 1).coerceAtMost(5))
+                    .coerceAtMost(MAX_RETRY_DELAY_MS)
+                log.w(failure) {
+                    "store ${file.fileName} write failed (attempt $consecutiveFailures); retrying in ${retryMs}ms"
+                }
+                if (!flushScheduled) schedule(retryMs)
+            }
+        }
+
+        private fun markDirty() {
+            dirty = true
+            if (readOnly) return
+            if (!flushScheduled) schedule(flushDelayMs)
+        }
+
+        private fun schedule(delayMs: Long) {
+            flushScheduled = true
+            runCatching {
+                flushExecutor.schedule({ flush() }, delayMs, TimeUnit.MILLISECONDS)
+            }.onFailure {
+                // The executor is gone (JVM shutting down); the exit flush picks this up.
+                flushScheduled = false
+            }
         }
 
         private fun ensureLoaded() {
             if (loaded) return
-            loaded = true
             properties.clear()
-            if (!file.exists()) return
+            // notExists, not !exists: `exists()` is also false when existence "cannot be
+            // determined", which is exactly the locked-by-a-scanner case where treating the store
+            // as new would let the next write wipe it.
+            val source = when {
+                !Files.notExists(file) -> file
+                // A crash between writes can only leave .tmp, but a .bak with no main file means
+                // the main file was lost some other way; the previous version beats an empty store.
+                Files.exists(backupFile) -> backupFile.also {
+                    log.w { "store ${file.fileName} missing; recovering from ${backupFile.fileName}" }
+                }
+                else -> {
+                    loaded = true
+                    return
+                }
+            }
+            val result = loadWithRetry(source)
+            var recovered = result.getOrNull()
+            if (recovered == null && result.exceptionOrNull() is IllegalArgumentException && source == file) {
+                // Malformed content (e.g. a bad \u escape): the previous good version is next door.
+                recovered = loadWithRetry(backupFile).getOrNull()?.also {
+                    log.e(result.exceptionOrNull()) {
+                        "store ${file.fileName} is unreadable; loaded ${backupFile.fileName} instead"
+                    }
+                }
+            }
+            loaded = true
+            if (recovered == null) {
+                readOnly = true
+                log.e(result.exceptionOrNull()) {
+                    "store ${file.fileName} could not be read; keeping it read-only for this session " +
+                        "so the file on disk is not overwritten"
+                }
+                return
+            }
+            properties.putAll(recovered)
+        }
+
+        private fun loadWithRetry(source: Path): Result<Properties> {
+            var result = loadOnce(source)
+            for (delayMs in LOAD_RETRY_DELAYS_MS) {
+                val error = result.exceptionOrNull() ?: return result
+                // Parse errors and a file that really is not there will not change on retry.
+                if (error is IllegalArgumentException || error is java.nio.file.NoSuchFileException) return result
+                Thread.sleep(delayMs)
+                result = loadOnce(source)
+            }
+            return result
+        }
+
+        private fun loadOnce(source: Path): Result<Properties> {
             // Timed separately because the open alone has stalled the UI thread for seconds
             // (2026-09-14 launch sampler: 5.75s in `CreateFile0` under this method). These files
             // are rewritten on every save, so an on-access scanner treats each open as a fresh
@@ -247,23 +397,27 @@ internal object DesktopStorage {
             // slow launch needs to say.
             val startedAt = System.nanoTime()
             var openedAt = startedAt
-            runCatching {
-                Files.newInputStream(file).use { input ->
-                    openedAt = System.nanoTime()
-                    properties.load(input)
+            // Loaded into a fresh object so a parse that fails halfway never leaves a partial set.
+            val result = runCatching {
+                Properties().also { fresh ->
+                    Files.newInputStream(source).use { input ->
+                        openedAt = System.nanoTime()
+                        fresh.load(input)
+                    }
                 }
             }
             val totalMs = (System.nanoTime() - startedAt) / 1_000_000
             if (totalMs >= SLOW_LOAD_LOG_THRESHOLD_MS) {
                 val openMs = (openedAt - startedAt) / 1_000_000
                 log.w {
-                    "slow store load: ${file.fileName} took ${totalMs}ms " +
+                    "slow store load: ${source.fileName} took ${totalMs}ms " +
                         "(open ${openMs}ms, parse ${totalMs - openMs}ms) on ${Thread.currentThread().name}"
                 }
             }
+            return result
         }
 
-        private fun persist() {
+        private fun writeToDisk(snapshot: Properties) {
             Files.createDirectories(file.parent)
             // Write to a sibling temp file and atomically swap it in, rather than truncating the
             // real file and writing in place. The old in-place write left a window where a crash
@@ -272,10 +426,16 @@ internal object DesktopStorage {
             // the large MDBList ratings/cast cache meant losing the whole cache and refetching
             // everything. With the swap, an interrupted write only ever leaves a stale .tmp; the
             // real file stays intact and complete.
-            val tmp = file.resolveSibling("${file.fileName}.tmp")
-            runCatching {
+            val tmp = tempFile
+            try {
                 Files.newOutputStream(tmp).use { output ->
-                    properties.store(output, "Nuvio desktop preferences")
+                    snapshot.store(output, "Nuvio desktop preferences")
+                }
+                // Keep the outgoing version as .bak: a hard link costs no copy, and the swap below
+                // replaces only the directory entry, so the link keeps the previous contents.
+                runCatching {
+                    Files.deleteIfExists(backupFile)
+                    if (Files.exists(file)) Files.createLink(backupFile, file)
                 }
                 runCatching {
                     Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE)
@@ -285,7 +445,7 @@ internal object DesktopStorage {
                     // left half-written the way the old truncate-in-place write could.
                     Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
                 }.getOrThrow()
-            }.onFailure { error ->
+            } catch (error: Throwable) {
                 runCatching { Files.deleteIfExists(tmp) }
                 throw error
             }

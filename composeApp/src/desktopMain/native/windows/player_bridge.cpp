@@ -42,6 +42,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <unordered_map>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -359,6 +360,30 @@ constexpr DWORD kDwmwaUseImmersiveDarkModeLegacy = 19;
 constexpr DWORD kDwmwaBorderColor = 34;
 constexpr DWORD kDwmwaCaptionColor = 35;
 constexpr DWORD kDwmwaTextColor = 36;
+
+// Whether a URI is the exported HUD page (…/nuvio-player-ui/controls.html, any query). Checked
+// by suffix after normalising, because Kotlin passes File.toURI's `file:/C:/…` form while
+// WebView2 reports `file:///C:/…`, and either side may percent-encode the path differently.
+bool isHudControlsPage(const wchar_t *uri) {
+    if (!uri) return false;
+    std::wstring page(uri);
+    page = page.substr(0, page.find_first_of(L"?#"));
+    std::wstring decoded;
+    decoded.reserve(page.size());
+    for (size_t i = 0; i < page.size(); ++i) {
+        wchar_t c = page[i];
+        if (c == L'%' && i + 2 < page.size() && std::iswxdigit(page[i + 1]) && std::iswxdigit(page[i + 2])) {
+            c = (wchar_t)std::wcstol(page.substr(i + 1, 2).c_str(), nullptr, 16);
+            i += 2;
+        }
+        decoded.push_back(c == L'\\' ? L'/' : (wchar_t)std::towlower(c));
+    }
+    static const std::wstring scheme = L"file:";
+    static const std::wstring suffix = L"/nuvio-player-ui/controls.html";
+    return decoded.compare(0, scheme.size(), scheme) == 0 &&
+        decoded.size() >= suffix.size() &&
+        decoded.compare(decoded.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 std::wstring toWide(const std::string &value) {
     if (value.empty()) return std::wstring();
@@ -1499,7 +1524,7 @@ public:
 
     void onTimer() {
         if (shuttingDown.load()) return;
-        layoutNativeSubviews();
+        layoutNativeSubviews(false);
         syncControls();
         if (subtitleAssOverrideInitialCheckPending.load() &&
             std::chrono::steady_clock::now() >= subtitleAssOverrideCheckDeadline) {
@@ -3472,13 +3497,60 @@ private:
                                     }
                                 }
 
+                                // Lock the HUD to its own page. Without this, dragging a file or link
+                                // onto the player navigated the HUD to it and the controls were gone
+                                // for the rest of the session, and whatever page loaded kept
+                                // chrome.webview.postMessage into handleWebMessage.
+                                ComPtr<ICoreWebView2Controller4> controller4;
+                                if (SUCCEEDED(createdController->QueryInterface(IID_PPV_ARGS(&controller4))) && controller4) {
+                                    controller4->put_AllowExternalDrop(FALSE);
+                                }
                                 if (controllerSelf->webView) {
+                                    EventRegistrationToken navigationToken = {};
+                                    controllerSelf->webView->add_NavigationStarting(
+                                        Callback<ICoreWebView2NavigationStartingEventHandler>(
+                                            [controllerWeakSelf](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *args) -> HRESULT {
+                                                if (!args) return S_OK;
+                                                PWSTR uri = nullptr;
+                                                bool allowed = false;
+                                                if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
+                                                    allowed = isHudControlsPage(uri);
+                                                    CoTaskMemFree(uri);
+                                                }
+                                                if (!allowed) {
+                                                    args->put_Cancel(TRUE);
+                                                    if (auto navSelf = controllerWeakSelf.lock()) {
+                                                        navSelf->logBridge("webview navigation away from controls cancelled");
+                                                    }
+                                                }
+                                                return S_OK;
+                                            }
+                                        ).Get(),
+                                        &navigationToken
+                                    );
+                                    EventRegistrationToken newWindowToken = {};
+                                    controllerSelf->webView->add_NewWindowRequested(
+                                        Callback<ICoreWebView2NewWindowRequestedEventHandler>(
+                                            [](ICoreWebView2 *, ICoreWebView2NewWindowRequestedEventArgs *args) -> HRESULT {
+                                                if (args) args->put_Handled(TRUE);
+                                                return S_OK;
+                                            }
+                                        ).Get(),
+                                        &newWindowToken
+                                    );
                                     auto messageWeakSelf = controllerWeakSelf;
                                     controllerSelf->webView->add_WebMessageReceived(
                                         Callback<ICoreWebView2WebMessageReceivedEventHandler>(
                                             [messageWeakSelf](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
                                                 auto messageSelf = messageWeakSelf.lock();
                                                 if (!messageSelf || messageSelf->shuttingDown.load() || !args) return S_OK;
+                                                PWSTR source = nullptr;
+                                                bool trustedSource = false;
+                                                if (SUCCEEDED(args->get_Source(&source)) && source) {
+                                                    trustedSource = isHudControlsPage(source);
+                                                    CoTaskMemFree(source);
+                                                }
+                                                if (!trustedSource) return S_OK;
                                                 PWSTR messageJson = nullptr;
                                                 if (SUCCEEDED(args->get_WebMessageAsJson(&messageJson)) && messageJson) {
                                                     messageSelf->handleWebMessage(std::wstring(messageJson));
@@ -3952,7 +4024,14 @@ private:
         nuvioBridgeLog("mpv start complete");
     }
 
-    void layoutNativeSubviews() {
+    // Last geometry applied by layoutNativeSubviews, so the 500 ms timer can skip the z-order
+    // change and WebView2 relayout when nothing moved.
+    LONG lastLayoutWidth = -1;
+    LONG lastLayoutHeight = -1;
+    UINT lastLayoutDpi = 0;
+    double lastLayoutUiScale = -1.0;
+
+    void layoutNativeSubviews(bool force = true) {
         if (!hostHwnd || !IsWindow(hostHwnd)) {
             return;
         }
@@ -3960,6 +4039,18 @@ private:
         GetClientRect(hostHwnd, &bounds);
         LONG width = std::max<LONG>(1, bounds.right - bounds.left);
         LONG height = std::max<LONG>(1, bounds.bottom - bounds.top);
+        if (!force && controller && containerHwnd && IsWindow(containerHwnd)) {
+            // The timer's job is self-healing: a resize the host did not report, a DPI move, or
+            // something raising itself over the HUD. Only when all of that already holds is the
+            // pass skipped; the top-child check keeps the z-order repair.
+            UINT currentDpi = GetDpiForWindow(containerHwnd);
+            BOOL webVisible = FALSE;
+            bool unchanged = width == lastLayoutWidth && height == lastLayoutHeight &&
+                currentDpi == lastLayoutDpi && controlsUiScaleFactor == lastLayoutUiScale &&
+                IsWindowVisible(containerHwnd) && GetWindow(hostHwnd, GW_CHILD) == containerHwnd &&
+                SUCCEEDED(controller->get_IsVisible(&webVisible)) && webVisible;
+            if (unchanged) return;
+        }
         if (containerHwnd) {
             SetWindowPos(containerHwnd, HWND_TOP, 0, 0, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
         }
@@ -3978,6 +4069,10 @@ private:
             RECT webBounds = {0, 0, width, height};
             controller->put_Bounds(webBounds);
             controller->put_IsVisible(TRUE);
+            lastLayoutWidth = width;
+            lastLayoutHeight = height;
+            lastLayoutDpi = dpi;
+            lastLayoutUiScale = controlsUiScaleFactor;
         }
     }
 
@@ -5453,10 +5548,37 @@ LRESULT CALLBACK containerWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPA
     }
 }
 
+// Java holds an opaque id, never a pointer. It used to be a heap-allocated shared_ptr* that
+// dispose() deleted, which was safe only because every Kotlin caller happened to run on the EDT
+// (or under nativeProcessLifecycleLock): one native call from any other thread racing a dispose
+// would dereference freed memory and take the process down with no Java stack. With the
+// registry a stale or disposed id simply resolves to nullptr, and every entry point already
+// treats that as a no-op.
+std::mutex gPlayerRegistryMutex;
+std::unordered_map<jlong, std::shared_ptr<WindowsMpvWebPlayer>> gPlayerRegistry;
+jlong gNextPlayerId = 1;
+
+jlong registerPlayer(std::shared_ptr<WindowsMpvWebPlayer> player) {
+    std::lock_guard<std::mutex> lock(gPlayerRegistryMutex);
+    jlong id = gNextPlayerId++;
+    gPlayerRegistry.emplace(id, std::move(player));
+    return id;
+}
+
+std::shared_ptr<WindowsMpvWebPlayer> unregisterPlayer(jlong handle) {
+    std::lock_guard<std::mutex> lock(gPlayerRegistryMutex);
+    auto it = gPlayerRegistry.find(handle);
+    if (it == gPlayerRegistry.end()) return nullptr;
+    auto player = std::move(it->second);
+    gPlayerRegistry.erase(it);
+    return player;
+}
+
 std::shared_ptr<WindowsMpvWebPlayer> playerFromHandle(jlong handle) {
     if (handle == 0) return nullptr;
-    auto *holder = reinterpret_cast<std::shared_ptr<WindowsMpvWebPlayer> *>(handle);
-    return holder ? *holder : nullptr;
+    std::lock_guard<std::mutex> lock(gPlayerRegistryMutex);
+    auto it = gPlayerRegistry.find(handle);
+    return it == gPlayerRegistry.end() ? nullptr : it->second;
 }
 
 } // namespace
@@ -5546,17 +5668,15 @@ Java_com_nuvio_app_features_player_desktop_NativePlayerBridge_create(
         return 0;
     }
 
-    auto *holder = new std::shared_ptr<WindowsMpvWebPlayer>(player);
-    jlong handle = (jlong)(intptr_t)holder;
-    return handle;
+    return registerPlayer(player);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_nuvio_app_features_player_desktop_NativePlayerBridge_dispose(JNIEnv *, jobject, jlong handle) {
     if (handle == 0) return;
-    auto *holder = reinterpret_cast<std::shared_ptr<WindowsMpvWebPlayer> *>(handle);
-    std::shared_ptr<WindowsMpvWebPlayer> player = *holder;
-    delete holder;
+    // Erased first, so any call racing this one gets nullptr; a call already holding its own
+    // copy keeps the object alive until it returns, and shutdown() runs outside the lock.
+    std::shared_ptr<WindowsMpvWebPlayer> player = unregisterPlayer(handle);
     if (player) player->shutdown();
 }
 

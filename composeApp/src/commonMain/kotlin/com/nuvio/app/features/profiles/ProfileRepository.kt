@@ -255,6 +255,7 @@ object ProfileRepository {
         RatingPromptRepository.onProfileChanged()
         SearchHistoryRepository.onProfileChanged()
         CollectionRepository.onProfileChanged()
+        com.nuvio.app.features.playlist.PlaylistRepository.onProfileChanged()
         CollectionMobileSettingsRepository.onProfileChanged()
         DownloadsRepository.onProfileChanged()
         com.nuvio.app.features.librarypvr.LibraryPvrRepository.onProfileChanged()

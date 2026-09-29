@@ -350,6 +350,7 @@ internal object NativePlayerBridge {
     }
 
     private fun findLocalBuildLibrary(platformDir: String, libraryName: String): File? {
+        if (!com.nuvio.app.core.build.DesktopDevRun.allowsLocalNativeBuilds) return null
         val candidates = listOf(
             File("composeApp/build/native/$platformDir/$libraryName"),
             File("build/native/$platformDir/$libraryName"),

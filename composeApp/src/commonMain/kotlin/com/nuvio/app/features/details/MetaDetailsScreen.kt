@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -127,6 +128,10 @@ import com.nuvio.app.features.details.components.DetailTrailersSection
 import com.nuvio.app.features.details.components.DetailTvKey
 import com.nuvio.app.features.details.components.DetailTvKeyboardBridge
 import com.nuvio.app.features.details.components.EpisodeWatchedActionSheet
+import com.nuvio.app.features.playlist.PlaylistAddController
+import com.nuvio.app.features.playlist.playlistAddTargetFor
+import com.nuvio.app.features.playlist.playlistAddTargetForEpisode
+import com.nuvio.app.features.playlist.playlistAddTargetForEpisodes
 import com.nuvio.app.features.details.components.MetaDetailsTvFocusState
 import com.nuvio.app.features.details.components.SeasonWatchedActionSheet
 import com.nuvio.app.features.details.components.TrailerPlayerPopup
@@ -1432,6 +1437,7 @@ fun MetaDetailsScreen(
                         add(toggleSaved)
                         onMonitorClick?.let { add(it) }
                         openRatingDialog?.let { add(it) }
+                        add { PlaylistAddController.request(playlistAddTargetFor(meta)) }
                     }
                 }
 
@@ -2575,6 +2581,22 @@ fun MetaDetailsScreen(
                                         onEpisodePlayClick(selectedEpisode)
                                     }
                                 },
+                                onAddToPlaylist = {
+                                    PlaylistAddController.request(
+                                        playlistAddTargetForEpisode(meta, selectedEpisode),
+                                    )
+                                },
+                                onAddSeasonToPlaylist = seasonEpisodes.takeIf { it.size > 1 }?.let { episodes ->
+                                    {
+                                        PlaylistAddController.request(
+                                            playlistAddTargetForEpisodes(
+                                                meta = meta,
+                                                label = selectedEpisode.season?.let { "Season $it" } ?: "Specials",
+                                                videos = episodes,
+                                            ),
+                                        )
+                                    }
+                                },
                             )
                         }
 
@@ -2641,6 +2663,13 @@ fun MetaDetailsScreen(
                                         episodes = previousSeasonEpisodes,
                                         areCurrentlyWatched = false,
                                     )
+                                },
+                                onAddSeasonToPlaylist = seasonEpisodes.takeIf { it.isNotEmpty() }?.let { episodes ->
+                                    {
+                                        PlaylistAddController.request(
+                                            playlistAddTargetForEpisodes(meta, seasonLabel, episodes),
+                                        )
+                                    }
                                 },
                             )
                         }
@@ -2846,7 +2875,7 @@ private fun areEpisodesWatchedForActions(
     )
 }
 
-private fun MetaVideo.streamVideoIdForPlayback(parentMetaId: String, playbackVideoId: String): String {
+internal fun MetaVideo.streamVideoIdForPlayback(parentMetaId: String, playbackVideoId: String): String {
     val rawId = id.trim()
     return if (parentMetaId.isNativeAnimeMetaId() && rawId.isBareNumericId()) {
         playbackVideoId
@@ -2879,7 +2908,7 @@ private fun String.isNativeAnimeMetaId(): Boolean =
         startsWith("anidb:", ignoreCase = true) ||
         startsWith("simkl:", ignoreCase = true)
 
-private fun String.isBareNumericId(): Boolean =
+internal fun String.isBareNumericId(): Boolean =
     isNotBlank() && all(Char::isDigit)
 
 private fun extractImdbId(value: String?): String? =
@@ -3467,6 +3496,11 @@ private fun ConfiguredMetaSections(
                                 onClick = rate,
                             )
                         },
+                        DetailSecondaryAction(
+                            label = "Add to playlist",
+                            icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                            onClick = { PlaylistAddController.request(playlistAddTargetFor(meta)) },
+                        ),
                     ),
                     isTablet = isTablet,
                     onPlayClick = onPrimaryPlayClick,

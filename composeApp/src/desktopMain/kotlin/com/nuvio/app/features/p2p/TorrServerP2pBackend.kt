@@ -569,7 +569,7 @@ internal object TorrServerP2pBackend : DesktopP2pBackend {
                 ?: System.getenv("NUVIO_TORRSERVER_BINARY")?.takeIf { it.isNotBlank() }
 
         private fun localBinaryCandidates(platform: DesktopTorrServerPlatform): List<File> =
-            listOf(
+            if (!com.nuvio.app.core.build.DesktopDevRun.allowsLocalNativeBuilds) emptyList() else listOf(
                 File("composeApp/build/native/torrserver/${platform.resourceDir}/${platform.binaryName}"),
                 File("build/native/torrserver/${platform.resourceDir}/${platform.binaryName}"),
                 File("composeApp/src/desktopMain/native/torrserver/${platform.resourceDir}/${platform.binaryName}"),

@@ -171,6 +171,13 @@
             <span class="stream-title" id="streamTitle"></span>
             <span class="provider" id="providerName"></span>
           </div>
+          <!-- Playlist mode only: a hint under the title, and on hovering the title block a short
+               window of the playlist around the playing entry (display only). -->
+          <div class="playlist-peek-tag" id="playlistPeekTag" hidden></div>
+          <div class="playlist-peek" id="playlistPeek" aria-label="Playlist" hidden>
+            <div class="playlist-peek-header" id="playlistPeekHeader"></div>
+            <ol class="playlist-peek-list" id="playlistPeekList"></ol>
+          </div>
         </section>
         <nav class="header-actions" aria-label="Player actions">
           <button class="header-button" id="lockButton" data-command="lock" aria-label="Lock controls"><svg><use id="lockIcon" href="#icon-lock"></use></svg></button>
@@ -681,6 +688,6 @@
     <div class="pip-resize-handle pip-resize-nw" data-pip-resize="8"></div>
   </div>
 
-  <script src="controls.js?v=20260926-thumb-settle-1"></script>
+  <script src="controls.js?v=20260928-hold-speed-1"></script>
 </body>
 </html>

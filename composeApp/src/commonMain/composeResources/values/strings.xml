@@ -1144,6 +1144,9 @@
     <string name="settings_continue_watching_show_unaired_next_up_title">Show Unaired Next Up Episodes</string>
     <string name="settings_continue_watching_separate_next_up_description">Split CW and up next to two rows.</string>
     <string name="settings_continue_watching_separate_next_up_title">Separate Next Up Row</string>
+    <string name="settings_continue_watching_separate_upcoming_description">Move episodes that have not aired yet to their own Upcoming row. Works alongside Separate Next Up Row.</string>
+    <string name="settings_continue_watching_separate_upcoming_title">Separate Upcoming Row</string>
+    <string name="continue_watching_upcoming">Upcoming</string>
     <string name="settings_continue_watching_section_sort_order">SORT ORDER</string>
     <string name="settings_continue_watching_sort_mode_title">Sort Order</string>
     <string name="settings_continue_watching_sort_mode_default">Default</string>
@@ -1561,7 +1564,7 @@
     <string name="settings_playback_external_player_description_android">Open new playback with Android&apos;s default video app or system chooser.</string>
     <string name="settings_playback_external_player_description_ios">Open new playback with the selected installed player.</string>
     <string name="settings_playback_external_player_forward_subtitles">Forward Subtitles to External Player</string>
-    <string name="settings_playback_external_player_forward_subtitles_description">Fetch addon subtitles in your preferred language and pass them to the external player.</string>
+    <string name="settings_playback_external_player_forward_subtitles_description">Fetch addon subtitles in your preferred language (your device language when none is set) and pass them to the external player.</string>
     <string name="settings_playback_external_player_none_available">No supported external players installed</string>
     <string name="settings_playback_external_player_locate">Not found · Select executable…</string>
     <string name="settings_playback_external_player_change">Change executable…</string>
@@ -3554,6 +3557,7 @@
     <string name="setup_wizard_mode_preview_hint">Click the image to see it full size</string>
     <string name="setup_wizard_mode_preview_close">Click anywhere to close</string>
     <string name="setup_wizard_shortcuts_after_finish">After you click Finish, Nuvio opens the keyboard shortcuts page so you can see the controls and pick between arrow keys and WASD.</string>
+    <string name="setup_wizard_renderer_note">Nuvio draws its interface with Direct3D 11 for the widest compatibility. For a more polished look, you can switch to OpenGL in Settings › Playback › Interface Renderer. If fullscreen playback then shows a black screen, switch back to Direct3D 11.</string>
     <string name="setup_wizard_summary_title">You're all set</string>
     <string name="setup_wizard_summary_mode">Display mode</string>
     <string name="setup_wizard_summary_integrations">Integrations</string>

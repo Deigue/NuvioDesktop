@@ -63,7 +63,8 @@ actual object PluginRepository {
     private var initialized = false
     private var pulledFromServer = false
     private var currentProfileId = 1
-    private val activeRefreshJobs = mutableMapOf<String, Job>()
+    // Written on the caller's thread and removed from the job's finally on a worker thread.
+    private val activeRefreshJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
     actual fun initialize() {
         val effectiveProfileId = resolveEffectiveProfileId(ProfileRepository.activeProfileId)
@@ -273,9 +274,7 @@ actual object PluginRepository {
                     pushToServer()
                 }
             } finally {
-                if (activeRefreshJobs[manifestUrl] === refreshJob) {
-                    activeRefreshJobs.remove(manifestUrl)
-                }
+                activeRefreshJobs.remove(manifestUrl, refreshJob)
             }
         }
         activeRefreshJobs[manifestUrl] = refreshJob
@@ -529,11 +528,14 @@ actual object PluginRepository {
                     logo = scraper.logo,
                     contentLanguage = scraper.contentLanguage,
                     formats = scraper.formats,
-                    code = scraper.code,
+                    // The source lives once per hash in its own store, so toggling a scraper
+                    // rewrites a small metadata blob instead of ~1.8 MB of JavaScript per profile.
+                    codeHash = PluginStorage.saveCode(scraper.code),
                 )
             },
         )
         PluginStorage.saveState(currentProfileId, json.encodeToString(payload))
+        PluginStorage.pruneUnreferencedCode()
     }
 
     private fun loadStoredState(profileId: Int): StoredPluginsState? {
@@ -598,7 +600,7 @@ actual object PluginRepository {
                         logo = it.logo,
                         contentLanguage = it.contentLanguage,
                         formats = it.formats,
-                        code = it.code,
+                        code = it.codeHash?.let(PluginStorage::loadCode) ?: it.code,
                     )
                 }
                 ?: emptyList(),

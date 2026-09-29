@@ -1389,14 +1389,13 @@ compose.desktop {
         mainClass = "com.nuvio.app.MainKt"
         val smokePlayerUrl = providers.gradleProperty("nuvio.desktop.smokePlayerUrl").orNull
             ?: System.getenv("NUVIO_DESKTOP_SMOKE_PLAYER_URL")
-        // OpenGL everywhere, matching DesktopRendererApi's default and what Settings shows.
-        // This was DIRECT3D on Windows as an experiment (sharing one graphics API with mpv's D3D11
-        // video surface), but it silently won on any install that had never saved the renderer
-        // setting, so new users ran Direct3D while the UI told them OpenGL. Measured 2026-09-07:
-        // D3D is not a win anyway — it helps the expensive display modes and hurts the cheap ones,
-        // and has a ~3 ms per-frame floor OpenGL does not. It remains selectable in Settings as the
-        // compatibility option it is described as.
-        val skikoRenderApi = "OPENGL"
+        // Direct3D, matching DesktopRendererApi's default and what Settings shows. main() overwrites
+        // this from the saved setting before the first window, so it only matters if that step
+        // fails. OpenGL was the default in 1.15.0 and
+        // black-screened fullscreen playback on some drivers (see DesktopRendererApi). The
+        // 2026-09-07 measurement still holds — D3D has a ~3 ms per-frame floor OpenGL does not —
+        // which is why OpenGL stays selectable in Settings.
+        val skikoRenderApi = "DIRECT3D"
         jvmArgs += listOfNotNull(
             "-Dapple.awt.application.appearance=NSAppearanceNameDarkAqua",
             "-Dskiko.renderApi=$skikoRenderApi",
@@ -1407,32 +1406,22 @@ compose.desktop {
             // Native-crash diagnostics (chasing the silent, log-less CTD on plugin users —
             // suspected QuickJS/JNI access violation). On an EXCEPTION_ACCESS_VIOLATION the
             // HotSpot handler writes an hs_err_pid<pid>.log naming the faulting native module,
-            // and CreateCoredumpOnCrash drops a .mdmp with the native stack beside it. Pinned to
-            // C:\Users\Public (always exists + world-writable, so it survives an install under
-            // Program Files) with %p to avoid PID collisions — ErrorFile is a static startup flag
-            // that can't expand %LOCALAPPDATA% into the per-user log dir, so on the next launch
-            // relocateNativeCrashArtifacts() in DesktopFileLogging.kt moves these files into
-            // %LOCALAPPDATA%\NuvioHTPC\logs beside nuvio.log. Windows-only; harmless if empty.
+            // and CreateCoredumpOnCrash drops a .mdmp with the native stack in the working
+            // directory. ErrorFile is a static startup flag that can't expand %LOCALAPPDATA%, so it
+            // points at the app image ($APPDIR, expanded by the jpackage launcher; in a Gradle run
+            // or an unwritable install the JVM falls back to the working directory, then TEMP), and
+            // relocateJvmDiagnosticArtifacts() in DesktopFileLogging.kt moves both into
+            // %LOCALAPPDATA%\NuvioHTPC\logs on the next launch, keeping the newest two dumps.
+            // (It used to be C:\Users\Public, which every local account can read and pre-create.)
             // NOTE: this does NOT catch abort()/fast-fail exits (e.g. a QuickJS assert) which
             // bypass the SEH handler — those need WER LocalDumps. No -Xrs is set, so the handler
             // stays installed.
-            if (isWindowsHost) "-XX:ErrorFile=C:/Users/Public/nuvio_hs_err_pid%p.log" else null,
+            if (isWindowsHost) "-XX:ErrorFile=\$APPDIR/nuvio_hs_err_pid%p.log" else null,
             if (isWindowsHost) "-XX:+CreateCoredumpOnCrash" else null,
-            // Stop-the-world diagnostics (chasing the intermittent "UI froze then recovered"
-            // hitch). A safepoint halts every Java thread — the Compose UI thread and all
-            // coroutines — so a long one freezes the window and can't log a thing about itself:
-            // nuvio.log just stops mid-burst with no error. Reconstructing one after the fact
-            // from the JVM's cumulative counters only gets you a total (a real case: 7.7s at
-            // safepoints across 57 of them, of which GC was 0.07s — so it was NOT GC, but the
-            // counters can't say which VM operation it was). This names each operation and
-            // splits reaching-the-safepoint from time-spent-at-it, which separates "the app
-            // allocated too hard" from "the OS wasn't scheduling/paging our threads back in".
-            // Cheap: one line per safepoint, capped at 3x2MB. Same fixed-path reasoning as
-            // ErrorFile above — relocateJvmDiagnosticArtifacts() moves these next to nuvio.log.
-            if (isWindowsHost) {
-                "-Xlog:safepoint,gc:file=C:/Users/Public/nuvio_safepoint_pid%p.log" +
-                    ":time,uptime,level,tags:filesize=2m,filecount=3"
-            } else null,
+            // The stop-the-world (safepoint + GC) log is no longer a startup flag: it was
+            // -Xlog:...:file=C:/Users/Public/... only because -Xlog cannot expand %LOCALAPPDATA%.
+            // enableSafepointLog() in DesktopFileLogging.kt turns it on from main() via VM.log,
+            // straight into the per-user logs folder.
             // Return idle heap to the OS. G1 only uncommits regions at the end of a concurrent
             // cycle, and with no flags set nothing triggers one while the app sits still — so the
             // heap ratchets up to whatever the busiest moment needed and stays there for the rest

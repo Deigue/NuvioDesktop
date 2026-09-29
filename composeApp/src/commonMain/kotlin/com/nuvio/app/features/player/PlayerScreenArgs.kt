@@ -44,4 +44,8 @@ internal data class PlayerScreenArgs(
     // no watch-progress persistence and no Trakt/Simkl scrobbling.
     val disableProgressTracking: Boolean = false,
     val autoPlayMode: PlayerAutoPlayMode = PlayerAutoPlayMode.NextEpisode,
+    // Playlist mode: opens the next entry's resolved source in a fresh player.
+    val onPlaylistHandoff: ((com.nuvio.app.features.playlist.PlaylistHandoff) -> Unit)? = null,
+    /** Playlist mode: the viewer picked another entry from the HUD's playlist peek. */
+    val onPlaylistJump: ((entryId: String) -> Unit)? = null,
 )

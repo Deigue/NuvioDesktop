@@ -53,6 +53,16 @@ private val desktopHttpClient = OkHttpClient.Builder()
     .build()
 
 private const val MAX_RAW_RESPONSE_BODY_BYTES = 1024 * 1024
+
+/**
+ * Ceiling for a full response body. OkHttp inflates gzip transparently, so without one a small
+ * compressed response from a hostile or broken addon could inflate until the JVM runs out of heap.
+ * Generous: real manifests, catalogs and metas are well under a megabyte.
+ */
+private const val MAX_RESPONSE_BODY_BYTES = 64 * 1024 * 1024
+
+/** The SkipDB export is ~30 MB today and grows; the one download allowed past the general cap. */
+private const val MAX_FILE_RESPONSE_BODY_BYTES = 256 * 1024 * 1024
 private const val RAW_RESPONSE_TRUNCATION_SUFFIX = "\n$RAW_HTTP_TRUNCATION_MARKER"
 
 actual suspend fun httpGetText(url: String): String =
@@ -143,7 +153,7 @@ actual suspend fun httpGetFileRevalidated(
                 response.code == 304 -> RevalidatedFileResponse.NotModified
                 !response.isSuccessful -> RevalidatedFileResponse.Failed(response.code, response.message)
                 else -> RevalidatedFileResponse.Downloaded(
-                    body = readResponseBody(response.body),
+                    body = readResponseBody(response.body, MAX_FILE_RESPONSE_BODY_BYTES),
                     // The etag belongs to whatever actually served the bytes, which for a file
                     // parked behind a redirect is the storage host rather than the API.
                     etag = response.header("ETag"),
@@ -227,9 +237,13 @@ private fun readResponseBodyLimited(body: ResponseBody?): String {
     return if (readResult.truncated) decoded + RAW_RESPONSE_TRUNCATION_SUFFIX else decoded
 }
 
-private fun readResponseBody(body: ResponseBody?): String {
+private fun readResponseBody(body: ResponseBody?, maxBytes: Int = MAX_RESPONSE_BODY_BYTES): String {
     if (body == null) return ""
-    val bytes = body.bytes()
+    val readResult = body.byteStream().use { readAtMostBytes(it, maxBytes) }
+    if (readResult.truncated) {
+        throw java.io.IOException("Response body exceeds ${maxBytes / (1024 * 1024)} MB; refusing to read it")
+    }
+    val bytes = readResult.bytes
     return runCatching {
         String(bytes, body.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8)
     }.getOrElse { String(bytes, Charsets.UTF_8) }

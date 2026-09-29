@@ -257,6 +257,6 @@ object NextUpDiagnostics {
     private fun emit(key: String, line: String) {
         if (lastLineByKey[key] == line) return
         lastLineByKey = lastLineByKey + (key to line)
-        log.i { line }
+        log.d { line }
     }
 }

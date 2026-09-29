@@ -1,5 +1,7 @@
 package com.nuvio.app.features.player
 
+import com.nuvio.app.features.playlist.PlaylistPlaybackSession
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -69,7 +71,10 @@ internal fun PlayerScreenContent(args: PlayerScreenArgs) {
 
     val runtime = remember {
         PlayerScreenRuntime(args).apply {
-            sessionPlaybackSpeed = playerSettingsUiState.defaultPlaybackSpeed
+            // A playlist opens a fresh player per entry; keep the speed the last entry played at.
+            sessionPlaybackSpeed = PlaylistPlaybackSession.playbackSpeed
+                ?.takeIf { args.autoPlayMode == PlayerAutoPlayMode.Playlist }
+                ?: playerSettingsUiState.defaultPlaybackSpeed
         }
     }
     runtime.args = args

@@ -132,7 +132,10 @@ internal data class StoredPluginScraper(
     val logo: String? = null,
     val contentLanguage: List<String> = emptyList(),
     val formats: List<String>? = null,
-    val code: String,
+    /** Inline source, as written before [codeHash]; read for migration, written empty. */
+    val code: String = "",
+    /** SHA-256 of the source, which lives once in the shared plugin code store. */
+    val codeHash: String? = null,
 )
 
 internal fun normalizePluginType(value: String): String =

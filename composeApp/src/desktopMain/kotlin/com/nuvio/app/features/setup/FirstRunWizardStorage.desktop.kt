@@ -6,7 +6,7 @@ import com.nuvio.app.core.storage.DesktopStorage
  * Device-level, never profile-scoped and never synced: whether *this machine* has been through
  * setup says nothing about the account signed in on it.
  *
- * The store name is listed in `PlatformLocalAccountDataCleaner.preservedStoreNames` — without that,
+ * The store name must stay out of `PlatformLocalAccountDataCleaner.accountStoreNames` — otherwise
  * signing out deletes the file and the wizard re-runs on the next launch.
  */
 private const val firstRunWizardPreferencesName = "nuvio_first_run_wizard"

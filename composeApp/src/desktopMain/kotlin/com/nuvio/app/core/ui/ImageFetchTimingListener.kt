@@ -33,11 +33,12 @@ private val imageFetchLog = Logger.withTag("ImageFetch")
  * not be split between client and provider from the log. `NETWORK` loads are always written; disk
  * hits only when they are slow enough to matter, since a warm screen produces hundreds of them at a
  * few milliseconds each. Query parameters that look like credentials are masked, because a custom
- * poster template forwards the user's TMDB key in the URL.
+ * poster template forwards the user's TMDB key in the URL. Written at Debug: see
+ * DesktopFileLogging for how to turn Debug on.
  */
 internal class ImageFetchTimingListener(
     private val now: () -> Long = System::nanoTime,
-    private val emit: (String) -> Unit = { imageFetchLog.i { it } },
+    private val emit: (String) -> Unit = { imageFetchLog.d { it } },
 ) : EventListener() {
 
     private var startedAt = 0L
@@ -106,7 +107,23 @@ internal class ImageFetchTimingListener(
 
         private val SecretParam = Regex("([?&][^=&]*(?:key|token|secret|password)[^=&]*=)[^&#]*", RegexOption.IGNORE_CASE)
 
-        /** The request's data as a string, with credential-looking query values masked. */
-        fun describeData(data: Any): String = SecretParam.replace(data.toString(), "$1***")
+        /** Longer URLs (poster-service templates run to ~800 characters) are shortened. */
+        private const val MaxLoggedUrlLength = 100
+
+        /**
+         * The request's data as a string, with credential-looking query values masked. A long URL
+         * becomes host + last path segment + a short hash of the whole thing: the host is what
+         * separates provider latency from ours, the hash still tells two requests apart, and the
+         * full poster-service URLs were the biggest single emitter in nuvio.log.
+         */
+        fun describeData(data: Any): String {
+            val masked = SecretParam.replace(data.toString(), "$1***")
+            if (masked.length <= MaxLoggedUrlLength) return masked
+            val afterScheme = masked.substringAfter("://", missingDelimiterValue = masked)
+            val host = afterScheme.substringBefore('/')
+            val lastSegment = afterScheme.substringBefore('?').substringAfterLast('/').take(40)
+            val hash = (masked.hashCode().toLong() and 0xffffffffL).toString(16).padStart(8, '0')
+            return "${masked.substringBefore("://")}://$host/…/$lastSegment #$hash"
+        }
     }
 }

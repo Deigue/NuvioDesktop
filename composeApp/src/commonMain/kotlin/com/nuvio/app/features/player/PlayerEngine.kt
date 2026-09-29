@@ -278,6 +278,9 @@ data class PlayerControlsState(
     val nextEpisodeStatus: String = "",
     val nextEpisodeActionLabel: String = "Play",
     val nextEpisodePlayable: Boolean = false,
+    // Playlist mode: hovering the title shows a short window of the playlist around this entry.
+    val playlistPeekTitle: String = "",
+    val playlistPeekItems: List<PlayerControlPlaylistItem> = emptyList(),
     val showSubmitIntro: Boolean = false,
     val showVideoSettings: Boolean = false,
     val showSources: Boolean = false,
@@ -401,6 +404,14 @@ private fun String?.cleanMpvMediaTitlePart(): String? =
         ?.replace(Regex("\\s+"), " ")
         ?.trim()
         ?.takeIf(String::isNotBlank)
+
+/** One row of the HUD's playlist peek. [state] is "played", "current", "next" or "upcoming". */
+data class PlayerControlPlaylistItem(
+    val position: Int,
+    val title: String,
+    val subtitle: String,
+    val state: String,
+)
 
 data class PlayerControlFilterItem(
     val id: String = "",

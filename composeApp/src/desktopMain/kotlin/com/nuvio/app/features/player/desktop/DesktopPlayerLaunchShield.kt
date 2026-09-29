@@ -13,6 +13,17 @@ import javax.swing.Timer
 internal object DesktopPlayerLaunchShield {
     private var shieldWindow: JWindow? = null
     private var hideTimer: Timer? = null
+    // Set while one player hands over to the next (playlist advance). The outgoing player's dispose
+    // calls hide(); honouring it would flash the screen underneath before the next player's own
+    // launch shields it. Cleared when the shield actually goes away: the incoming player's first
+    // paint (hideAfter) or the safety timeout.
+    @Volatile private var handoffHold = false
+
+    /** Covers the window until the next player paints, across the outgoing player's teardown. */
+    fun holdForHandoff() {
+        handoffHold = true
+        showForActiveWindow()
+    }
 
     fun showForActiveWindow() {
         if (DesktopHostOs.current != DesktopHostOs.WINDOWS) return
@@ -52,6 +63,7 @@ internal object DesktopPlayerLaunchShield {
 
     fun hide() {
         SwingUtilities.invokeLater {
+            if (handoffHold) return@invokeLater
             hideTimer?.stop()
             hideTimer = null
             hideNow()
@@ -59,6 +71,7 @@ internal object DesktopPlayerLaunchShield {
     }
 
     private fun hideNow() {
+        handoffHold = false
         val shield = shieldWindow ?: return
         if (shield.isVisible) {
             shield.isVisible = false

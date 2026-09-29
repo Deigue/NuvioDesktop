@@ -44,6 +44,8 @@ fun PlayerScreen(
     initialProgressFraction: Float? = null,
     disableProgressTracking: Boolean = false,
     autoPlayMode: PlayerAutoPlayMode = PlayerAutoPlayMode.NextEpisode,
+    onPlaylistHandoff: ((com.nuvio.app.features.playlist.PlaylistHandoff) -> Unit)? = null,
+    onPlaylistJump: ((entryId: String) -> Unit)? = null,
 ) {
     PlayerScreenContent(
         PlayerScreenArgs(
@@ -86,6 +88,8 @@ fun PlayerScreen(
             initialProgressFraction = initialProgressFraction,
             disableProgressTracking = disableProgressTracking,
             autoPlayMode = autoPlayMode,
+            onPlaylistHandoff = onPlaylistHandoff,
+            onPlaylistJump = onPlaylistJump,
         )
     )
 }

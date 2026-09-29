@@ -669,7 +669,7 @@ private fun LibrarySortMenuItems(onDismissRequest: () -> Unit) {
 }
 
 @Composable
-private fun LibraryMenuItem(label: String, selected: Boolean, onClick: () -> Unit) {
+internal fun LibraryMenuItem(label: String, selected: Boolean, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()

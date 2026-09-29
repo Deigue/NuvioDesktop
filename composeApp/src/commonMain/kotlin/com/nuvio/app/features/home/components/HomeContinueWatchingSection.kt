@@ -1,8 +1,30 @@
 package com.nuvio.app.features.home.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.graphicsLayer
+import com.nuvio.app.features.watchprogress.WatchProgressRepository
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.hazeSource
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -390,33 +412,159 @@ private fun HomeContinueWatchingSectionContent(
             key = { item -> item.videoId },
             rowState = rowState,
         ) { item ->
-            when (effectiveStyle) {
-                ContinueWatchingSectionStyle.Card -> ContinueWatchingCard(
-                    item = item,
-                    basePosterWidthDpOverride = fittedPosterWidthDpOverride,
-                    useEpisodeThumbnails = useEpisodeThumbnails,
-                    blurNextUp = blurNextUp,
-                    onClick = onItemClick?.let { { it(item) } },
-                    onLongClick = onItemLongPress?.let { { it(item) } },
-                )
-                ContinueWatchingSectionStyle.Wide -> ContinueWatchingWideCard(
-                    item = item,
-                    layout = layout,
-                    useEpisodeThumbnails = useEpisodeThumbnails,
-                    blurNextUp = blurNextUp,
-                    onClick = onItemClick?.let { { it(item) } },
-                    onLongClick = onItemLongPress?.let { { it(item) } },
-                )
-                ContinueWatchingSectionStyle.Poster -> ContinueWatchingPosterCard(
-                    item = item,
-                    layout = fittedLayout,
-                    useEpisodeThumbnails = useEpisodeThumbnails,
-                    blurNextUp = blurNextUp,
-                    onClick = onItemClick?.let { { it(item) } },
-                    onLongClick = onItemLongPress?.let { { it(item) } },
-                )
+            // The hover remove button is a shortcut for the action sheet's Remove, so it is offered
+            // exactly where that sheet is: surfaces that pass no long-press get neither.
+            ContinueWatchingRemovableCard(
+                onRemove = onItemLongPress?.let {
+                    { WatchProgressRepository.dismissContinueWatchingCard(item) }
+                },
+            ) {
+                when (effectiveStyle) {
+                    ContinueWatchingSectionStyle.Card -> ContinueWatchingCard(
+                        item = item,
+                        basePosterWidthDpOverride = fittedPosterWidthDpOverride,
+                        useEpisodeThumbnails = useEpisodeThumbnails,
+                        blurNextUp = blurNextUp,
+                        onClick = onItemClick?.let { { it(item) } },
+                        onLongClick = onItemLongPress?.let { { it(item) } },
+                    )
+                    ContinueWatchingSectionStyle.Wide -> ContinueWatchingWideCard(
+                        item = item,
+                        layout = layout,
+                        useEpisodeThumbnails = useEpisodeThumbnails,
+                        blurNextUp = blurNextUp,
+                        onClick = onItemClick?.let { { it(item) } },
+                        onLongClick = onItemLongPress?.let { { it(item) } },
+                    )
+                    ContinueWatchingSectionStyle.Poster -> ContinueWatchingPosterCard(
+                        item = item,
+                        layout = fittedLayout,
+                        useEpisodeThumbnails = useEpisodeThumbnails,
+                        blurNextUp = blurNextUp,
+                        onClick = onItemClick?.let { { it(item) } },
+                        onLongClick = onItemLongPress?.let { { it(item) } },
+                    )
+                }
             }
         }
+    }
+}
+
+private val ContinueWatchingRemoveButtonSize = 24.dp
+private val ContinueWatchingRemoveButtonInset = 7.dp
+private const val ContinueWatchingRemoveButtonFadeMs = 140
+private const val ContinueWatchingRemoveCardFadeMs = 220
+
+/**
+ * If the card is still here this long after its fade finished, the removal was refused (a stale
+ * entry, an unknown source) and the card is brought back rather than left as an invisible hole.
+ */
+private const val ContinueWatchingRemoveRestoreDelayMs = 1_500L
+
+/**
+ * Wraps a Continue Watching card with a small frosted-glass remove button in its top-left corner,
+ * shown on pointer hover. A quicker path than right-click → Remove: the card just fades out, with
+ * none of the zoom overlay's disintegration, and [onRemove] runs once it has faded.
+ *
+ * The button is a sibling drawn over the card, not part of it, so it can blur the card's own
+ * pixels through Haze; the card is only a Haze source while the button is on screen.
+ */
+@Composable
+private fun ContinueWatchingRemovableCard(
+    onRemove: (() -> Unit)?,
+    content: @Composable () -> Unit,
+) {
+    if (onRemove == null) {
+        content()
+        return
+    }
+    val currentOnRemove by rememberUpdatedState(onRemove)
+    val cardInteraction = remember { MutableInteractionSource() }
+    val cardHovered by cardInteraction.collectIsHoveredAsState()
+    var removing by remember { mutableStateOf(false) }
+    val cardAlpha = remember { Animatable(1f) }
+    LaunchedEffect(removing) {
+        if (!removing) return@LaunchedEffect
+        cardAlpha.animateTo(0f, tween(ContinueWatchingRemoveCardFadeMs, easing = FastOutLinearInEasing))
+        currentOnRemove()
+        delay(ContinueWatchingRemoveRestoreDelayMs)
+        removing = false
+        cardAlpha.animateTo(1f, tween(ContinueWatchingRemoveCardFadeMs))
+    }
+    val buttonAlpha by animateFloatAsState(
+        targetValue = if (cardHovered && !removing) 1f else 0f,
+        animationSpec = tween(ContinueWatchingRemoveButtonFadeMs),
+        label = "continueWatchingRemoveButton",
+    )
+    val hazeState = remember { HazeState() }
+
+    Box(
+        modifier = Modifier
+            .graphicsLayer { alpha = cardAlpha.value }
+            .hoverable(cardInteraction),
+    ) {
+        Box(modifier = if (buttonAlpha > 0f) Modifier.hazeSource(hazeState) else Modifier) {
+            content()
+        }
+        if (buttonAlpha > 0f) {
+            ContinueWatchingRemoveButton(
+                hazeState = hazeState,
+                enabled = !removing,
+                onClick = { removing = true },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(ContinueWatchingRemoveButtonInset)
+                    .graphicsLayer { alpha = buttonAlpha },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContinueWatchingRemoveButton(
+    hazeState: HazeState,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    // Kept deliberately quiet at rest — a dim tint and a hairline rim — and only firmed up once
+    // the pointer is actually on it, so a row of hovered cards never reads as a row of X's.
+    val tintAlpha by animateFloatAsState(if (hovered) 0.42f else 0.22f, label = "removeButtonTint")
+    val iconAlpha by animateFloatAsState(if (hovered) 1f else 0.78f, label = "removeButtonIcon")
+    Box(
+        modifier = modifier
+            .size(ContinueWatchingRemoveButtonSize)
+            .clip(CircleShape)
+            .hazeEffect(state = hazeState) {
+                blurRadius = 10.dp
+                noiseFactor = 0f
+                tints = listOf(HazeTint(Color.Black.copy(alpha = tintAlpha)))
+            }
+            .background(
+                Brush.verticalGradient(
+                    0f to Color.White.copy(alpha = 0.14f),
+                    0.55f to Color.White.copy(alpha = 0.03f),
+                    1f to Color.Transparent,
+                ),
+            )
+            .border(0.75.dp, Color.White.copy(alpha = if (hovered) 0.34f else 0.20f), CircleShape)
+            .hoverable(interaction)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                enabled = enabled,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = stringResource(Res.string.cw_action_remove),
+            tint = Color.White.copy(alpha = iconAlpha),
+            modifier = Modifier.size(14.dp),
+        )
     }
 }
 

@@ -237,7 +237,7 @@ internal fun PlayerScreenRuntime.skipSubmitToastCopy(): SkipSubmitToastCopy {
             else -> resultCopy(session.resultAccepted, session.resultMessage, "capture-result:$start")
         }
     }
-    return SkipSubmitToastCopy()
+    return playerNoticeToast ?: SkipSubmitToastCopy()
 }
 
 private fun resultCopy(accepted: Boolean, message: String, key: String) = SkipSubmitToastCopy(

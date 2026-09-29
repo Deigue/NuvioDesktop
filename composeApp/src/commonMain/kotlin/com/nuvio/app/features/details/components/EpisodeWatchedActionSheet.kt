@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.HistoryEdu
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAddCheckCircle
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +58,10 @@ fun EpisodeWatchedActionSheet(
      * which is more precise than "before season N" and is what someone resuming actually wants.
      */
     onRecap: (() -> Unit)? = null,
+    /** Queues this episode in a playlist. Null hides the row. */
+    onAddToPlaylist: (() -> Unit)? = null,
+    /** Queues the episode's whole season in a playlist. Null hides the row. */
+    onAddSeasonToPlaylist: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val coroutineScope = rememberCoroutineScope()
@@ -164,6 +169,32 @@ fun EpisodeWatchedActionSheet(
                     },
                 )
             }
+            if (onAddToPlaylist != null) {
+                NuvioBottomSheetDivider()
+                NuvioBottomSheetActionRow(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    title = "Add episode to playlist",
+                    onClick = {
+                        onAddToPlaylist()
+                        coroutineScope.launch {
+                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
+                        }
+                    },
+                )
+            }
+            if (onAddSeasonToPlaylist != null) {
+                NuvioBottomSheetDivider()
+                NuvioBottomSheetActionRow(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    title = "Add $seasonLabel to playlist",
+                    onClick = {
+                        onAddSeasonToPlaylist()
+                        coroutineScope.launch {
+                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
+                        }
+                    },
+                )
+            }
         }
     }
 }
@@ -183,6 +214,8 @@ fun SeasonWatchedActionSheet(
      * that is always greyed out there reads as broken.
      */
     onRecap: (() -> Unit)? = null,
+    /** Queues the season's released episodes in a playlist. Null hides the row. */
+    onAddSeasonToPlaylist: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val coroutineScope = rememberCoroutineScope()
@@ -244,6 +277,19 @@ fun SeasonWatchedActionSheet(
                     title = stringResource(Res.string.episode_mark_previous_seasons_watched),
                     onClick = {
                         onMarkPreviousSeasonsWatched()
+                        coroutineScope.launch {
+                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
+                        }
+                    },
+                )
+            }
+            if (onAddSeasonToPlaylist != null) {
+                NuvioBottomSheetDivider()
+                NuvioBottomSheetActionRow(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    title = "Add $seasonLabel to playlist",
+                    onClick = {
+                        onAddSeasonToPlaylist()
                         coroutineScope.launch {
                             dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
                         }

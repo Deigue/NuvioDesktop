@@ -32,7 +32,7 @@ internal object StreamSourceMerge {
      * throw away the score order which is the entire point of collapsing them.
      */
     fun isFlatSection(addonId: String): Boolean =
-        addonId == MERGED_ADDON_ID || addonId == HTPC_ADDON_ID
+        addonId == MERGED_ADDON_ID || addonId == HTPC_ADDON_ID || addonId == StreamListSort.SORTED_ADDON_ID
 
     /**
      * @param groups already score-sorted groups.

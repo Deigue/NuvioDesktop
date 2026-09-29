@@ -19,7 +19,7 @@ import kotlinx.coroutines.withContext
 internal object PlaybackArtworkResolver {
     // Successful lookups only — a null (miss/failure) is never cached so a later retry (e.g. once
     // addons finish loading) can still succeed.
-    private val cache = mutableMapOf<String, String>()
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     suspend fun resolvePosterUrl(title: String, year: Int?, isSeries: Boolean): String? {
         val normalizedTitle = title.trim()

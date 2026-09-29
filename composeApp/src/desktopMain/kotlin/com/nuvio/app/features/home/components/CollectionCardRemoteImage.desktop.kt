@@ -37,6 +37,7 @@ internal actual fun CollectionCardRemoteImage(
     contentScale: ContentScale,
     animateIfPossible: Boolean,
     staticImageUrl: String?,
+    playAnimation: Boolean,
 ) {
     val context = LocalPlatformContext.current
     val request = remember(context, imageUrl, animateIfPossible) {
@@ -132,23 +133,28 @@ internal actual fun CollectionCardRemoteImage(
         // guarantees something is always drawn.
         AsyncImage(
             model = firstFrameRequest,
-            contentDescription = if (animationReady) null else contentDescription,
+            contentDescription = if (animationReady && playAnimation) null else contentDescription,
             modifier = Modifier.matchParentSize(),
             contentScale = contentScale,
             onLoading = { firstFrameReady = false },
             onSuccess = { firstFrameReady = true },
             onError = { firstFrameReady = false },
         )
-        AsyncImage(
-            model = request,
-            // Null while a layer below is carrying the description, so the card is not announced
-            // twice.
-            contentDescription = if (animationReady) contentDescription else null,
-            modifier = Modifier.matchParentSize(),
-            contentScale = contentScale,
-            onLoading = { animationReady = false },
-            onSuccess = { animationReady = true },
-            onError = { animationReady = false },
-        )
+        // Focus-only playback: an unfocused card never composes this layer, so it never decodes
+        // the animation either — the first frame above is all it draws. Focus adds the layer on top
+        // of that identical frame, so there is no cut when it starts.
+        if (playAnimation) {
+            AsyncImage(
+                model = request,
+                // Null while a layer below is carrying the description, so the card is not
+                // announced twice.
+                contentDescription = if (animationReady) contentDescription else null,
+                modifier = Modifier.matchParentSize(),
+                contentScale = contentScale,
+                onLoading = { animationReady = false },
+                onSuccess = { animationReady = true },
+                onError = { animationReady = false },
+            )
+        }
     }
 }

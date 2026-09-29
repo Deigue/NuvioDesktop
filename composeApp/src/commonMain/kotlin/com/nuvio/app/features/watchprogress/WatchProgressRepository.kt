@@ -158,6 +158,18 @@ object WatchProgressRepository {
     private var hasLoaded = false
     private var currentProfileId: Int = 1
     private var entriesByVideoId: MutableMap<String, WatchProgressEntry> = mutableMapOf()
+
+    /**
+     * Guards [entriesByVideoId]. It has writers on the EDT (every playback tick through [upsert])
+     * and on [syncScope] (remote pulls, metadata resolution), and [persist]/[publish] iterate it;
+     * unguarded, that is a ConcurrentModificationException on the EDT, or a progress tick written
+     * into the map instance a full pull is about to replace. Never held across a suspension or a
+     * call into another repository.
+     */
+    private val entriesLock = Any()
+
+    private fun entrySnapshot(): List<WatchProgressEntry> =
+        synchronized(entriesLock) { entriesByVideoId.values.toList() }
     private var metadataResolutionJob: Job? = null
     private var metadataResolutionStartupGraceUsed = false
     private var isPullingNuvioSyncFromServer = false
@@ -510,7 +522,7 @@ object WatchProgressRepository {
         hasLoaded = false
         currentProfileId = 1
         lastAddonMetadataReadyFingerprint = null
-        entriesByVideoId.clear()
+        synchronized(entriesLock) { entriesByVideoId.clear() }
         lastSuccessfulPushEpochMs = 0L
         deltaCursorEventId = 0L
         deltaInitialized = false
@@ -526,7 +538,7 @@ object WatchProgressRepository {
         currentProfileId = profileId
         hasLoaded = true
         lastAddonMetadataReadyFingerprint = null
-        entriesByVideoId.clear()
+        synchronized(entriesLock) { entriesByVideoId.clear() }
 
         val payload = WatchProgressStorage.loadPayload(profileId).orEmpty().trim()
         if (payload.isNotEmpty()) {
@@ -534,9 +546,10 @@ object WatchProgressRepository {
             lastSuccessfulPushEpochMs = storedPayload.lastSuccessfulPushEpochMs
             deltaCursorEventId = storedPayload.deltaCursorEventId
             deltaInitialized = storedPayload.deltaInitialized
-            entriesByVideoId = storedPayload.entries
+            val loaded = storedPayload.entries
                 .associateBy { it.videoId }
                 .toMutableMap()
+            synchronized(entriesLock) { entriesByVideoId = loaded }
         } else {
             lastSuccessfulPushEpochMs = 0L
             deltaCursorEventId = 0L
@@ -755,12 +768,14 @@ object WatchProgressRepository {
             "Watch progress snapshot fetched ${serverEntries.size} entries for profile $profileId " +
                 "resetDeltaState=$resetDeltaState"
         }
-        entriesByVideoId = mergeWatchProgressEntriesPreservingUnsynced(
-            serverEntries = serverEntries,
-            localEntries = entriesByVideoId.values,
-            lastSuccessfulPushEpochMs = lastSuccessfulPushEpochMs,
-            pullStartedEpochMs = pullStartedEpochMs,
-        ).toMutableMap()
+        synchronized(entriesLock) {
+            entriesByVideoId = mergeWatchProgressEntriesPreservingUnsynced(
+                serverEntries = serverEntries,
+                localEntries = entriesByVideoId.values,
+                lastSuccessfulPushEpochMs = lastSuccessfulPushEpochMs,
+                pullStartedEpochMs = pullStartedEpochMs,
+            ).toMutableMap()
+        }
         // The server may still hold rows pushed before live events were excluded.
         dropLiveEventEntries()
         if (resetDeltaState) {
@@ -780,7 +795,7 @@ object WatchProgressRepository {
     private fun applyWatchProgressDeltaEvents(
         events: Collection<ProgressDeltaEvent>,
         pullStartedEpochMs: Long,
-    ): WatchProgressDeltaApplyResult {
+    ): WatchProgressDeltaApplyResult = synchronized(entriesLock) {
         var changed = false
         var appliedUpserts = 0
         var appliedDeletes = 0
@@ -818,7 +833,7 @@ object WatchProgressRepository {
                 }
             }
         }
-        return WatchProgressDeltaApplyResult(
+        WatchProgressDeltaApplyResult(
             appliedUpserts = appliedUpserts,
             appliedDeletes = appliedDeletes,
             preservedLocalItems = preservedLocalItems,
@@ -919,7 +934,7 @@ object WatchProgressRepository {
     }
 
     private fun resolveRemoteMetadata(useStartupGrace: Boolean = false) {
-        val localMissing = entriesByVideoId.values
+        val localMissing = entrySnapshot()
             .filter {
                 it.poster.isNullOrBlank() ||
                     it.background.isNullOrBlank() ||
@@ -1028,7 +1043,7 @@ object WatchProgressRepository {
                         continue
                     }
 
-                    val current = entriesByVideoId[entry.videoId] ?: continue
+                    val current = synchronized(entriesLock) { entriesByVideoId[entry.videoId] } ?: continue
                     val updated = current.copy(
                         // Never downgrade to a nameless meta. A lightweight fetch that found only
                         // artwork carries an empty name (MetaDetailsRepository builds its art-only
@@ -1052,7 +1067,17 @@ object WatchProgressRepository {
                     // Entries are now re-resolved for artwork that may never arrive, so a pass that
                     // changes nothing must not trigger a publish + disk write.
                     if (updated == current) continue
-                    entriesByVideoId[current.videoId] = updated
+                    // Only if nothing (a playback tick) replaced the entry since it was read above;
+                    // otherwise this pass would put the older position back.
+                    val applied = synchronized(entriesLock) {
+                        if (entriesByVideoId[current.videoId] === current) {
+                            entriesByVideoId[current.videoId] = updated
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    if (!applied) continue
                     appliedEntries += 1
                     // The same late metadata also repairs watched rows this entry wrote while it
                     // was still nameless; they have no self-healing pass of their own.
@@ -1114,7 +1139,7 @@ object WatchProgressRepository {
     fun knownTitleForParent(parentMetaId: String): String? {
         if (parentMetaId.isBlank()) return null
         ensureLoaded()
-        return entriesByVideoId.values.firstOrNull {
+        return entrySnapshot().firstOrNull {
             it.title.isNotBlank() && it.parentMetaId.equals(parentMetaId, ignoreCase = true)
         }?.title
     }
@@ -1135,6 +1160,9 @@ object WatchProgressRepository {
     ) {
         ensureLoaded()
         upsert(session = session, snapshot = snapshot, persist = true, syncRemote = syncRemote)
+        // The one write users notice if it is lost: where they stopped. Not left to the storage
+        // debounce, so a crash or kill right after closing the player still keeps it.
+        runCatching { WatchProgressStorage.flush() }
         refreshContinueWatchingAfterPlaybackStops()
     }
 
@@ -1197,8 +1225,8 @@ object WatchProgressRepository {
             ContinueWatchingSource.LOCAL -> Unit
         }
 
-        val removedEntries = videoIds.mapNotNull { videoId ->
-            entriesByVideoId.remove(videoId)
+        val removedEntries = synchronized(entriesLock) {
+            videoIds.mapNotNull { videoId -> entriesByVideoId.remove(videoId) }
         }
         if (removedEntries.isNotEmpty()) {
             publish()
@@ -1245,8 +1273,8 @@ object WatchProgressRepository {
             ContinueWatchingSource.LOCAL -> Unit
         }
 
-        entriesToRemove.forEach { entry ->
-            entriesByVideoId.remove(entry.videoId)
+        synchronized(entriesLock) {
+            entriesToRemove.forEach { entry -> entriesByVideoId.remove(entry.videoId) }
         }
         publish()
         persist()
@@ -1269,6 +1297,25 @@ object WatchProgressRepository {
             ContinueWatchingRemovalTarget.TRAKT -> removeTraktProgress(listOf(entry))
             ContinueWatchingRemovalTarget.LOCAL -> removeLocalProgress(listOf(entry))
             null -> log.w { "Unknown Continue Watching source '${item.source}'; refusing cross-provider removal" }
+        }
+    }
+
+    /**
+     * What "Remove" means for any Continue Watching card: a Next Up card is dismissed by its seed
+     * (it has no progress entry of its own), everything else is removed from its source. Shared by
+     * the action sheet and the card's hover remove button.
+     */
+    fun dismissContinueWatchingCard(item: ContinueWatchingItem) {
+        if (item.isNextUp) {
+            ContinueWatchingPreferencesRepository.addDismissedNextUpKey(
+                nextUpDismissKey(
+                    item.parentMetaId,
+                    item.nextUpSeedSeasonNumber,
+                    item.nextUpSeedEpisodeNumber,
+                ),
+            )
+        } else {
+            removeContinueWatchingItem(item)
         }
     }
 
@@ -1342,7 +1389,9 @@ object WatchProgressRepository {
     }
 
     private fun removeLocalProgress(entries: List<WatchProgressEntry>) {
-        val removedEntries = entries.mapNotNull { entry -> entriesByVideoId.remove(entry.videoId) }
+        val removedEntries = synchronized(entriesLock) {
+            entries.mapNotNull { entry -> entriesByVideoId.remove(entry.videoId) }
+        }
         if (removedEntries.isEmpty()) return
         publish()
         persist()
@@ -1354,7 +1403,7 @@ object WatchProgressRepository {
         return if (shouldUseTraktProgress()) {
             TraktProgressRepository.uiState.value.entries
         } else {
-            entriesByVideoId.values.toList()
+            entrySnapshot()
         }.firstOrNull { it.videoId == videoId }
     }
 
@@ -1457,8 +1506,9 @@ object WatchProgressRepository {
             ContinueWatchingPreferencesRepository.removeDismissedNextUpKeysForContent(entry.parentMetaId)
         }
 
-        val previousEntry = entriesByVideoId[session.videoId]
-        entriesByVideoId[session.videoId] = entry
+        val previousEntry = synchronized(entriesLock) {
+            entriesByVideoId.put(session.videoId, entry)
+        }
         when {
             useMdbListProgress -> MdbListProgressRepository.applyOptimisticProgress(entry)
             useSimklProgress -> SimklProgressRepository.applyOptimisticProgress(entry)
@@ -1580,9 +1630,11 @@ object WatchProgressRepository {
      * predates that rule can still hand them back.
      */
     private fun dropLiveEventEntries(): Boolean {
-        val live = entriesByVideoId.values.filter { it.isLiveEventEntry() }.map { it.videoId }
+        val live = synchronized(entriesLock) {
+            entriesByVideoId.values.filter { it.isLiveEventEntry() }.map { it.videoId }
+                .also { ids -> ids.forEach(entriesByVideoId::remove) }
+        }
         if (live.isEmpty()) return false
-        live.forEach { entriesByVideoId.remove(it) }
         log.d { "Dropped ${live.size} live-event watch progress entries: $live" }
         return true
     }
@@ -1591,7 +1643,7 @@ object WatchProgressRepository {
         WatchProgressStorage.savePayload(
             currentProfileId,
             WatchProgressCodec.encodePayload(
-                entries = entriesByVideoId.values,
+                entries = entrySnapshot(),
                 lastSuccessfulPushEpochMs = lastSuccessfulPushEpochMs,
                 deltaCursorEventId = deltaCursorEventId,
                 deltaInitialized = deltaInitialized,
@@ -1653,7 +1705,7 @@ object WatchProgressRepository {
      */
     fun localPlaybackEntries(): List<WatchProgressEntry> {
         ensureLoaded()
-        return entriesByVideoId.values.toList()
+        return entrySnapshot()
     }
 
     private fun currentEntries(): List<WatchProgressEntry> {
@@ -1728,7 +1780,7 @@ object WatchProgressRepository {
             ContinueWatchingSource.LOCAL -> Unit
         }
 
-        return entriesByVideoId.values.toList()
+        return entrySnapshot()
     }
 
     /**
@@ -1797,7 +1849,7 @@ object WatchProgressRepository {
     ): List<WatchProgressEntry> {
         if (!ContinueWatchingPreferencesRepository.uiState.value.seedNextUpFromNuvioSync) return this
         val remoteKeys = mapTo(mutableSetOf()) { it.videoId }
-        val extra = entriesByVideoId.values.filter { entry ->
+        val extra = entrySnapshot().filter { entry ->
             entry.videoId !in remoteKeys &&
                 !isTraktCompatibleId(entry.parentMetaId) &&
                 // Appended after the source's own day-cap filter, so without this they ignored the

@@ -1,28 +1,38 @@
 package com.nuvio.app.features.player
 
+import co.touchlab.kermit.Logger
 import com.nuvio.app.core.storage.DesktopStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
+import java.awt.Dialog
+import java.awt.FileDialog
+import java.awt.Frame
+import java.awt.KeyboardFocusManager
+import java.awt.Window
 import java.io.File
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-import javax.swing.JFileChooser
 import javax.swing.JOptionPane
-import javax.swing.filechooser.FileNameExtensionFilter
 
 private const val SubtitleDownloadDestinationStoreName = "nuvio_addon_subtitle_download"
 private const val LastSubtitleDownloadDirectoryKey = "last_directory"
+private val subtitleDownloadLog = Logger.withTag("SubtitleDownload")
 private val subtitleDownloadDestinationStore by lazy {
     DesktopStorage.store(SubtitleDownloadDestinationStoreName)
 }
 
 actual object AddonSubtitleDownloadProvider {
     actual suspend fun download(request: AddonSubtitleDownloadRequest): AddonSubtitleDownloadResult {
+        subtitleDownloadLog.i { "Download requested: ${request.subtitleLabel} (${request.language})" }
         val downloaded = withContext(Dispatchers.IO) {
             downloadSubtitleFile(request.subtitleUrl)
-        } ?: return AddonSubtitleDownloadResult.Failed("The provider did not return a valid subtitle file.")
+        } ?: run {
+            subtitleDownloadLog.w { "Fetch failed or rejected for ${request.subtitleLabel}" }
+            return AddonSubtitleDownloadResult.Failed("The provider did not return a valid subtitle file.")
+        }
+        subtitleDownloadLog.i { "Fetched ${downloaded.bytes.size} bytes as .${downloaded.extension}" }
 
         val localMedia = withContext(Dispatchers.IO) {
             resolveLocalMediaFile(request.activeMediaSource)
@@ -33,23 +43,32 @@ actual object AddonSubtitleDownloadProvider {
             ?.resolve("${localMedia.nameWithoutExtension}.${downloaded.extension}")
 
         val target = if (automaticTarget != null) {
-            if (!confirmOverwrite(automaticTarget)) return AddonSubtitleDownloadResult.Cancelled
+            subtitleDownloadLog.i { "Local media playing; saving beside it: ${automaticTarget.absolutePath}" }
+            if (!confirmOverwrite(automaticTarget)) {
+                subtitleDownloadLog.i { "Overwrite declined" }
+                return AddonSubtitleDownloadResult.Cancelled
+            }
             automaticTarget
         } else {
             chooseSubtitleDestination(
                 suggestedBaseName = request.suggestedBaseName,
                 extension = downloaded.extension,
-            ) ?: return AddonSubtitleDownloadResult.Cancelled
+            ) ?: run {
+                subtitleDownloadLog.i { "Save dialog cancelled" }
+                return AddonSubtitleDownloadResult.Cancelled
+            }
         }
 
         return withContext(Dispatchers.IO) {
             runCatching {
                 writeSubtitleAtomically(target, downloaded.bytes)
+                subtitleDownloadLog.i { "Saved ${target.absolutePath}" }
                 AddonSubtitleDownloadResult.Saved(
                     path = target.absolutePath,
                     savedBesideMedia = automaticTarget != null,
                 )
             }.getOrElse { error ->
+                subtitleDownloadLog.w(error) { "Write failed for ${target.absolutePath}" }
                 AddonSubtitleDownloadResult.Failed(error.message ?: "The subtitle could not be written.")
             }
         }
@@ -83,21 +102,43 @@ private suspend fun chooseSubtitleDestination(suggestedBaseName: String, extensi
                 subtitleDownloadDestinationStore.getString(LastSubtitleDownloadDirectoryKey)
             }.getOrNull(),
         )
-        val chooser = JFileChooser(initialDirectory).apply {
-            dialogTitle = "Save subtitle"
-            fileFilter = FileNameExtensionFilter("${extension.uppercase()} subtitle (*.$extension)", extension)
-            selectedFile = initialDirectory.resolve("$safeBase.$extension")
+        // The native Windows save dialog, owned by the app window. An unowned dialog (the old
+        // JFileChooser with a null parent) could open behind the borderless-fullscreen player,
+        // leaving the download "in progress" with every download button disabled.
+        val owner = subtitleDialogOwner()
+        subtitleDownloadLog.i { "Opening save dialog (owner=${owner?.javaClass?.simpleName ?: "none"}) in $initialDirectory" }
+        val dialog = when (owner) {
+            is Frame -> FileDialog(owner, "Save subtitle", FileDialog.SAVE)
+            is Dialog -> FileDialog(owner, "Save subtitle", FileDialog.SAVE)
+            else -> FileDialog(null as Frame?, "Save subtitle", FileDialog.SAVE)
+        }.apply {
+            directory = initialDirectory.absolutePath
+            file = "$safeBase.$extension"
         }
-        val result = chooser.showSaveDialog(null)
-        // Preserve the directory the chooser was left in even when the user cancels after
+        dialog.isVisible = true
+        val chosenDirectory = dialog.directory?.let(::File)
+        val chosenName = dialog.file
+        dialog.dispose()
+        // Preserve the directory the dialog was left in even when the user cancels after
         // browsing. The next subtitle dialog therefore opens exactly where they left it.
-        rememberSubtitleSaveDirectory(chooser.currentDirectory)
-        if (result != JFileChooser.APPROVE_OPTION) return@withContext null
-        val selected = subtitleDestinationWithExtension(chooser.selectedFile, extension)
-        rememberSubtitleSaveDirectory(selected.parentFile)
-        if (!confirmOverwriteOnSwingThread(selected)) return@withContext null
+        rememberSubtitleSaveDirectory(chosenDirectory)
+        if (chosenDirectory == null || chosenName.isNullOrBlank()) return@withContext null
+        val selected = subtitleDestinationWithExtension(chosenDirectory.resolve(chosenName), extension)
+        // The native dialog already asked about replacing the typed name; ask again only when
+        // the extension we appended points at a different, existing file.
+        if (selected.name != chosenName && !confirmOverwriteOnSwingThread(selected)) return@withContext null
         selected
     }
+
+private fun subtitleDialogOwner(): Window? {
+    val active = KeyboardFocusManager.getCurrentKeyboardFocusManager().activeWindow
+    if (active?.isShowing == true && (active is Frame || active is Dialog)) return active
+    // Focus is usually inside the WebView2 HUD (a non-AWT child), so AWT may report no active
+    // window; fall back to the largest showing frame, which is the player's app window.
+    return Window.getWindows()
+        .filter { it.isShowing && it is Frame }
+        .maxByOrNull { it.width.toLong() * it.height }
+}
 
 internal fun preferredSubtitleSaveDirectory(
     rememberedPath: String?,
@@ -139,7 +180,7 @@ private suspend fun confirmOverwrite(target: File): Boolean {
 private fun confirmOverwriteOnSwingThread(target: File): Boolean {
     if (!target.exists()) return true
     return JOptionPane.showConfirmDialog(
-        null,
+        subtitleDialogOwner(),
         "${target.name} already exists. Replace it?",
         "Replace subtitle?",
         JOptionPane.YES_NO_OPTION,

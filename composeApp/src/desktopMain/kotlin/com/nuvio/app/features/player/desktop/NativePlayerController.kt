@@ -33,6 +33,7 @@ import com.nuvio.app.features.player.PlayerControlsAction
 import com.nuvio.app.features.player.PlayerControlsState
 import com.nuvio.app.features.player.PlayerEngineController
 import com.nuvio.app.features.player.PlayerChapter
+import com.nuvio.app.features.player.PlayerControlPlaylistItem
 import com.nuvio.app.features.player.PlayerPlaybackSnapshot
 import com.nuvio.app.features.player.PlayerResizeMode
 import com.nuvio.app.features.player.PlayerShortcutAction
@@ -193,6 +194,16 @@ internal class NativePlayerController(
         restoreVolume: Boolean = false,
     ) {
         if (disposed) return
+        // A network-share source (\\host\share, file://host/…) from an addon or scraper would make
+        // Windows authenticate to that host and hand it the user's NTLM hash.
+        listOfNotNull(sourceUrl, sourceAudioUrl?.takeIf { it.isNotBlank() }).forEach { source ->
+            val verdict = com.nuvio.app.features.player.PlaybackSourcePolicy.checkInProcess(source)
+            if (verdict is com.nuvio.app.features.player.PlaybackSourcePolicy.Verdict.Rejected) {
+                Logger.withTag("PlaybackSourcePolicy").w { "Refusing playback source: ${verdict.reason}" }
+                onError("This stream points at a network share and was blocked.")
+                return
+            }
+        }
         // Re-attaching the same stream (surface recreation, RTX/settings toggles) must resume
         // from where playback currently is — restarting at the original initialPositionMs
         // looks like playback randomly jumping back. New sources keep the caller's position.
@@ -2330,6 +2341,10 @@ private fun PlayerControlsState.toControlsJson(
         append(',')
         appendJsonField("nextEpisodePlayable", nextEpisodePlayable)
         append(',')
+        appendJsonField("playlistPeekTitle", playlistPeekTitle)
+        append(',')
+        appendJsonArrayField("playlistPeekItems", playlistPeekItems) { appendPlaylistPeekItemJson(it) }
+        append(',')
         appendJsonField("showSubmitIntro", showSubmitIntro)
         append(',')
         appendJsonField("showVideoSettings", showVideoSettings)
@@ -2477,6 +2492,18 @@ private fun StringBuilder.appendJsonField(name: String, value: Double) {
 
 private fun StringBuilder.appendJsonField(name: String, value: Long) {
     append('"').append(name).append("\":").append(value)
+}
+
+private fun StringBuilder.appendPlaylistPeekItemJson(item: PlayerControlPlaylistItem) {
+    append('{')
+    appendJsonField("position", item.position)
+    append(',')
+    appendJsonField("title", item.title)
+    append(',')
+    appendJsonField("subtitle", item.subtitle)
+    append(',')
+    appendJsonField("state", item.state)
+    append('}')
 }
 
 private fun StringBuilder.appendChapterJson(chapter: PlayerChapter) {

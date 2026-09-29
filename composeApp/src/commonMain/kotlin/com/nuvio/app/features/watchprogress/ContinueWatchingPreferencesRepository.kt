@@ -22,6 +22,8 @@ private data class StoredContinueWatchingPreferences(
     val showUnairedNextUp: Boolean = true,
     @SerialName("separate_next_up_row")
     val separateNextUpRow: Boolean = false,
+    @SerialName("separate_upcoming_row")
+    val separateUpcomingRow: Boolean = false,
     val seedNextUpFromNuvioSync: Boolean = false,
     @SerialName("blur_continue_watching_next_up")
     val blurNextUp: Boolean = false,
@@ -103,6 +105,7 @@ object ContinueWatchingPreferencesRepository {
                 useEpisodeThumbnails = stored.useEpisodeThumbnails,
                 showUnairedNextUp = stored.showUnairedNextUp,
                 separateNextUpRow = stored.separateNextUpRow,
+                separateUpcomingRow = stored.separateUpcomingRow,
                 seedNextUpFromNuvioSync = stored.seedNextUpFromNuvioSync,
                 blurNextUp = stored.blurNextUp,
                 dismissedNextUpKeys = stored.dismissedNextUpKeys,
@@ -164,6 +167,13 @@ object ContinueWatchingPreferencesRepository {
         persist()
     }
 
+    fun setSeparateUpcomingRow(enabled: Boolean) {
+        ensureLoaded()
+        if (_uiState.value.separateUpcomingRow == enabled) return
+        _uiState.value = _uiState.value.copy(separateUpcomingRow = enabled)
+        persist()
+    }
+
     fun setBlurNextUp(enabled: Boolean) {
         ensureLoaded()
         _uiState.value = _uiState.value.copy(blurNextUp = enabled)
@@ -215,6 +225,7 @@ object ContinueWatchingPreferencesRepository {
                     useEpisodeThumbnails = _uiState.value.useEpisodeThumbnails,
                     showUnairedNextUp = _uiState.value.showUnairedNextUp,
                     separateNextUpRow = _uiState.value.separateNextUpRow,
+                    separateUpcomingRow = _uiState.value.separateUpcomingRow,
                     seedNextUpFromNuvioSync = _uiState.value.seedNextUpFromNuvioSync,
                     blurNextUp = _uiState.value.blurNextUp,
                     dismissedNextUpKeys = _uiState.value.dismissedNextUpKeys,

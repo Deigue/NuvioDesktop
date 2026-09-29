@@ -98,6 +98,8 @@ import nuvio.composeapp.generated.resources.settings_continue_watching_show_unai
 import nuvio.composeapp.generated.resources.settings_continue_watching_show_unaired_next_up_title
 import nuvio.composeapp.generated.resources.settings_continue_watching_separate_next_up_description
 import nuvio.composeapp.generated.resources.settings_continue_watching_separate_next_up_title
+import nuvio.composeapp.generated.resources.settings_continue_watching_separate_upcoming_description
+import nuvio.composeapp.generated.resources.settings_continue_watching_separate_upcoming_title
 import nuvio.composeapp.generated.resources.settings_continue_watching_section_card_style
 import nuvio.composeapp.generated.resources.settings_continue_watching_section_on_launch
 import nuvio.composeapp.generated.resources.settings_continue_watching_section_sort_order
@@ -131,6 +133,7 @@ internal fun LazyListScope.continueWatchingSettingsContent(
     useEpisodeThumbnails: Boolean,
     showUnairedNextUp: Boolean,
     separateNextUpRow: Boolean,
+    separateUpcomingRow: Boolean,
     blurNextUp: Boolean,
     showResumePromptOnLaunch: Boolean,
     sortMode: ContinueWatchingSortMode,
@@ -245,6 +248,15 @@ internal fun LazyListScope.continueWatchingSettingsContent(
                     isTablet = isTablet,
                     modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("continue-watching-separate-next-up")),
                     onCheckedChange = ContinueWatchingPreferencesRepository::setSeparateNextUpRow,
+                )
+                SettingsGroupDivider(isTablet = isTablet)
+                SettingsSwitchRow(
+                    title = stringResource(Res.string.settings_continue_watching_separate_upcoming_title),
+                    description = stringResource(Res.string.settings_continue_watching_separate_upcoming_description),
+                    checked = separateUpcomingRow,
+                    isTablet = isTablet,
+                    modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("continue-watching-separate-upcoming")),
+                    onCheckedChange = ContinueWatchingPreferencesRepository::setSeparateUpcomingRow,
                 )
                 SettingsGroupDivider(isTablet = isTablet)
                 SettingsSwitchRow(

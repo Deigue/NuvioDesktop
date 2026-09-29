@@ -20,6 +20,9 @@ private val encodedDot = Regex("%2e", RegexOption.IGNORE_CASE)
 private val encodedSlash = Regex("%2f", RegexOption.IGNORE_CASE)
 private val encodedBackslash = Regex("%5c", RegexOption.IGNORE_CASE)
 private val encodedColon = Regex("%3a", RegexOption.IGNORE_CASE)
+// `scheme://authority` — the host is not a file name, and `.com` hosts would otherwise read as
+// the DOS `com` executable extension and block every download from them.
+private val urlSchemeAndAuthority = Regex("^[a-z][a-z0-9+.-]*://[^/?#]*", RegexOption.IGNORE_CASE)
 
 /**
  * True when any filename-like portion of this value advertises an executable extension.
@@ -49,6 +52,7 @@ private fun String.downloadReferenceExtensions(): Set<String> {
     }
 
     return decoded
+        .replaceFirst(urlSchemeAndAuthority, "")
         .split('/', '\\', '?', '#', '&', '=', ';', ':', ',', '"', '\'')
         .mapNotNullTo(linkedSetOf()) { component ->
             val normalized = component.trim().trimEnd(' ', '.')

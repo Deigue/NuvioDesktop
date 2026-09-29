@@ -14,6 +14,7 @@ import com.nuvio.app.features.downloads.DownloadsRepository
 import com.nuvio.app.features.p2p.P2pSettingsRepository
 import com.nuvio.app.features.p2p.P2pStreamingEngine
 import com.nuvio.app.features.player.skip.NextEpisodeInfo
+import com.nuvio.app.features.playlist.PlaylistPlaybackSession
 import com.nuvio.app.features.streams.StreamDebridCacheState
 import com.nuvio.app.features.streams.StreamItem
 import com.nuvio.app.features.streams.StreamScorer
@@ -902,6 +903,12 @@ internal fun PlayerScreenRuntime.openSourcesPanelForEpisode(episode: MetaVideo) 
     showEpisodesPanel = false
     controlsVisible = false
     playerControlsOpenSourcesToken += 1
+}
+
+/** The up-next card, next button or skip key in playlist mode. See PlayerPlaylistAdvance.kt. */
+internal fun PlayerScreenRuntime.advancePlaylist() {
+    PlaylistPlaybackSession.log.i { "advance requested from the player" }
+    requestPlaylistAdvance(trigger = "card")
 }
 
 internal fun PlayerScreenRuntime.playNextEpisode() {

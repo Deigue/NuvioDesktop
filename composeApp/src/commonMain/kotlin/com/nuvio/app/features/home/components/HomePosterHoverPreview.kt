@@ -78,6 +78,7 @@ import com.nuvio.app.core.ui.secondaryClick
 import com.nuvio.app.features.details.components.DetailIconAction
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.MetaPreview
+import com.nuvio.app.features.playlist.isPlaylistPreview
 import com.nuvio.app.features.home.hoverPreviewEnabledFor
 import com.nuvio.app.features.library.LibraryRepository
 import com.nuvio.app.features.library.toLibraryItem
@@ -509,7 +510,7 @@ private fun HomePosterPreviewCard(
 
 private fun MetaPreview.previewMetadataLine(): String =
     buildList {
-        add(type.replaceFirstChar(Char::uppercase))
+        if (!isPlaylistPreview()) add(type.replaceFirstChar(Char::uppercase))
         releaseInfo
             ?.takeIf { it.isNotBlank() }
             ?.let(::formatReleaseDateForDisplay)

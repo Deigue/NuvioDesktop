@@ -11,4 +11,8 @@ internal actual object WatchProgressStorage {
     actual fun savePayload(profileId: Int, payload: String) {
         store.putString("watch_progress_$profileId", payload)
     }
+
+    actual fun flush() {
+        store.flush()
+    }
 }

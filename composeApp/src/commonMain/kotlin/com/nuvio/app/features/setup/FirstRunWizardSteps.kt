@@ -87,6 +87,7 @@ import nuvio.composeapp.generated.resources.setup_wizard_keys_title
 import nuvio.composeapp.generated.resources.setup_wizard_mode_preview_close
 import nuvio.composeapp.generated.resources.setup_wizard_mode_preview_hint
 import nuvio.composeapp.generated.resources.setup_wizard_shortcuts_after_finish
+import nuvio.composeapp.generated.resources.setup_wizard_renderer_note
 import nuvio.composeapp.generated.resources.setup_wizard_summary_integrations
 import nuvio.composeapp.generated.resources.setup_wizard_summary_mode
 import nuvio.composeapp.generated.resources.setup_wizard_summary_none
@@ -518,6 +519,7 @@ internal fun WizardMetadataStep(
         )
         WizardSummary(draft = draft)
         WizardNote(text = stringResource(Res.string.setup_wizard_shortcuts_after_finish))
+        WizardNote(text = stringResource(Res.string.setup_wizard_renderer_note))
     }
 }
 

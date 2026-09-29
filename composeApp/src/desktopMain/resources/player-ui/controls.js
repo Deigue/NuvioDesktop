@@ -62,6 +62,15 @@ const actionOverflowMenu = document.getElementById("actionOverflowMenu");
 const ultraMenuVolume = document.getElementById("ultraMenuVolume");
 const ultraMenuActions = document.getElementById("ultraMenuActions");
 let actionOverflowOpen = false;
+const metadataSection = document.querySelector(".metadata");
+const playlistPeekTag = document.getElementById("playlistPeekTag");
+const playlistPeek = document.getElementById("playlistPeek");
+const playlistPeekHeader = document.getElementById("playlistPeekHeader");
+const playlistPeekList = document.getElementById("playlistPeekList");
+// True while the pointer rests on the title block in playlist mode; holds the chrome up like an
+// open menu does, so the peek does not fade out from under the cursor.
+let playlistPeekOpen = false;
+let playlistPeekKey = "";
 const subtitlesLabel = document.getElementById("subtitlesLabel");
 const audioLabel = document.getElementById("audioLabel");
 const sourcesLabel = document.getElementById("sourcesLabel");
@@ -4177,6 +4186,80 @@ const finishChromePointerInteraction = event => {
   noteChromeActivity(true);
 };
 
+const renderPlaylistPeek = () => {
+  const items = Array.isArray(state.playlistPeekItems) ? state.playlistPeekItems : [];
+  const hasPeek = items.length > 0 && Boolean(state.playlistPeekTitle);
+  setText(playlistPeekTag, hasPeek ? `Playlist · ${state.playlistPeekTitle}` : "");
+  // Called from renderChrome, so close without re-rendering (setPlaylistPeekOpen would recurse).
+  if (!hasPeek && playlistPeekOpen) {
+    playlistPeekOpen = false;
+    root.classList.remove("playlist-peek-open");
+  }
+  playlistPeek.hidden = !(hasPeek && playlistPeekOpen);
+  const key = hasPeek ? JSON.stringify([state.playlistPeekTitle, items]) : "";
+  if (key === playlistPeekKey) return;
+  playlistPeekKey = key;
+  playlistPeekHeader.textContent = state.playlistPeekTitle || "";
+  playlistPeekList.replaceChildren(...items.map(item => {
+    const li = document.createElement("li");
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `playlist-peek-row ${String(item.state || "upcoming")}`;
+    li.append(row);
+    if (item.state === "current") {
+      row.disabled = true;
+      row.setAttribute("aria-current", "true");
+    } else {
+      row.title = "Play this now";
+      row.addEventListener("click", event => {
+        event.stopPropagation();
+        setPlaylistPeekOpen(false);
+        send("playlistJump", Number(item.position) || 0);
+      });
+    }
+    const position = document.createElement("span");
+    position.className = "playlist-peek-position";
+    position.textContent = item.state === "current" ? "▶" : String(item.position || "");
+    const copy = document.createElement("span");
+    copy.className = "playlist-peek-copy";
+    const rowTitle = document.createElement("span");
+    rowTitle.className = "playlist-peek-title";
+    rowTitle.textContent = String(item.title || "");
+    const rowSubtitle = document.createElement("span");
+    rowSubtitle.className = "playlist-peek-subtitle";
+    const label = item.state === "next" ? "Up next" : item.state === "played" ? "Played" : "";
+    rowSubtitle.textContent = [String(item.subtitle || ""), label].filter(Boolean).join(" · ");
+    copy.append(rowTitle, rowSubtitle);
+    row.append(position, copy);
+    return li;
+  }));
+};
+
+// Bring the playing entry into view each time the peek opens; the list scrolls freely after.
+const scrollPlaylistPeekToCurrent = () => {
+  const current = playlistPeekList.querySelector(".playlist-peek-row.current");
+  if (!current) return;
+  const list = playlistPeekList;
+  const rowTop = current.parentElement.offsetTop - list.offsetTop;
+  list.scrollTop = Math.max(0, rowTop - (list.clientHeight - current.offsetHeight) / 2);
+};
+
+function setPlaylistPeekOpen(open) {
+  const next = Boolean(open) && Array.isArray(state.playlistPeekItems) && state.playlistPeekItems.length > 0;
+  if (playlistPeekOpen === next) return;
+  playlistPeekOpen = next;
+  root.classList.toggle("playlist-peek-open", next);
+  renderChrome();
+  if (next) scrollPlaylistPeekToCurrent();
+  // Restart the inactivity timer on the way out rather than leaving the controls pinned.
+  if (!next) noteChromeActivity(true);
+}
+
+if (metadataSection) {
+  metadataSection.addEventListener("mouseenter", () => setPlaylistPeekOpen(true));
+  metadataSection.addEventListener("mouseleave", () => setPlaylistPeekOpen(false));
+}
+
 const renderChrome = () => {
   const durationMs = Math.max(0, Number(state.durationMs) || 0);
   const positionMs = isScrubbing ? scrubPositionMs : Math.max(0, Number(state.positionMs) || 0);
@@ -4219,7 +4302,7 @@ const renderChrome = () => {
   root.classList.toggle("locked-visible", Boolean(state.isLocked && state.lockedOverlayVisible));
   // Playback failures are a compact notification now. Keep the normal chrome and cursor visible
   // so Back remains immediately available instead of turning the error into a modal takeover.
-  const isChromeHidden = Boolean(!pictureInPictureActive && !showError && (!activeModal && !contextMenuOpen && !colorGradePanelOpen && !actionOverflowOpen && !state.controlsVisible && !(state.isLocked && state.lockedOverlayVisible)));
+  const isChromeHidden = Boolean(!pictureInPictureActive && !showError && (!activeModal && !contextMenuOpen && !colorGradePanelOpen && !actionOverflowOpen && !playlistPeekOpen && !state.controlsVisible && !(state.isLocked && state.lockedOverlayVisible)));
   root.classList.toggle("chrome-hidden", isChromeHidden);
   if (isChromeHidden || activeModal) hideControlTooltip();
   // Never hide the cursor in hero-trailer mode — it's a background surface, not the
@@ -4235,6 +4318,7 @@ const renderChrome = () => {
   syncParentalGuide(showOpening || showError);
 
   title.textContent = state.title || "";
+  renderPlaylistPeek();
   setText(episode, normalizeEpisodeDisplayText(state.episodeText));
   setText(streamTitle, state.streamTitle);
   setText(providerName, state.providerName);
@@ -5941,7 +6025,62 @@ pictureInPictureResizeHandles.forEach(handleElement => {
   }, true);
 });
 
+// Hold left mouse on the bare video surface = temporary 2x (upstream parity). A press that
+// outlives HoldSpeedDelayMs switches to 2x; release restores the speed from before the hold and
+// swallows the click that follows, so the gesture never also toggles pause. A shorter press is
+// an ordinary click and falls through to the tapTimer path below untouched.
+const HoldSpeedDelayMs = 400;
+const HoldSpeedValue = 2;
+let holdSpeedTimer = 0;
+let holdSpeedPointerId = null;
+let holdSpeedRestoreValue = null;
+let consumeHoldSpeedClick = false;
+
+const endHoldSpeed = () => {
+  window.clearTimeout(holdSpeedTimer);
+  holdSpeedTimer = 0;
+  holdSpeedPointerId = null;
+  if (holdSpeedRestoreValue === null) return;
+  const restore = holdSpeedRestoreValue;
+  holdSpeedRestoreValue = null;
+  consumeHoldSpeedClick = true;
+  window.setTimeout(() => { consumeHoldSpeedClick = false; }, 500);
+  send("setPlaybackSpeed", restore);
+  window.nuvioShowPresetPill("Playback speed", `${restore.toFixed(2).replace(/\.?0+$/, "")}x`);
+};
+
+root.addEventListener("pointerdown", event => {
+  if (event.button !== 0 || event.pointerType === "touch") return;
+  if (isHeroTrailerSurface || state.heroTrailerMode || state.pictureInPictureActive) return;
+  if (state.isLocked || !state.isPlaying || contextMenuOpen || activeModal || playbackErrorText()) return;
+  if (event.target.closest("button,input") || isChromeInteractionTarget(event.target)) return;
+  endHoldSpeed();
+  holdSpeedPointerId = event.pointerId;
+  holdSpeedTimer = window.setTimeout(() => {
+    holdSpeedTimer = 0;
+    // Re-check: the press may have outlived playback (end of file, pause from a key).
+    if (holdSpeedPointerId === null || !state.isPlaying) return;
+    holdSpeedRestoreValue = parsedPlaybackSpeed();
+    send("setPlaybackSpeed", HoldSpeedValue);
+    // Pinned for the whole hold; endHoldSpeed replaces it with the restored speed.
+    window.nuvioShowPresetPill("Playback speed", `${HoldSpeedValue}x`, 24 * 60 * 60 * 1000);
+  }, HoldSpeedDelayMs);
+});
+["pointerup", "pointercancel"].forEach(type => window.addEventListener(type, event => {
+  if (holdSpeedPointerId === null || event.pointerId !== holdSpeedPointerId) return;
+  endHoldSpeed();
+}, true));
+// Losing focus mid-hold (alt-tab, a native dialog) never delivers the pointerup.
+window.addEventListener("blur", endHoldSpeed);
+
 root.addEventListener("click", event => {
+  if (consumeHoldSpeedClick) {
+    consumeHoldSpeedClick = false;
+    event.preventDefault();
+    event.stopPropagation();
+    window.clearTimeout(tapTimer);
+    return;
+  }
   if (consumeContextMenuDismissalClick) {
     consumeContextMenuDismissalClick = false;
     window.clearTimeout(contextMenuDismissalClickTimer);

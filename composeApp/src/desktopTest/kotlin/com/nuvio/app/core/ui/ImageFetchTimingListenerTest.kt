@@ -17,4 +17,12 @@ class ImageFetchTimingListenerTest {
             ImageFetchTimingListener.describeData("https://image.tmdb.org/t/p/w500/abc.jpg"),
         )
     }
+
+    @Test
+    fun `long poster-service urls become host, last segment and a hash`() {
+        val url = "https://posters.example/" + "cfg".repeat(60) + "/poster/tt123.jpg?tmdb_key=abc"
+        val described = ImageFetchTimingListener.describeData(url)
+        assert(described.startsWith("https://posters.example/…/tt123.jpg #")) { described }
+        assert("abc" !in described.substringBefore(" #")) { described }
+    }
 }

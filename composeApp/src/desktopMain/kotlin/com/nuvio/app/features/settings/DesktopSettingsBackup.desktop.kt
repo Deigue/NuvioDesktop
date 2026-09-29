@@ -166,6 +166,8 @@ internal actual object DesktopSettingsBackup {
         }.toAbsolutePath().normalize()
 
         return runCatching {
+            // The backup reads the files off disk; writes are otherwise coalesced for a second or two.
+            DesktopStorage.flushAll()
             Files.createDirectories(destination.parent)
             val temporary = destination.resolveSibling("${destination.fileName}.tmp")
             try {

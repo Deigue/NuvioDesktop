@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Check
@@ -70,6 +71,7 @@ fun NuvioPosterZoomActionSheet(
     rewatchLabel: String = "",
     onOpenInLocalLibrary: (() -> Unit)? = null,
     onOpenLibraryPicker: (() -> Unit)? = null,
+    onAddToPlaylist: (() -> Unit)? = null,
 ) {
     if (item == null) return
     NuvioPosterZoomActionOverlay(
@@ -107,6 +109,15 @@ fun NuvioPosterZoomActionSheet(
                     onSelected = onToggleWatched,
                 ),
             )
+            onAddToPlaylist?.let { addToPlaylist ->
+                add(
+                    PosterZoomOverlayAction(
+                        icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                        label = "Add to playlist",
+                        onSelected = addToPlaylist,
+                    ),
+                )
+            }
             onOpenInLocalLibrary?.let { openLocal ->
                 add(
                     PosterZoomOverlayAction(
@@ -143,6 +154,8 @@ fun NuvioPosterActionSheet(
      * the active library provider, the secondary click opens the list picker instead.
      */
     onOpenLibraryPicker: (() -> Unit)? = null,
+    /** Opens the add-to-playlist dialog for this title. Null hides the row. */
+    onAddToPlaylist: (() -> Unit)? = null,
     zoomAnchor: PosterZoomAnchor? = null,
     zoomHazeState: HazeState? = null,
 ) {
@@ -162,6 +175,7 @@ fun NuvioPosterActionSheet(
             rewatchLabel = rewatchLabel,
             onOpenInLocalLibrary = onOpenInLocalLibrary,
             onOpenLibraryPicker = onOpenLibraryPicker,
+            onAddToPlaylist = onAddToPlaylist,
         )
         return
     }
@@ -241,6 +255,19 @@ fun NuvioPosterActionSheet(
                     title = rewatchLabel,
                     onClick = {
                         startRewatch()
+                        coroutineScope.launch {
+                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
+                        }
+                    },
+                )
+            }
+            onAddToPlaylist?.let { addToPlaylist ->
+                NuvioBottomSheetDivider()
+                NuvioBottomSheetActionRow(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    title = "Add to playlist",
+                    onClick = {
+                        addToPlaylist()
                         coroutineScope.launch {
                             dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
                         }

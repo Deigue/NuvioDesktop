@@ -51,6 +51,7 @@ internal object LocalAccountDataCleaner {
         EpisodeReleaseNotificationsRepository.clearLocalState()
         CollectionMobileSettingsRepository.clearLocalState()
         CollectionRepository.clearLocalState()
+        com.nuvio.app.features.playlist.PlaylistRepository.clearLocalState()
         ThemeSettingsRepository.clearLocalState()
         PosterCardStyleRepository.clearLocalState()
         TraktAuthRepository.clearLocalState()
@@ -64,6 +65,8 @@ internal object LocalAccountDataCleaner {
         StreamPrefetchService.reset()
         MetaDetailsRepository.clear()
         SearchRepository.reset()
+        // Reloads from the store the platform wipe just emptied.
+        com.nuvio.app.features.search.SearchHistoryRepository.onProfileChanged()
         SubtitleRepository.clear()
         PlayerLaunchStore.clear()
         StreamLaunchStore.clear()

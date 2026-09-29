@@ -194,7 +194,7 @@ data class PlayerSettingsUiState(
     val desktopColorSaturation: Int = 0,
     val desktopColorGamma: Int = 0,
     val desktopBufferPreset: DesktopBufferPreset = DesktopBufferPreset.Balanced,
-    val desktopRendererApi: DesktopRendererApi = DesktopRendererApi.OpenGL,
+    val desktopRendererApi: DesktopRendererApi = DesktopRendererApi.D3D11,
     /** Desktop diagnostics: frame-budget telemetry. Off unless someone is investigating. */
     val desktopPerformanceLoggingEnabled: Boolean = false,
     val desktopLowVramMode: DesktopLowVramMode = DesktopLowVramMode.Auto,
@@ -350,7 +350,7 @@ object PlayerSettingsRepository {
     private var desktopColorSaturation = 0
     private var desktopColorGamma = 0
     private var desktopBufferPreset = DesktopBufferPreset.Balanced
-    private var desktopRendererApi = DesktopRendererApi.OpenGL
+    private var desktopRendererApi = DesktopRendererApi.D3D11
     private var desktopPerformanceLoggingEnabled = false
     private var desktopLowVramMode = DesktopLowVramMode.Auto
     private var desktopAnimeMode = DesktopAnimeMode.Off
@@ -489,7 +489,7 @@ object PlayerSettingsRepository {
         desktopColorSaturation = 0
         desktopColorGamma = 0
         desktopBufferPreset = DesktopBufferPreset.Balanced
-        desktopRendererApi = DesktopRendererApi.OpenGL
+        desktopRendererApi = DesktopRendererApi.D3D11
         desktopPerformanceLoggingEnabled = false
         desktopLowVramMode = DesktopLowVramMode.Auto
         desktopAnimeMode = DesktopAnimeMode.Off
@@ -740,7 +740,7 @@ object PlayerSettingsRepository {
         PlayerSettingsStorage.saveDesktopBufferPreset(desktopBufferPreset.name)
         desktopRendererApi = PlayerSettingsStorage.loadDesktopRendererApi()
             ?.let { runCatching { DesktopRendererApi.valueOf(it) }.getOrNull() }
-            ?: DesktopRendererApi.OpenGL
+            ?: DesktopRendererApi.D3D11
         desktopPerformanceLoggingEnabled = PlayerSettingsStorage.loadDesktopPerformanceLogging() ?: false
         desktopLowVramMode = PlayerSettingsStorage.loadDesktopLowVramMode()
             ?.let { runCatching { DesktopLowVramMode.valueOf(it) }.getOrNull() }

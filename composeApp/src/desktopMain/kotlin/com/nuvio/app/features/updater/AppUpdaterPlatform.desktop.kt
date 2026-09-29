@@ -126,6 +126,12 @@ actual object AppUpdaterPlatform {
             require(assetName.endsWith(".zip", ignoreCase = true)) {
                 "This portable build only supports ZIP update archives."
             }
+            // Fail closed. The update is unpacked and run automatically, so an asset with no
+            // published digest cannot be checked at all; GitHub has published one for every asset
+            // uploaded since mid-2025, so a missing one is itself a sign something is off.
+            requireNotNull(expectedSha256?.takeIf { it.isNotBlank() }) {
+                "Update refused: GitHub published no SHA-256 checksum for this download, so it cannot be verified."
+            }
             val safeName = assetName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
             val updateDirectory = portableUpdatesDirectory().apply { mkdirs() }
             val destination = File(updateDirectory, safeName)
@@ -166,8 +172,8 @@ actual object AppUpdaterPlatform {
 
             // Verify integrity against the SHA-256 GitHub published for this asset (fetched over
             // HTTPS from the API). A mismatch means a corrupt or tampered download — never promote
-            // it to the ready-to-install location. Skipped only when GitHub gave us no digest.
-            if (expectedSha256 != null) {
+            // it to the ready-to-install location.
+            run {
                 val actualSha256 = digest.digest().toHexString()
                 if (!actualSha256.equals(expectedSha256, ignoreCase = true)) {
                     partial.delete()
@@ -227,8 +233,9 @@ private fun applyPortableUpdateInPlace(archive: File): Boolean {
     val updatesDir = portableUpdatesDirectory()
 
     // The helper is an ANSI .bat with the paths baked in; non-ASCII paths (e.g. a localized user
-    // folder) can't be represented reliably in a batch console, so hand those off to manual.
-    if (!installRoot.absolutePath.isAscii() || !updatesDir.absolutePath.isAscii()) return false
+    // folder) can't be represented reliably in a batch console, and `%`, `!` or `"` in a path would
+    // be expanded or break the quoting, so hand those off to manual.
+    if (!installRoot.absolutePath.isBatchSafe() || !updatesDir.absolutePath.isBatchSafe()) return false
     if (!isWritable(installRoot)) return false
 
     val stagingDir = File(updatesDir, "staged")
@@ -241,6 +248,11 @@ private fun applyPortableUpdateInPlace(archive: File): Boolean {
         return false
     }
 
+    val staleFiles = writeInstallManifest(sourceRoot = sourceRoot, installRoot = installRoot)
+    val staleList = File(updatesDir, "stale-files.txt").apply {
+        writeText(staleFiles.joinToString("\r\n"), Charsets.US_ASCII)
+    }
+
     val launcherExe = resolveLauncherExe(installRoot)
     val batFile = writeHelperScript(
         updatesDir = updatesDir,
@@ -249,6 +261,7 @@ private fun applyPortableUpdateInPlace(archive: File): Boolean {
         installRoot = installRoot,
         launcherExe = launcherExe,
         stagingDir = stagingDir,
+        staleList = staleList,
     )
 
     // Launch minimized and detached: the child cmd outlives our JVM and does the swap post-exit.
@@ -261,6 +274,32 @@ private fun applyPortableUpdateInPlace(archive: File): Boolean {
 
     scheduleExit()
     return true
+}
+
+private const val installManifestName = "install-manifest.txt"
+
+/**
+ * Records every file of the new build in [installManifestName] (copied into the install folder with
+ * the rest) and returns the files the *previous* manifest listed that the new build no longer
+ * ships. Only files a manifest put there are ever deleted, never a blind mirror, so anything the
+ * user keeps in the install folder survives. The first update from a build without a manifest
+ * removes nothing.
+ */
+private fun writeInstallManifest(sourceRoot: File, installRoot: File): List<String> {
+    val newFiles = sourceRoot.walkTopDown()
+        .filter(File::isFile)
+        .map { file -> file.relativeTo(sourceRoot).path.replace('/', '\\') }
+        .filterNot { it.equals(installManifestName, ignoreCase = true) }
+        .toSortedSet(String.CASE_INSENSITIVE_ORDER)
+    File(sourceRoot, installManifestName).writeText(newFiles.joinToString("\r\n"), Charsets.UTF_8)
+    val previous = File(installRoot, installManifestName).takeIf(File::isFile)
+        ?.readLines(Charsets.UTF_8)
+        ?: return emptyList()
+    return previous
+        .map(String::trim)
+        .filter { it.isNotEmpty() && it !in newFiles }
+        // Relative paths inside the install folder only, and nothing the batch loop could misread.
+        .filter { it.isBatchSafe() && !it.startsWith("\\") && ':' !in it && ".." !in it.split('\\') }
 }
 
 /** The portable app-image root that holds Nuvio.exe, or null when this isn't a packaged run. */
@@ -325,6 +364,7 @@ private fun writeHelperScript(
     installRoot: File,
     launcherExe: File,
     stagingDir: File,
+    staleList: File,
 ): File {
     // /E copies subdirs (no /MIR — we never purge, so a swap can't delete anything unexpected).
     // Retries cover file handles that linger a moment after the process dies. tasklist gates the
@@ -338,6 +378,7 @@ private fun writeHelperScript(
         "set \"DST=${installRoot.absolutePath}\"",
         "set \"EXE=${launcherExe.absolutePath}\"",
         "set \"STAGE=${stagingDir.absolutePath}\"",
+        "set \"STALE=${staleList.absolutePath}\"",
         "set \"LOG=%~dp0apply-update.log\"",
         "echo [%date% %time%] waiting for Nuvio (pid %PID%) to exit> \"%LOG%\"",
         ":waitloop",
@@ -353,6 +394,9 @@ private fun writeHelperScript(
         "  start \"\" explorer.exe \"%~dp0\"",
         "  goto done",
         ")",
+        "echo [%date% %time%] removing files the new build dropped>> \"%LOG%\"",
+        "if exist \"%STALE%\" for /f \"usebackq delims=\" %%F in (\"%STALE%\") do del /f /q \"%DST%\\%%F\" >>\"%LOG%\" 2>&1",
+        "del /f /q \"%STALE%\" 2>nul",
         "echo [%date% %time%] relaunching Nuvio>> \"%LOG%\"",
         "start \"\" \"%EXE%\"",
         ":done",
@@ -369,10 +413,21 @@ private fun revealInExplorer(archive: File) {
     ProcessBuilder("explorer.exe", "/select,${archive.absolutePath}").start()
 }
 
-/** Give the Result a moment to propagate / the UI a frame to react, then exit so files unlock. */
+/**
+ * Give the Result a moment to propagate / the UI a frame to react, then exit so files unlock.
+ * Through the normal exit path, so window geometry, pending store writes and the coalesced caches
+ * are flushed and the P2P engine (and any TorrServer child) is shut down; a hard exitProcess only
+ * if that path has not finished well after.
+ */
 private fun scheduleExit() {
     Thread {
         runCatching { Thread.sleep(1200) }
+        val requested = runCatching {
+            var accepted = false
+            javax.swing.SwingUtilities.invokeAndWait { accepted = com.nuvio.app.DesktopApplicationExit.request() }
+            accepted
+        }.getOrDefault(false)
+        if (requested) runCatching { Thread.sleep(15_000) }
         exitProcess(0)
     }.apply {
         isDaemon = true
@@ -392,7 +447,7 @@ private fun deleteRecursively(dir: File) {
     dir.walkBottomUp().forEach { runCatching { it.delete() } }
 }
 
-private fun String.isAscii(): Boolean = all { it.code in 0..127 }
+private fun String.isBatchSafe(): Boolean = all { it.code in 32..126 && it != '%' && it != '!' && it != '"' }
 
 private fun portableUpdatesDirectory(): File {
     return DesktopStorage.rootDir.resolve("updates").toFile()

@@ -846,9 +846,9 @@ object MetaDetailsRepository {
 
         return try {
             TmdbSettingsRepository.ensureLoaded()
-            log.d { "Fetching meta from: $url [origin=$origin]" }
+            log.d { "Fetching meta from: ${com.nuvio.app.core.network.redactAddonUrl(url)} [origin=$origin]" }
             val payload = httpGetText(url)
-            log.d { "Raw payload length=${payload.length}, first 500 chars: ${payload.take(500)}" }
+            log.d { "Raw payload length=${payload.length}" }
             val parsed = MetaDetailsParser.parse(payload)
             // Before TMDB enrichment: preferPreciseReleaseDate keeps a timestamped addon value
             // over TMDB's bare date, so the placeholder has to become a real instant first.
@@ -891,10 +891,10 @@ object MetaDetailsRepository {
                 // Logged before rethrowing: cancellation after the payload arrived means a request
                 // was paid for and discarded, and the silence is what made that invisible for so
                 // long. Still rethrown — cancellation must propagate.
-                log.d { "Meta fetch cancelled after payload for $url [origin=$origin]" }
+                log.d { "Meta fetch cancelled after payload for ${com.nuvio.app.core.network.redactAddonUrl(url)} [origin=$origin]" }
                 throw e
             }
-            log.e(e) { "Failed to fetch/parse meta from $url (manifest=${manifest.transportUrl})" }
+            log.e(e) { "Failed to fetch/parse meta from ${com.nuvio.app.core.network.redactAddonUrl(url)} (manifest=${com.nuvio.app.core.network.redactAddonUrl(manifest.transportUrl)})" }
             null
         }
     }

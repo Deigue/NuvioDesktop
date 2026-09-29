@@ -314,6 +314,7 @@ fun NuvioPrimaryButton(
     text: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    height: Dp = NuvioTokens.Space.s48 + NuvioTokens.Space.s4,
     onClick: () -> Unit = {},
 ) {
     val tokens = MaterialTheme.nuvio
@@ -323,7 +324,7 @@ fun NuvioPrimaryButton(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(NuvioTokens.Space.s48 + NuvioTokens.Space.s4)
+            .height(height)
             .nuvioSweepHighlight(
                 highlighted = enabled && (isFocused || isHovered),
                 cornerRadius = NuvioTokens.Radius.button,

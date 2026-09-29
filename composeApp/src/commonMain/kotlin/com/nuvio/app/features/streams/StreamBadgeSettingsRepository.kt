@@ -17,6 +17,8 @@ data class StreamBadgeSettingsUiState(
     val showFileSizeBadges: Boolean = true,
     val showAddonLogo: Boolean = false,
     val badgePlacement: StreamBadgePlacement = StreamBadgePlacement.BOTTOM,
+    val listSortOrder: StreamListSortOrder = StreamListSortOrder.DEFAULT,
+    val listCachedFirst: Boolean = false,
 )
 
 enum class StreamBadgePlacement {
@@ -39,6 +41,8 @@ object StreamBadgeSettingsRepository {
     private var showFileSizeBadges = true
     private var showAddonLogo = false
     private var badgePlacement = StreamBadgePlacement.BOTTOM
+    private var listSortOrder = StreamListSortOrder.DEFAULT
+    private var listCachedFirst = false
 
     fun ensureLoaded() {
         if (hasLoaded) return
@@ -55,6 +59,8 @@ object StreamBadgeSettingsRepository {
         showFileSizeBadges = true
         showAddonLogo = false
         badgePlacement = StreamBadgePlacement.BOTTOM
+        listSortOrder = StreamListSortOrder.DEFAULT
+        listCachedFirst = false
         _uiState.value = StreamBadgeSettingsUiState()
     }
 
@@ -152,6 +158,22 @@ object StreamBadgeSettingsRepository {
         StreamBadgeSettingsStorage.saveStreamBadgePlacement(placement.name)
     }
 
+    fun setListSortOrder(order: StreamListSortOrder) {
+        ensureLoaded()
+        if (listSortOrder == order) return
+        listSortOrder = order
+        publish()
+        StreamBadgeSettingsStorage.saveStreamListSortOrder(order.name)
+    }
+
+    fun setListCachedFirst(enabled: Boolean) {
+        ensureLoaded()
+        if (listCachedFirst == enabled) return
+        listCachedFirst = enabled
+        publish()
+        StreamBadgeSettingsStorage.saveStreamListCachedFirst(enabled)
+    }
+
     private fun loadFromDisk() {
         hasLoaded = true
         val storedRules = parseStreamBadgeRules(StreamBadgeSettingsStorage.loadStreamBadgeRules())
@@ -170,6 +192,10 @@ object StreamBadgeSettingsRepository {
                 }
             }
             ?: StreamBadgePlacement.BOTTOM
+        listSortOrder = StreamBadgeSettingsStorage.loadStreamListSortOrder()
+            ?.let { stored -> StreamListSortOrder.entries.firstOrNull { it.name == stored } }
+            ?: StreamListSortOrder.DEFAULT
+        listCachedFirst = StreamBadgeSettingsStorage.loadStreamListCachedFirst() ?: false
         if (legacyRules != null) {
             saveStreamBadgeRules()
             StreamBadgeSettingsStorage.clearLegacyDebridStreamBadgeRules()
@@ -183,6 +209,8 @@ object StreamBadgeSettingsRepository {
             showFileSizeBadges = showFileSizeBadges,
             showAddonLogo = showAddonLogo,
             badgePlacement = badgePlacement,
+            listSortOrder = listSortOrder,
+            listCachedFirst = listCachedFirst,
         )
     }
 

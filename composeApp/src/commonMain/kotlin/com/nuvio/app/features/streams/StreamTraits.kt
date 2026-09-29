@@ -739,6 +739,29 @@ object StreamTraitDetector {
             ?: stream.debridCacheStatus?.cachedSize
 
     /**
+     * File size for ordering the source list: the structured size, else the first size the addon
+     * printed in its name/description.
+     *
+     * Deliberately separate from [StreamTraits.size], which scoring reads: plenty of addons publish
+     * the size only as text ("💾 4.2 GB"), and a size sort that parked every one of those rows at the
+     * bottom would look broken — but scoring's size rules must keep skipping when nothing structured
+     * exists. The first token is the file on rows that print both ("💾 12 GB 📦 158 GB"); anything
+     * under a megabyte is noise, not a video.
+     */
+    fun listSortSizeBytes(stream: StreamItem): Long? {
+        streamSize(stream)?.takeIf { it > 0L }?.let { return it }
+        return listOfNotNull(stream.name, stream.title, stream.description)
+            .asSequence()
+            .flatMap { SIZE_TOKEN.findAll(it) }
+            .mapNotNull { match ->
+                val value = match.groupValues[1].replace(',', '.').toDoubleOrNull()
+                val unit = SIZE_UNIT_BYTES[match.groupValues[2].lowercase()]
+                if (value == null || unit == null) null else (value * unit).toLong()
+            }
+            .firstOrNull { it >= SIZE_UNIT_BYTES.getValue("mb") }
+    }
+
+    /**
      * Resolves the instant-playback trait using the strongest available signal.
      *
      * Usenet playback services stream directly from NNTP/WebDAV rather than waiting for a torrent

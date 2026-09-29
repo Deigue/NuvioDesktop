@@ -72,6 +72,11 @@ data class PlayerLaunch(
 enum class PlayerAutoPlayMode {
     NextEpisode,
     RandomEpisode,
+    /**
+     * Playing an entry of a playlist (see `PlaylistPlaybackSession`). Next-episode binge is off: the
+     * end of the file, or the up-next card, moves on to the playlist's next entry instead.
+     */
+    Playlist,
 }
 
 object PlayerLaunchStore {
@@ -337,15 +342,22 @@ enum class DesktopMpvConfigMode(val label: String, val description: String) {
 /**
  * Graphics backend the desktop app UI (Compose/Skiko) renders with. Not the video player —
  * mpv always uses Direct3D 11. Applied to `skiko.renderApi` at startup, so a change only takes
- * effect after an app restart. OpenGL is the default: Direct3D has subtle lighting/color
- * differences that make the UI look slightly worse. Direct3D is offered as a compatibility
- * fallback for systems where OpenGL misbehaves (e.g. fullscreen optimizations on older GPUs).
+ * effect after an app restart. Direct3D is the default: on some drivers a monitor-covering
+ * OpenGL window is flipped straight to the display, bypassing DWM, so mpv's child swapchain and
+ * the WebView2 HUD never reach the screen — fullscreen playback goes black with audio (1.15.0
+ * reports, confirmed fixed by Direct3D). Which systems do this depends on driver settings, MPO and
+ * HDR rather than the GPU model, so it cannot be predicted. OpenGL renders the UI slightly better
+ * and stays selectable as an opt-in.
  */
 enum class DesktopRendererApi(val label: String, val description: String, val skikoRenderApi: String) {
-    OpenGL("OpenGL", "Best-looking UI. Recommended for most systems.", "OPENGL"),
+    OpenGL(
+        "OpenGL",
+        "More polished UI. If fullscreen playback shows a black screen, switch back to Direct3D 11.",
+        "OPENGL",
+    ),
     D3D11(
         "Direct3D 11",
-        "Compatibility option for systems where OpenGL has issues. UI colors may look slightly different.",
+        "Most compatible. Recommended for most systems.",
         "DIRECT3D",
     ),
 }

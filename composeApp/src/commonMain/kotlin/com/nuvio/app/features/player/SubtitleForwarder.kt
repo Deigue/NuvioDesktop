@@ -43,39 +43,49 @@ object SubtitleForwarder {
                 // published from inside that coroutine, so sampling it races the launch.
                 SubtitleRepository.fetchAddonSubtitles(type, videoId).join()
 
-                SubtitleRepository.addonSubtitles.value
-                    .mapNotNull { subtitle ->
-                        if (isRejected(subtitle)) return@mapNotNull null
-                        val targetRank = targets.indexOfFirst { target ->
-                            languageMatchesPreference(subtitle.language, target)
-                        }
-                        if (targetRank < 0) return@mapNotNull null
-                        val isExact = targets.any { target ->
-                            languageMatchesPreferenceExactly(subtitle.language, target)
-                        }
-                        subtitle to intArrayOf(
-                            targetRank,
-                            if (isExact) 0 else 1,
-                            trackKind.rankOf(subtitle.subtitleTrackKind()),
-                        )
-                    }
-                    // Stable, so addons' own "best match first" ordering survives inside each tier.
-                    .sortedWith(
-                        compareBy({ it.second[0] }, { it.second[1] }, { it.second[2] }),
-                    )
-                    .map { (subtitle, _) -> subtitle }
-                    .distinctBy { it.url }
-                    .take(MAX_FORWARDED_SUBTITLES)
-                    .map { subtitle ->
-                        SubtitleInput(
-                            url = subtitle.url,
-                            name = subtitle.display,
-                            lang = subtitle.language,
-                        )
-                    }
+                selectForExternalPlayer(
+                    subtitles = SubtitleRepository.addonSubtitles.value,
+                    targets = targets,
+                    isRejected = isRejected,
+                    trackKind = trackKind,
+                )
             }
         } catch (_: Exception) {
             null
         }
     }
+
+    /** The filtering and ordering half of [fetchForExternalPlayer], for an already-loaded list. */
+    fun selectForExternalPlayer(
+        subtitles: List<AddonSubtitle>,
+        targets: List<String>,
+        isRejected: (AddonSubtitle) -> Boolean = { false },
+        trackKind: SubtitleTrackKind = SubtitleTrackKind.DEFAULT,
+    ): List<SubtitleInput> =
+        subtitles
+            .mapNotNull { subtitle ->
+                if (isRejected(subtitle)) return@mapNotNull null
+                val targetRank = targets.indexOfFirst { target ->
+                    languageMatchesPreference(subtitle.language, target)
+                }
+                if (targetRank < 0) return@mapNotNull null
+                val isExact = targets.any { target ->
+                    languageMatchesPreferenceExactly(subtitle.language, target)
+                }
+                subtitle to intArrayOf(
+                    targetRank,
+                    if (isExact) 0 else 1,
+                    trackKind.rankOf(subtitle.subtitleTrackKind()),
+                )
+            }
+            // Stable, so addons' own "best match first" ordering survives inside each tier.
+            .sortedWith(
+                compareBy({ it.second[0] }, { it.second[1] }, { it.second[2] }),
+            )
+            .map { (subtitle, _) -> subtitle.toSubtitleInput() }
+            .distinctBy { it.url }
+            .take(MAX_FORWARDED_SUBTITLES)
 }
+
+internal fun AddonSubtitle.toSubtitleInput(): SubtitleInput =
+    SubtitleInput(url = url, name = display, lang = language)

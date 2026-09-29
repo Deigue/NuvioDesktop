@@ -134,6 +134,7 @@ import com.nuvio.app.features.qualicache.QualityInlineBadges
 import com.nuvio.app.features.qualicache.rememberQualityBadgesEnabled
 import com.nuvio.app.features.qualicache.rememberQualityHighlights
 import com.nuvio.app.features.home.MetaPreview
+import com.nuvio.app.features.playlist.isPlaylistPreview
 import com.nuvio.app.features.home.randomPlayCategoryOrNull
 import com.nuvio.app.features.home.HeroCastMember
 import com.nuvio.app.features.home.HeroBadgePlacement
@@ -1867,7 +1868,7 @@ private fun DesktopHeroContentBlock(
         item.genres.size,
         item.description,
     ) {
-        co.touchlab.kermit.Logger.withTag("HeroLogoRace").i {
+        co.touchlab.kermit.Logger.withTag("HeroLogoRace").d {
             val slot = when {
                 !item.logo.isNullOrBlank() -> "logo:" + item.logo!!.takeLast(26)
                 item.heroMetadataPending -> "BLANK-HELD"
@@ -2858,7 +2859,7 @@ internal fun desktopHeroLogoSlotHeight(layout: HomeHeroLayout): Dp {
 
 private fun compactHeroMetaParts(item: MetaPreview): List<String> =
     buildList {
-        if (item.type != "collection" && item.randomPlayCategoryOrNull() == null) {
+        if (item.type != "collection" && !item.isPlaylistPreview() && item.randomPlayCategoryOrNull() == null) {
             // metadataType, not type: a cloud-library row's own type is the addon's `library`, which
             // would otherwise read as the literal word "Library" where the genres belong.
             add(item.metadataType.replaceFirstChar(Char::uppercase))
@@ -2915,7 +2916,7 @@ private fun desktopHeroGenreParts(
             }
         }
     }
-    if (values.isEmpty() && (item.type == "collection" || item.randomPlayCategoryOrNull() != null)) return emptyList()
+    if (values.isEmpty() && (item.type == "collection" || item.isPlaylistPreview() || item.randomPlayCategoryOrNull() != null)) return emptyList()
     // metadataType, not type: see [compactHeroMetaParts].
     return values.ifEmpty { listOf(HeroGenrePart(item.metadataType.replaceFirstChar(Char::uppercase))) }
 }

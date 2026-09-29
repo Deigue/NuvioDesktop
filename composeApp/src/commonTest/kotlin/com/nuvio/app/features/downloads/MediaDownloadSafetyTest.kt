@@ -12,6 +12,17 @@ class MediaDownloadSafetyTest {
         assertTrue("attachment; filename=\"movie.scr\"".hasExecutableDownloadExtension())
         assertTrue("https://example.test/movie%252eMsIx".hasExecutableDownloadExtension())
         assertFalse("https://example.test/movie.mkv?token=abc".hasExecutableDownloadExtension())
+        assertTrue("https://example.com/get?filename=movie.com".hasExecutableDownloadExtension())
+    }
+
+    @Test
+    fun hostNamesAreNotFileNames() {
+        assertFalse(
+            "https://submaker.elfhosted.com/addon/abc/v1.4.94/subtitle/8095426/eng.srt"
+                .hasExecutableDownloadExtension(),
+        )
+        assertFalse("https://user@cdn.example.com:8443/movie.mkv".hasExecutableDownloadExtension())
+        assertTrue("https://cdn.example.com/movie.mkv.exe".hasExecutableDownloadExtension())
     }
 
     @Test

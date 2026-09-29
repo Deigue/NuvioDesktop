@@ -49,6 +49,7 @@ internal object NuvioEngineLibrary {
             ?.let(::File)
             ?.parentFile
             ?.resolve(LIBRARY_FILE_NAME)
+        if (!com.nuvio.app.core.build.DesktopDevRun.allowsLocalNativeBuilds) return listOfNotNull(packaged)
         return listOfNotNull(
             packaged,
             File("composeApp/build/native/windows/$LIBRARY_FILE_NAME"),

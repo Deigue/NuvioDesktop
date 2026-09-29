@@ -2,6 +2,7 @@ package com.nuvio.app.features.posterservice
 
 import co.touchlab.kermit.Logger
 import com.nuvio.app.features.cloud.CloudLibraryContentType
+import com.nuvio.app.features.playlist.PlaylistContentType
 import com.nuvio.app.features.details.MetaDetailsRepository
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.metadata.isAnimeNativeId
@@ -35,7 +36,7 @@ internal fun MetaPreview.withCachedCustomPosters(
     settings: CustomPosterSettings,
     keys: CustomPosterKeys,
 ): MetaPreview {
-    if (!settings.isActive) return this
+    if (!settings.isActive || type == PlaylistContentType) return this
     val lookupId = metadataId
     val lookupType = metaLookupType?.takeIf { it.isNotBlank() } ?: type
     if (lookupId.isAnimeNativeId() && !settings.customPosterTemplateUsesNativeAnimeId()) return this
@@ -184,7 +185,7 @@ private class CustomPosterOverlayStateFlow<T>(
  * a template edit or screen toggle takes effect immediately instead of after the next rebuild.
  */
 internal suspend fun MetaPreview.prefetchCustomPosterIds(settings: CustomPosterSettings): MetaPreview {
-    if (!settings.isActive) return this
+    if (!settings.isActive || type == PlaylistContentType) return this
     val lookupId = metadataId
     if (lookupId.isAnimeNativeId() && !settings.customPosterTemplateUsesNativeAnimeId()) return this
     runCatching {

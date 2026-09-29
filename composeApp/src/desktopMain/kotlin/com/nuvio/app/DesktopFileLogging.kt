@@ -14,8 +14,23 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
 
-private const val DESKTOP_LOG_MAX_BYTES = 2L * 1024L * 1024L
-private const val DESKTOP_LOG_BACKUP_COUNT = 3
+// 50 MB of history. At 2 MB x 4 an hour of browsing rotated away everything, including the
+// minutes before a crash that the 15-35 minute CTD investigations needed.
+private const val DESKTOP_LOG_MAX_BYTES = 10L * 1024L * 1024L
+private const val DESKTOP_LOG_BACKUP_COUNT = 4
+
+/**
+ * Debug lines are written only when asked for: a file named `debug-log` in the Nuvio data
+ * directory (survives any launch method), `NUVIO_DEBUG_LOG` set, or a dev run from Gradle.
+ * Otherwise Info and above. Debug volume (per-image timings, per-fetch payload notes, the
+ * NextUpDiag/HeroLogoRace investigation tags) wrapped the whole log in well under an hour.
+ */
+fun desktopDebugLoggingRequested(): Boolean {
+    val marker = runCatching { DesktopStorage.rootDir.resolve("debug-log").toFile().exists() }.getOrDefault(false)
+    val env = !System.getenv("NUVIO_DEBUG_LOG").isNullOrBlank()
+    val devRun = System.getProperty("jpackage.app-path").isNullOrBlank()
+    return marker || env || devRun
+}
 
 private val desktopFileLoggingConfigured = AtomicBoolean(false)
 
@@ -49,12 +64,20 @@ fun configureDesktopFileLogging() {
             error.printStackTrace(System.err)
             previousHandler?.uncaughtException(thread, error)
         }
+        val debugLogging = desktopDebugLoggingRequested()
+        co.touchlab.kermit.Logger.setMinSeverity(
+            if (debugLogging) co.touchlab.kermit.Severity.Debug else co.touchlab.kermit.Severity.Info,
+        )
         System.out.println(
             "Nuvio desktop logging started: ${sink.activeFile.absolutePath} " +
+                "(debug lines ${if (debugLogging) "on" else "off; create a file named debug-log in ${DesktopStorage.rootDir} to turn them on"}) " +
                 "(line stamps are local time, ${ZoneId.systemDefault()} = UTC${localUtcOffset()}; " +
                 "now ${Instant.now()})"
         )
         relocateJvmDiagnosticArtifacts(logDirectory)
+        if (System.getProperty("os.name").orEmpty().contains("Windows", ignoreCase = true)) {
+            enableSafepointLog(logDirectory)
+        }
     }.onFailure { error ->
         originalErr.println("Unable to initialize Nuvio file logging: ${error.message}")
     }
@@ -69,32 +92,37 @@ private fun localUtcOffset(): String =
 
 /**
  * Moves JVM diagnostic artifacts into the normal log directory so they sit beside nuvio.log and
- * get picked up by the "Open logs folder" flow / user log bundles.
+ * get picked up by the "Open logs folder" flow / user log bundles, then prunes old ones.
  *
- * These are the `hs_err_pid*.log` HotSpot crash report and the `.mdmp` minidump produced by the
- * `-XX:ErrorFile` / `-XX:+CreateCoredumpOnCrash` flags, plus the `nuvio_safepoint_pid*.log`
- * stop-the-world log produced by `-Xlog:safepoint,gc` (see the jvmArgs block in
- * composeApp/build.gradle.kts). All of them are static startup flags that can't expand
- * `%LOCALAPPDATA%` into this user's per-profile log dir, so the JVM is pointed at a fixed,
- * always-writable drop location (C:\Users\Public) and we consolidate on the next launch. For the
- * crash artifacts that is inherently crash-then-relaunch: the crash kills the process, so the move
- * can only happen after. Windows-only, matching the flags; a no-op elsewhere.
+ * These are the `nuvio_hs_err_pid*.log` HotSpot crash report (`-XX:ErrorFile=$APPDIR/…`) and the
+ * `hs_err_pid*.mdmp` minidump (`-XX:+CreateCoredumpOnCrash`, written to the working directory),
+ * both static startup flags that cannot expand `%LOCALAPPDATA%`; see the jvmArgs block in
+ * composeApp/build.gradle.kts. For crash artifacts the move is inherently crash-then-relaunch.
+ *
+ * They used to go to C:\Users\Public, which every local account can read (hs_err carries the
+ * environment and command line) and pre-create. That folder is still swept so older artifacts
+ * are collected, but nothing new is written there. Minidumps hold heap memory — tokens and keys —
+ * and can run to gigabytes, so only the newest [KEEP_MINIDUMPS] are kept.
  */
 private fun relocateJvmDiagnosticArtifacts(logDirectory: File) {
     val isWindows = System.getProperty("os.name").orEmpty().contains("Windows", ignoreCase = true)
     if (!isWindows) return
 
-    // (directory, broad) — `broad` also sweeps default-named hs_err_pid*/*.mdmp files. Only enabled
-    // for the Public drop dir that is ours; TEMP (a JVM fallback if Public was unwritable) is
-    // restricted to our nuvio_ prefix so we never grab another JVM app's crash logs.
+    val installRoot = System.getProperty("jpackage.app-path")?.takeIf { it.isNotBlank() }
+        ?.let { File(it).parentFile }
+    // (directory, broad) — `broad` also sweeps default-named hs_err_pid* files. Only for folders
+    // that are ours; TEMP (the JVM's fallback) is restricted to our nuvio_ prefix so we never grab
+    // another JVM app's crash logs.
     val sources = buildList {
+        installRoot?.let { root ->
+            add(root to true)
+            add(File(root, "app") to true)
+        }
         add(File("C:\\Users\\Public") to true)
         System.getenv("PUBLIC")?.let { add(File(it) to true) }
         System.getenv("TEMP")?.let { add(File(it) to false) }
     }
-    // This run's own safepoint log is open and still being appended to. Moving it would either
-    // fail on the Windows share lock or pull the file out from under the VM, so skip anything
-    // carrying our PID and let the next launch collect it.
+    // This run's own files are open (or not written yet); skip anything carrying our PID.
     val currentPidMarker = "pid${ProcessHandle.current().pid()}"
     val seenDirs = mutableSetOf<String>()
     for ((dir, broad) in sources) {
@@ -119,6 +147,54 @@ private fun relocateJvmDiagnosticArtifacts(logDirectory: File) {
                 System.out.println("Relocated JVM diagnostic artifact to ${destination.absolutePath}")
             }
         }
+    }
+    pruneJvmDiagnosticArtifacts(logDirectory, currentPidMarker)
+}
+
+private const val KEEP_MINIDUMPS = 2
+private const val SAFEPOINT_LOG_MAX_AGE_MS = 14L * 24 * 60 * 60 * 1000
+
+private fun pruneJvmDiagnosticArtifacts(logDirectory: File, currentPidMarker: String) {
+    val files = logDirectory.listFiles(File::isFile).orEmpty()
+    files.filter { it.name.endsWith(".mdmp", ignoreCase = true) }
+        .sortedByDescending(File::lastModified)
+        .drop(KEEP_MINIDUMPS)
+        .forEach { runCatching { it.delete() } }
+    // One set per session (with .0/.1/.2 rotations): 500+ files and 100 MB after a few weeks.
+    val cutoff = System.currentTimeMillis() - SAFEPOINT_LOG_MAX_AGE_MS
+    files.filter { file ->
+        file.name.startsWith("nuvio_safepoint_pid") && !file.name.contains(currentPidMarker) &&
+            file.lastModified() < cutoff
+    }.forEach { runCatching { it.delete() } }
+}
+
+/**
+ * Turns on the stop-the-world (safepoint + GC) log at runtime, straight into this user's log
+ * directory. It exists for the "UI froze then recovered" hitch: a safepoint halts every Java
+ * thread, so nuvio.log just stops mid-burst; this names each VM operation and splits reaching the
+ * safepoint from time spent at it ("allocated too hard" vs "the OS was not scheduling us"). It was a `-Xlog:…:file=C:/Users/Public/…` startup flag because a startup flag cannot
+ * expand `%LOCALAPPDATA%`; the `VM.log` diagnostic command can take any path, so the only thing
+ * lost is the first few hundred milliseconds before main() gets here. One line per safepoint,
+ * capped at 3 x 2 MB per session. Silently skipped if the management module is missing.
+ */
+private fun enableSafepointLog(logDirectory: File) {
+    runCatching {
+        val pid = ProcessHandle.current().pid()
+        val path = File(logDirectory, "nuvio_safepoint_pid$pid.log").absolutePath.replace('\\', '/')
+        java.lang.management.ManagementFactory.getPlatformMBeanServer().invoke(
+            javax.management.ObjectName("com.sun.management:type=DiagnosticCommand"),
+            "vmLog",
+            arrayOf<Any>(
+                arrayOf(
+                    // Quoted, so a path with spaces stays one argument.
+                    "output=\"file=$path\" what=safepoint,gc decorators=time,uptime,level,tags " +
+                        "output_options=filesize=2m,filecount=3",
+                ),
+            ),
+            arrayOf(Array<String>::class.java.name),
+        )
+    }.onFailure { error ->
+        System.out.println("Safepoint log not enabled: ${error.message}")
     }
 }
 
