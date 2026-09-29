@@ -33,6 +33,7 @@ import com.nuvio.app.features.tracking.TrackingLibraryTabKind
 import com.nuvio.app.features.tracking.trackingProvider
 import com.nuvio.app.features.tracking.resolveLibrarySource
 import com.nuvio.app.features.trakt.shouldUseTraktLibrary
+import com.nuvio.app.features.yamtrack.YamtrackLibraryAdapter
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
 import kotlinx.coroutines.CoroutineScope
@@ -280,11 +281,13 @@ object LibraryRepository {
             syncScope.launch {
                 runCatching {
                     val current = provider.membership(item)
+                    val desired = provider.toggledDefaultMembership(current)
                     provider.applyMembership(
                         profileId = ProfileRepository.activeProfileId,
                         item = item,
-                        desiredMembership = provider.toggledDefaultMembership(current),
+                        desiredMembership = desired,
                     )
+                    mirrorLibraryToFloppy(provider, item, inLibrary = desired.values.any { it })
                 }
                     .onFailure { e ->
                         log.e(e) { "Failed to toggle ${provider.providerId} library" }
@@ -403,6 +406,7 @@ object LibraryRepository {
                     item = item,
                     desiredMembership = providerMembership,
                 )
+                mirrorLibraryToFloppy(provider, item, inLibrary = providerMembership.values.any { it })
             }
             publish()
         } ?: run {
@@ -424,6 +428,24 @@ object LibraryRepository {
             listKey = resolvedListKey,
         )
         applyMembershipChanges(item, desiredMembership)
+    }
+
+    /**
+     * Copies a library add/remove on the active provider (e.g. SIMKL) to Floppy when it is enabled.
+     * Runs only after the provider write succeeded, and never when Floppy is itself the Library
+     * source — that write already went there. Failures are logged and never undo the provider write.
+     */
+    private fun mirrorLibraryToFloppy(
+        provider: TrackingLibraryProvider,
+        item: LibraryItem,
+        inLibrary: Boolean,
+    ) {
+        if (provider.providerId == TrackingProviderId.YAMTRACK) return
+        if (!TrackingProviderRegistry.isAuthenticated(TrackingProviderId.YAMTRACK)) return
+        syncScope.launch {
+            runCatching { YamtrackLibraryAdapter.mirrorMembership(item, inLibrary) }
+                .onFailure { e -> log.e(e) { "Failed to mirror library change to Floppy" } }
+        }
     }
 
     private fun pushToServer() {

@@ -137,6 +137,102 @@ internal object YamtrackLibraryAdapter : TrackingLibraryProvider {
         refresh(TrackingRefreshIntent.INVALIDATED)
         return TrackingMembershipResolution(providerId, TAB_KEY, TAB_KEY)
     }
+
+    /**
+     * Mirrors a library add/remove made against another Library source (e.g. SIMKL) onto Floppy.
+     *
+     * Adding tracks the title as Planning, but only when Floppy is not already tracking it: the
+     * collection POST always appends a new entry, so a watched title would otherwise gain a second,
+     * Planning one. Removing deletes the tracked item with all its entries, watched ones included —
+     * the same outcome as SIMKL's own library removal.
+     *
+     * Ids resolve the way watched-history writes do (tmdb first), so a library entry and a later
+     * mark-watched land on the same Floppy item rather than an imdb/tmdb pair of duplicates.
+     */
+    suspend fun mirrorMembership(item: LibraryItem, inLibrary: Boolean) {
+        val (baseUrl, token) = YamtrackSettingsRepository.activeCredentials() ?: return
+        val headers = floppyLibraryHeaders(token)
+        val anime = YamtrackScrobbleRepository.resolveAnimeEntry(
+            contentType = item.type,
+            parentMetaId = item.id,
+            videoId = null,
+            title = item.name,
+            seasonNumber = null,
+            episodeNumber = null,
+            isAnime = item.type.equals("anime", ignoreCase = true),
+        )
+        when (anime) {
+            is YamtrackAnimeResolution.Entry -> return mirrorAnimeMembership(baseUrl, headers, anime.mal, inLibrary)
+            // Anime without a MAL entry is skipped: the TV route would file it as a duplicate
+            // TMDB show beside the Anime row that history writes use.
+            is YamtrackAnimeResolution.Unaddressable -> error("Floppy skipped anime ${item.name}: ${anime.reason}")
+            YamtrackAnimeResolution.NotAnime -> Unit
+        }
+        val target = item.resolveFloppyLibraryTarget() ?: error("Floppy could not resolve ${item.name}")
+        val mediaUrl = "$baseUrl/api/v1/media/${target.mediaType}/${target.source}/${target.id}/"
+        val existing = httpRequestRaw("GET", mediaUrl, headers, "")
+        val tracked = existing.status in 200..299 &&
+            json.decodeFromString<FloppyTrackedFlag>(existing.body).tracked
+        if (inLibrary == tracked) return
+        val response = if (inLibrary) {
+            httpRequestRaw(
+                "POST",
+                "$baseUrl/api/v1/media/${target.mediaType}/",
+                headers,
+                json.encodeToString(FloppyPlanRequest(target.source, target.id, status = 0)),
+            )
+        } else {
+            httpRequestRaw("DELETE", mediaUrl, headers, "")
+        }
+        if (response.status !in 200..299 && !(response.status == 404 && !inLibrary)) {
+            error("Floppy library mirror failed (${response.status}): ${response.body.take(200)}")
+        }
+    }
+
+    /** Anime lives on Floppy as a MAL row; adding needs an explicit starting `progress`. */
+    private suspend fun mirrorAnimeMembership(
+        baseUrl: String,
+        headers: Map<String, String>,
+        mal: String,
+        inLibrary: Boolean,
+    ) {
+        val mediaUrl = "$baseUrl/api/v1/media/anime/mal/$mal/"
+        val existing = httpRequestRaw("GET", mediaUrl, headers, "")
+        val tracked = existing.status in 200..299 &&
+            json.decodeFromString<FloppyTrackedFlag>(existing.body).tracked
+        if (inLibrary == tracked) return
+        val response = if (inLibrary) {
+            httpRequestRaw(
+                "POST",
+                "$baseUrl/api/v1/media/anime/",
+                headers,
+                json.encodeToString(FloppyAnimePlanRequest("mal", mal, status = 0, progress = 0)),
+            )
+        } else {
+            httpRequestRaw("DELETE", mediaUrl, headers, "")
+        }
+        if (response.status !in 200..299 && !(response.status == 404 && !inLibrary)) {
+            error("Floppy anime library mirror failed (${response.status}): ${response.body.take(200)}")
+        }
+    }
+}
+
+private suspend fun LibraryItem.resolveFloppyLibraryTarget(): FloppyLibraryTarget? {
+    val mediaType = if (type.equals("movie", true)) "movie" else "tv"
+    val resolved = YamtrackScrobbleRepository.buildItem(
+        contentType = type,
+        parentMetaId = id,
+        videoId = null,
+        title = name,
+        episodeTitle = null,
+        seasonNumber = null,
+        episodeNumber = null,
+        isAnime = type.equals("anime", true),
+    )?.ids
+    resolved?.tmdb?.takeIf(String::isNotBlank)?.let { return FloppyLibraryTarget(mediaType, "tmdb", it) }
+    resolved?.imdb?.takeIf(String::isNotBlank)?.let { return FloppyLibraryTarget(mediaType, "imdb", it) }
+    resolved?.tvdb?.takeIf(String::isNotBlank)?.let { return FloppyLibraryTarget(mediaType, "tvdb", it) }
+    return toFloppyLibraryTarget()
 }
 
 private data class FloppyLibraryTarget(val mediaType: String, val source: String, val id: String)
@@ -152,6 +248,20 @@ private fun LibraryItem.toFloppyLibraryTarget(): FloppyLibraryTarget? {
 }
 
 @Serializable private data class FloppyTrackRequest(val source: String, @SerialName("media_id") val mediaId: String)
+/** Status 0 is Planning; stated explicitly rather than leaning on the endpoint's default. */
+@Serializable private data class FloppyPlanRequest(
+    val source: String,
+    @SerialName("media_id") val mediaId: String,
+    // No default: this Json omits defaulted fields, which would drop the status from the body.
+    val status: Int,
+)
+@Serializable private data class FloppyAnimePlanRequest(
+    val source: String,
+    @SerialName("media_id") val mediaId: String,
+    val status: Int,
+    val progress: Int,
+)
+@Serializable private data class FloppyTrackedFlag(val tracked: Boolean = false)
 @Serializable private data class FloppyLibraryPage(
     val pagination: FloppyLibraryPagination = FloppyLibraryPagination(),
     val results: List<FloppyTrackedMedia> = emptyList(),
