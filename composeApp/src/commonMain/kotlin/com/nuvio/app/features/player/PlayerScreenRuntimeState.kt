@@ -192,6 +192,9 @@ internal class PlayerScreenRuntime(
     // player session starts from the persisted default.
     var sessionPlaybackSpeed by mutableStateOf(1f)
     var lastTrustedPlaybackPositionMs by mutableStateOf(0L)
+    // Sticky per attempt: set once a trusted sample shows the resume seek landed. Until then a flush
+    // floors the recorded position at the requested resume point; after it, the live position wins.
+    var initialResumeReached by mutableStateOf(false)
     // Last snapshot with a real duration and position for the CURRENT video. Teardown can hand
     // flushWatchProgress a zeroed placeholder; this is the fallback so an exit near the end still
     // records the final position (and its completion cascade) instead of being dropped.

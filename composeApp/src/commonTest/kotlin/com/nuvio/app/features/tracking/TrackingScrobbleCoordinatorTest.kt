@@ -239,6 +239,16 @@ class TrackingScrobbleCoordinatorTest {
         assertEquals(1, earlyStop.sentCount)
     }
 
+    @Test
+    fun `a pause past the providers' threshold is withheld from stop-only providers`() {
+        assertEquals(true, isPauseThatStopWouldRecordAsWatched(movieEvent(85.0, isPauseRatherThanStop = true)))
+        assertEquals(true, isPauseThatStopWouldRecordAsWatched(movieEvent(80.0, isPauseRatherThanStop = true)))
+        // Below the threshold their stop is recorded as resumable progress, which is what a pause is.
+        assertEquals(false, isPauseThatStopWouldRecordAsWatched(movieEvent(79.9, isPauseRatherThanStop = true)))
+        // A real stop past the threshold is a completion and must still go out.
+        assertEquals(false, isPauseThatStopWouldRecordAsWatched(movieEvent(85.0)))
+    }
+
     private fun movieEvent(
         progressPercent: Double = 42.5,
         isPauseRatherThanStop: Boolean = false,

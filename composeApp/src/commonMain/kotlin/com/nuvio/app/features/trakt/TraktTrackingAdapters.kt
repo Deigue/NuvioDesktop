@@ -18,6 +18,7 @@ import com.nuvio.app.features.tracking.TrackingScrobbleEvent
 import com.nuvio.app.features.tracking.TrackingScrobbleResult
 import com.nuvio.app.features.tracking.TrackingScrobbler
 import com.nuvio.app.features.tracking.TrackingSeekScrobblePolicy
+import com.nuvio.app.features.tracking.isPauseThatStopWouldRecordAsWatched
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 
@@ -100,8 +101,12 @@ object TraktScrobbleAdapter : TrackingScrobbler {
         return when (action) {
             TrackingScrobbleAction.START ->
                 TraktScrobbleRepository.scrobbleStart(item = item, progressPercent = progressPercent).copy(handled = true)
-            TrackingScrobbleAction.STOP ->
+            // A pause is reported as a stop here, and this stop records 80%+ as a watch.
+            TrackingScrobbleAction.STOP -> if (isPauseThatStopWouldRecordAsWatched(event)) {
+                TrackingScrobbleResult.Declined
+            } else {
                 TraktScrobbleRepository.scrobbleStop(item = item, progressPercent = progressPercent).copy(handled = true)
+            }
             // Trakt has a pause endpoint, but nothing emits PAUSE yet and wiring it here would
             // change what this provider sends. It is added with the players that need it.
             TrackingScrobbleAction.PAUSE -> TrackingScrobbleResult.Declined

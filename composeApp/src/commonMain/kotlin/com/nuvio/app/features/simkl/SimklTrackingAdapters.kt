@@ -20,6 +20,7 @@ import com.nuvio.app.features.tracking.TrackingScrobbleResult
 import com.nuvio.app.features.tracking.TrackingScrobbler
 import com.nuvio.app.features.tracking.TrackingSeekScrobblePolicy
 import com.nuvio.app.features.tracking.TrackingWatchedProvider
+import com.nuvio.app.features.tracking.isPauseThatStopWouldRecordAsWatched
 import com.nuvio.app.features.watched.WatchedItem
 import com.nuvio.app.features.watched.WatchedRepository
 import kotlinx.coroutines.flow.StateFlow
@@ -123,8 +124,12 @@ internal object SimklScrobbleAdapter : TrackingScrobbler {
         return when (action) {
             TrackingScrobbleAction.START ->
                 SimklScrobbleRepository.scrobbleStart(item = item, progressPercent = progressPercent).copy(handled = true)
-            TrackingScrobbleAction.STOP ->
+            // A pause is reported as a stop here, and this stop records 80%+ as a watch.
+            TrackingScrobbleAction.STOP -> if (isPauseThatStopWouldRecordAsWatched(event)) {
+                TrackingScrobbleResult.Declined
+            } else {
                 SimklScrobbleRepository.scrobbleStop(item = item, progressPercent = progressPercent).copy(handled = true)
+            }
             // SIMKL's scrobble API has no pause action.
             TrackingScrobbleAction.PAUSE -> TrackingScrobbleResult.Declined
         }

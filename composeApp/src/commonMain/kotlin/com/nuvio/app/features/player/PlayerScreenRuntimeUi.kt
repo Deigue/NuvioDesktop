@@ -766,6 +766,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
                         providerDiagnosticVideoSourceUrl = activeSourceUrl
                         providerDiagnosticProbePendingSourceUrl = null
                         lastTrustedPlaybackPositionMs = 0L
+                        initialResumeReached = false
                         lastMeaningfulPlaybackSnapshot = null
                         hasRequestedScrobbleStartForCurrentItem = false
                         scrobbleStartRequestGeneration += 1L
@@ -791,6 +792,17 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
                         snapshot.positionMs in 1 until snapshot.durationMs
                     ) {
                         lastTrustedPlaybackPositionMs = snapshot.positionMs
+                        if (
+                            !initialResumeReached &&
+                            isResumeReached(
+                                trustedPositionMs = snapshot.positionMs,
+                                durationMs = snapshot.durationMs,
+                                initialPositionMs = activeInitialPositionMs,
+                                initialProgressFraction = activeInitialProgressFraction,
+                            )
+                        ) {
+                            initialResumeReached = true
+                        }
                     }
                     if (
                         !isProviderDiagnosticVideoPlayback &&

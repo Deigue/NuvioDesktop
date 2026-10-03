@@ -52,6 +52,18 @@ internal fun canConfirmWatched(action: TrackingScrobbleAction, event: TrackingSc
         !event.isPauseRatherThanStop &&
         event.progressPercent >= TrackingScrobbleWatchedProgressThresholdPercent
 
+/**
+ * Whether a provider that has only `stop` to report a pause with must skip this one.
+ *
+ * Trakt and SIMKL both turn a stop at or above [TrackingScrobbleWatchedProgressThresholdPercent]
+ * into a watch, so sending a pause there marks the title watched on the provider (and drops it
+ * from a Continue Watching it sources) though the user only paused. Skipping it leaves their
+ * session running, as a pause should; the next start, stop or completion corrects it.
+ */
+internal fun isPauseThatStopWouldRecordAsWatched(event: TrackingScrobbleEvent): Boolean =
+    event.isPauseRatherThanStop &&
+        event.progressPercent >= TrackingScrobbleWatchedProgressThresholdPercent
+
 object TrackingScrobbleCoordinator {
     private val log = Logger.withTag("TrackingScrobble")
 
