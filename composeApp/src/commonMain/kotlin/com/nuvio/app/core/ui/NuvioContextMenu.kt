@@ -147,9 +147,11 @@ fun NuvioContextMenu(
         onDispose { PosterZoomOverlayCoordinator.hide() }
     }
     LaunchedEffect(Unit) {
-        runCatching {
-            if (openedByKeyboard && rowFocus.isNotEmpty()) rowFocus[0].requestFocus() else menuFocus.requestFocus()
-        }
+        // Falls back to the panel if the row cannot take focus: a menu with nothing focused would
+        // leave the keyboard with no way in at all.
+        val rowFocused = openedByKeyboard && rowFocus.isNotEmpty() &&
+            runCatching { rowFocus[0].requestFocus() }.isSuccess
+        if (!rowFocused) runCatching { menuFocus.requestFocus() }
         fadeIn.animateTo(1f, tween(durationMillis = 110, easing = NuvioTokens.Motion.standard))
     }
     PlatformBackHandler(enabled = true, onBack = onDismiss)
