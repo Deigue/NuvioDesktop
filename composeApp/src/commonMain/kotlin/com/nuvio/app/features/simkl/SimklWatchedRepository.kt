@@ -1,6 +1,7 @@
 package com.nuvio.app.features.simkl
 
 import co.touchlab.kermit.Logger
+import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.tracking.WatchedHistoryReset
 import com.nuvio.app.features.watched.WatchedIdAliases
 import com.nuvio.app.features.watched.WatchedItem
@@ -8,77 +9,146 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * Full SIMKL watched history, including per-episode timestamps.
+ * SIMKL watched history, including per-episode timestamps, following SIMKL's two-phase sync.
  *
- * A failed fetch throws rather than degrading to the last good snapshot. The one consumer merges
- * this additively into the local watched store, so handing it a stale snapshot re-adds every tick
- * the user has removed since — an unmark that undoes itself at the next sync. Skipping the merge
- * loses nothing: the local store is already the authority between pulls.
+ * Phase 1 — the first read for a profile, or one after [invalidate] — downloads the whole history
+ * (`/sync/all-items/all?extended=full`, ~14k rows and several MB on a real account). Phase 2 is
+ * every read after that: `/sync/activities` says whether anything moved, and if it did only the
+ * entries that changed since the last read are fetched, with `date_from` set to the `all` stamp
+ * that read saw. That watermark is persisted per profile, so a relaunch is a delta too — it used to
+ * live in memory only, and every launch and every scrobble paid for the full download again.
+ *
+ * Returning a delta is safe because the one consumer merges additively: rows absent from the
+ * response are left exactly as they are. Removals on SIMKL never travelled through this path
+ * anyway; a show reset (removed and re-added) re-enters the delta with its new
+ * `added_to_watchlist_at` and its remaining episodes, which is all [toHistoryResets] needs.
+ *
+ * A failed fetch throws rather than degrading to the last good snapshot. Handing the merge a stale
+ * snapshot re-adds every tick the user has removed since — an unmark that undoes itself at the next
+ * sync. Skipping the merge loses nothing: the local store is already the authority between pulls.
  */
 internal object SimklWatchedRepository {
     private const val BASE_URL = "https://api.simkl.com"
     private val log = Logger.withTag("SimklWatched")
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = false; explicitNulls = false }
 
-    private var cachedStampProfileId: Int? = null
-    private var cachedStamp: String? = null
+    private var loadedProfileId: Int? = null
+    private var state = StoredWatchedSyncState()
 
-    /** See [invalidate]; also called when the pulled profile is not the one the stamp belongs to. */
+    /**
+     * Drops the watermark, so the next read is a full Phase 1 download. Called for a user-initiated
+     * resync, and by the importer when its store no longer holds anything this provider imported —
+     * a delta would then have nothing to land on.
+     */
     fun invalidate() {
-        cachedStampProfileId = null
-        cachedStamp = null
+        val profileId = ProfileRepository.activeProfileId
+        ensureLoaded(profileId)
+        if (state.stamp == null && state.dateFrom == null) return
+        state = state.copy(stamp = null, dateFrom = null)
+        persist(profileId)
+    }
+
+    /** Forgets everything stored for the active profile. Called on disconnect. */
+    fun clearLocalState() {
+        val profileId = ProfileRepository.activeProfileId
+        loadedProfileId = profileId
+        state = StoredWatchedSyncState()
+        SimklWatchedSyncStorage.savePayload(profileId, null)
+        pendingResets = emptyList()
+        WatchedIdAliases.clear()
+    }
+
+    private fun ensureLoaded(profileId: Int) {
+        if (loadedProfileId == profileId) return
+        loadedProfileId = profileId
+        state = SimklWatchedSyncStorage.loadPayload(profileId)
+            ?.takeIf(String::isNotBlank)
+            ?.let { payload -> runCatching { json.decodeFromString<StoredWatchedSyncState>(payload) }.getOrNull() }
+            ?: StoredWatchedSyncState()
+        pendingResets = emptyList()
+        // The id aliases come from the history itself. A delta only carries the titles that
+        // changed, so the full set has to be remembered rather than rebuilt from each response.
+        WatchedIdAliases.replace(state.aliasGroups.map(List<String>::toSet))
+    }
+
+    private fun persist(profileId: Int) {
+        SimklWatchedSyncStorage.savePayload(profileId, json.encodeToString(state))
     }
 
     suspend fun watchedItems(profileId: Int): List<WatchedItem> {
         if (!SimklAuthRepository.hasUsableToken()) return emptyList()
-        // This is the most expensive read in the app — the full history, ~14k rows on a real
-        // account, plus an episode-catalog backfill pass over every season-less show. It used to
-        // run once per launch, so its cost never mattered; it is now on a five-minute poll, where
-        // it very much does. SIMKL's own change stamp answers "is any of that worth downloading"
-        // in one small request, the same way the Continue Watching seeds and the library already
-        // gate themselves.
-        //
+        ensureLoaded(profileId)
         // An empty list is the correct "nothing changed" answer, not a degraded one: the caller
         // merges additively, so it leaves the local store exactly as it is. Handing back a cached
         // snapshot instead would re-add every tick the user has removed since — see the class
         // comment.
-        val stamp = simklWatchedHistoryActivitiesStamp(SimklAuthRepository.fetchActivities())
-        if (stamp != null && stamp == cachedStamp && profileId == cachedStampProfileId) {
-            log.d { "SIMKL watched history: activities unchanged, skipping full fetch" }
+        val activities = SimklAuthRepository.fetchActivities()
+        val stamp = simklWatchedHistoryActivitiesStamp(activities)
+        if (stamp != null && stamp == state.stamp) {
+            log.d { "SIMKL watched history: activities unchanged, skipping fetch" }
             return emptyList()
         }
+        // The watermark for the *next* read is the stamp seen before this one starts, never one
+        // read after it: a change landing while this request is in flight is newer than it, so the
+        // next delta picks it up instead of it falling between two reads.
+        val nextDateFrom = activities?.all?.takeIf(String::isNotBlank)
+        val dateFrom = state.dateFrom?.takeIf(String::isNotBlank)
         // `extended=full` supplies seasons/episodes and `episode_watched_at=yes` distinguishes
         // watched episodes from the unwatched episode rows included in that extended response.
+        val dateFromQuery = dateFrom?.let { "&date_from=${simklUrlEncode(it)}" }.orEmpty()
         val url = SimklAuthRepository.appendParams(
-            "$BASE_URL/sync/all-items/all?extended=full&episode_watched_at=yes",
+            "$BASE_URL/sync/all-items/all?extended=full&episode_watched_at=yes$dateFromQuery",
         )
         val response = simklRequest(method = "GET", url = url, body = "")
         if (response.status !in 200..299) {
             error("SIMKL watched-history fetch failed: HTTP ${response.status}")
         }
-        val payload = runCatching {
-            json.decodeFromString<SimklAllItemsResponse>(response.body)
-        }.getOrElse { failure ->
-            if (failure is CancellationException) throw failure
-            error("SIMKL watched-history payload could not be parsed: ${failure.message}")
+        // An empty body is SIMKL's answer to a delta with nothing in it.
+        val payload = if (response.body.trim().let { it.isEmpty() || it == "null" || it == "[]" }) {
+            SimklAllItemsResponse()
+        } else {
+            runCatching {
+                json.decodeFromString<SimklAllItemsResponse>(response.body)
+            }.getOrElse { failure ->
+                if (failure is CancellationException) throw failure
+                error("SIMKL watched-history payload could not be parsed: ${failure.message}")
+            }
         }
         val items = payload.toWatchedItems() + backfillSeasonlessEntries(payload)
+        if (profileId != loadedProfileId) return emptyList()
+        log.i {
+            val mode = if (dateFrom != null) "delta since $dateFrom" else "full"
+            "SIMKL watched history ($mode): ${payload.movies.size} movies, ${payload.shows.size} shows, " +
+                "${payload.anime.size} anime -> ${items.size} rows"
+        }
+        val aliasGroups = payload.toContentIdAliasGroups()
+        val nextAliasGroups = if (dateFrom == null) {
+            aliasGroups
+        } else {
+            mergeContentIdAliasGroups(state.aliasGroups.map(List<String>::toSet), aliasGroups)
+        }
         // Stamped only after a fully successful read, so a failed backfill cannot mark a partial
         // history as current and suppress the retry.
-        cachedStamp = stamp
-        cachedStampProfileId = profileId
+        state = StoredWatchedSyncState(
+            stamp = stamp,
+            dateFrom = nextDateFrom,
+            aliasGroups = nextAliasGroups.map { it.sorted() },
+        )
+        persist(profileId)
         pendingResets = payload.toHistoryResets()
-        WatchedIdAliases.replace(payload.toContentIdAliasGroups())
+        WatchedIdAliases.replace(nextAliasGroups)
         return items
     }
 
-    // Set by each full read, taken by the importer; see consumeHistoryResets.
+    // Set by each read, taken by the importer; see consumeHistoryResets.
     private var pendingResets: List<WatchedHistoryReset> = emptyList()
 
-    /** The show resets seen by the last full read, once. See [SimklAllItemsResponse.toHistoryResets]. */
+    /** The show resets seen by the last read, once. See [SimklAllItemsResponse.toHistoryResets]. */
     fun consumeHistoryResets(): List<WatchedHistoryReset> =
         pendingResets.also { pendingResets = emptyList() }
 
@@ -102,7 +172,7 @@ internal object SimklWatchedRepository {
             coroutineScope {
                 chunk.map { target ->
                     async {
-                        target to SimklEpisodeCatalog.episodesFor(target.simklId)
+                        target to SimklEpisodeCatalog.episodesFor(target.simklId, target.watchedEpisodesCount)
                     }
                 }.awaitAll()
             }.forEach { (target, episodes) ->
@@ -111,6 +181,7 @@ internal object SimklWatchedRepository {
                 recovered += items
             }
         }
+        SimklEpisodeCatalog.flush()
         log.i {
             "SIMKL: recovered ${recovered.size} episode rows from ${targets.size - unresolved} shows" +
                 if (unresolved > 0) " ($unresolved could not be resolved)" else ""
@@ -120,6 +191,29 @@ internal object SimklWatchedRepository {
 
     /** Episode-list requests in flight at once. See [backfillSeasonlessEntries]. */
     private const val BACKFILL_CONCURRENCY = 6
+}
+
+@Serializable
+private data class StoredWatchedSyncState(
+    /** [simklWatchedHistoryActivitiesStamp] at the last successful read; equal means skip. */
+    val stamp: String? = null,
+    /** Activities `all` at the last successful read: the next read's `date_from`. */
+    val dateFrom: String? = null,
+    /** Every IMDb/TMDB pair seen so far; see [toContentIdAliasGroups]. */
+    val aliasGroups: List<List<String>> = emptyList(),
+)
+
+/**
+ * [existing] alias groups updated with the ones a delta just reported. A title's group is replaced
+ * rather than unioned, so a corrected id on SIMKL does not leave the old pairing behind.
+ */
+internal fun mergeContentIdAliasGroups(
+    existing: List<Set<String>>,
+    delta: List<Set<String>>,
+): List<Set<String>> {
+    if (delta.isEmpty()) return existing
+    val touched = delta.flatten().toSet()
+    return existing.filter { group -> group.none(touched::contains) } + delta
 }
 
 /**

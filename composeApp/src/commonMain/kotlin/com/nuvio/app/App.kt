@@ -827,9 +827,9 @@ private suspend fun warmProfileDeferredRepositories() {
                 SimklSettingsRepository.isRewatchTrackingEnabled() &&
                 SimklAuthRepository.uiState.value.canUseRewatches
             ) {
-                // Full, once per launch: the only read that notices a rewatch deleted on SIMKL.
-                // Backgrounded because it is the whole all-items payload, not a delta.
-                SimklRewatchRepository.refreshAsync(full = true)
+                // Gated on activities: a delta when something moved, a full read only when
+                // `removed_from_list` moved or the last full read is a day old. See refreshNow.
+                SimklRewatchRepository.refreshAsync()
             }
         }
         startupWarmStep("tvdb settings load", rethrow = false) { com.nuvio.app.features.tvdb.TvdbSettingsRepository.ensureLoaded() }

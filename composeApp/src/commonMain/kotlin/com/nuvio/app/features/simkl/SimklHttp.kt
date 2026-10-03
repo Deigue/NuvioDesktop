@@ -6,6 +6,7 @@ import com.nuvio.app.features.addons.httpRequestRaw
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicInteger
 
 private val log = Logger.withTag("SimklHttp")
 
@@ -19,6 +20,12 @@ private const val MAX_BACKOFF_MS = 60_000L
 /** `400 {"error":"RATE_LIMIT"}` is a ~20s per-user write lock, not a quota: retry shortly. */
 private const val WRITE_LOCK_RETRY_MS = 2_000L
 private const val WRITE_LOCK_MAX_RETRIES = 3
+
+/**
+ * Requests sent to SIMKL since launch, retries included — every one counts against the account's
+ * daily quota. Logged per request so a run's real cost is in the log rather than estimated.
+ */
+private val requestCount = AtomicInteger(0)
 
 private val writeMutex = Mutex()
 private var lastWriteAtMs = 0L
@@ -91,6 +98,8 @@ private suspend fun sendWithRetries(
             followRedirects = followRedirects,
             allowLargeResponse = allowLargeResponse,
         )
+        val count = requestCount.incrementAndGet()
+        log.i { "SIMKL request #$count: $method ${redactPath(url)} -> ${response.status}" }
         when {
             response.status == 401 && authenticated && !refreshed -> {
                 refreshed = true
@@ -133,3 +142,13 @@ private fun unauthorizedResponse(url: String) = RawHttpResponse(
 )
 
 private fun redact(url: String): String = url.substringBefore('?')
+
+/** [redact], plus the query parameters that say what kind of read it was. Never the client_id. */
+private fun redactPath(url: String): String {
+    val path = redact(url).removePrefix("https://api.simkl.com")
+    val shown = url.substringAfter('?', "").split('&')
+        .filter { it.substringBefore('=') in LOGGED_QUERY_PARAMS }
+    return if (shown.isEmpty()) path else "$path?${shown.joinToString("&")}"
+}
+
+private val LOGGED_QUERY_PARAMS = setOf("date_from", "extended", "allow_rewatch")

@@ -270,7 +270,14 @@ object WatchedRepository {
             // A provider may skip its own fetch when the service reports nothing has changed. That
             // is the right default for a poll and the wrong one for a resync the user asked for,
             // so a forced pull drops that state first and makes the provider read in full.
-            if (force) provider.invalidateChangeDetection()
+            //
+            // A provider that reads deltas also has to start over when nothing it imported is
+            // left here — first import, a source switch that withdrew its rows, cleared local
+            // data — because a delta only carries what changed and would land on an empty store.
+            val holdsImport = synchronized(itemsLock) {
+                itemsByKey.values.any { item -> item.importedFrom == provider.providerId.storageId }
+            }
+            if (force || !holdsImport) provider.invalidateChangeDetection()
             val remoteItems = try {
                 provider.pull(profileId = profileId, pageSize = watchedItemsPageSize)
             } catch (error: CancellationException) {
@@ -346,6 +353,8 @@ object WatchedRepository {
         TrackingProviderRegistry.connectedWatchedProviders()
             .filter { provider -> provider.providerId != importProviderId }
             .forEach { provider ->
+                // This needs the provider's whole history, not whatever changed since its last read.
+                provider.invalidateChangeDetection()
                 val remoteItems = try {
                     provider.pull(profileId = profileId, pageSize = watchedItemsPageSize)
                 } catch (error: CancellationException) {
