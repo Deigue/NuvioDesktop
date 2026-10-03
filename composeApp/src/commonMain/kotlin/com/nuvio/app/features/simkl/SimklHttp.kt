@@ -3,6 +3,12 @@ package com.nuvio.app.features.simkl
 import co.touchlab.kermit.Logger
 import com.nuvio.app.features.addons.RawHttpResponse
 import com.nuvio.app.features.addons.httpRequestRaw
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -29,6 +35,24 @@ private val requestCount = AtomicInteger(0)
 
 private val writeMutex = Mutex()
 private var lastWriteAtMs = 0L
+
+/**
+ * How long a finished public catalog read stays reusable. At startup the calendar loader and the
+ * episode backfill ask for the same `/tv/episodes/{id}` and `/movies/{id}` URLs, and a load that is
+ * cancelled and restarted (profile switch) re-asks for all of them; each repeat is a request on the
+ * account's daily quota for bytes already in hand.
+ */
+private const val CATALOG_REUSE_MS = 60_000L
+
+private class SharedCatalogRead(val response: CompletableDeferred<RawHttpResponse>) {
+    @Volatile var finishedAtMs = 0L
+}
+
+private val catalogMutex = Mutex()
+private val catalogReads = HashMap<String, SharedCatalogRead>()
+
+/** Owns the shared fetches, so one caller cancelling does not abort the others waiting on it. */
+private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
 /**
  * Every SIMKL API call goes through here, so SIMKL's rules live in one place:
@@ -65,9 +89,53 @@ internal suspend fun simklRequest(
                 lastWriteAtMs = System.currentTimeMillis()
             }
         }
+    } else if (!authenticated && body.isEmpty()) {
+        sharedCatalogRead(url, method, followRedirects, allowLargeResponse)
     } else {
         sendWithRetries(method, url, body, authenticated, followRedirects, allowLargeResponse, isWrite)
     }
+}
+
+/**
+ * One request per URL per [CATALOG_REUSE_MS] for public catalog reads: callers that arrive while a
+ * read is in flight, or shortly after it finished, share its answer. A failed or non-2xx read is
+ * forgotten at once so the next caller retries it.
+ */
+private suspend fun sharedCatalogRead(
+    url: String,
+    method: String,
+    followRedirects: Boolean,
+    allowLargeResponse: Boolean,
+): RawHttpResponse {
+    val now = System.currentTimeMillis()
+    var owner = false
+    val read = catalogMutex.withLock {
+        catalogReads.values.removeAll { it.finishedAtMs != 0L && now - it.finishedAtMs > CATALOG_REUSE_MS }
+        catalogReads.getOrPut(url) {
+            owner = true
+            SharedCatalogRead(CompletableDeferred())
+        }
+    }
+    if (owner) {
+        catalogScope.async {
+            try {
+                read.response.complete(
+                    sendWithRetries(method, url, "", false, followRedirects, allowLargeResponse, false),
+                )
+            } catch (failure: CancellationException) {
+                read.response.cancel(failure)
+            } catch (failure: Throwable) {
+                read.response.completeExceptionally(failure)
+            } finally {
+                read.finishedAtMs = System.currentTimeMillis()
+            }
+        }
+    }
+    val result = runCatching { read.response.await() }
+    if (result.getOrNull()?.status?.let { it in 200..299 } != true) {
+        catalogMutex.withLock { if (catalogReads[url] === read) catalogReads.remove(url) }
+    }
+    return result.getOrThrow()
 }
 
 private suspend fun sendWithRetries(

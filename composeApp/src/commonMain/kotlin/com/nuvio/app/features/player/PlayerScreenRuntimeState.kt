@@ -238,7 +238,6 @@ internal class PlayerScreenRuntime(
     var pendingScrobbleStartAfterSeek by mutableStateOf(false)
     var hasSentCompletionScrobbleForCurrentItem by mutableStateOf(false)
     var currentTrackingScrobbleMedia by mutableStateOf<TrackingMediaReference?>(null)
-    val shownWatchedProviderToastKeys = mutableSetOf<String>()
 
     var showSourcesPanel by mutableStateOf(false)
     var showEpisodesPanel by mutableStateOf(false)

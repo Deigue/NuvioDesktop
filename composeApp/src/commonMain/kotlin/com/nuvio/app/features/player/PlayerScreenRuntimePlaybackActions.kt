@@ -11,7 +11,6 @@ import com.nuvio.app.features.tracking.TrackingMediaReference
 import com.nuvio.app.features.tracking.TrackingScrobbleAction
 import com.nuvio.app.features.tracking.TrackingScrobbleCoordinator
 import com.nuvio.app.features.tracking.TrackingScrobbleDispatch
-import com.nuvio.app.features.tracking.TrackingProviderRegistry
 import com.nuvio.app.features.tracking.TrackingScrobbleEvent
 import com.nuvio.app.features.tracking.TrackingScrobbleWatchedProgressThresholdPercent
 import com.nuvio.app.features.tracking.buildTrackingMediaReference
@@ -24,9 +23,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import nuvio.composeapp.generated.resources.Res
-import nuvio.composeapp.generated.resources.player_watched_provider_success
-import org.jetbrains.compose.resources.getString
 
 internal val PlayerScreenRuntime.activePlaybackIdentity: String
     get() = "$playbackAttemptId:" + (activeTorrentInfoHash
@@ -362,7 +358,7 @@ private fun PlayerScreenRuntime.prepareTrackingScrobbleStop(
     val positionSeconds = playbackSnapshot.positionSecondsOrNull()
     val durationSeconds = playbackSnapshot.durationSecondsOrNull()
     val request: suspend () -> Unit = {
-        val dispatch = dispatchTrackingScrobble(
+        dispatchTrackingScrobble(
             profileId = profileId,
             action = TrackingScrobbleAction.STOP,
             media = media,
@@ -372,11 +368,6 @@ private fun PlayerScreenRuntime.prepareTrackingScrobbleStop(
             durationSeconds = durationSeconds,
             paused = paused,
         )
-        showWatchedProviderToast(
-            dispatch = dispatch,
-            profileId = profileId,
-            media = media,
-        )
     }
     currentTrackingScrobbleMedia = null
     hasRequestedScrobbleStartForCurrentItem = false
@@ -384,41 +375,6 @@ private fun PlayerScreenRuntime.prepareTrackingScrobbleStop(
     return request
 }
 
-
-private suspend fun PlayerScreenRuntime.showWatchedProviderToast(
-    dispatch: TrackingScrobbleDispatch,
-    profileId: Int,
-    media: TrackingMediaReference,
-) {
-    if (dispatch.watchedProviderIds.isEmpty()) return
-    val controller = playerController ?: return
-    val mediaKey = buildString {
-        append(profileId)
-        append(':')
-        append(media.stableKey)
-        append(':')
-        append(media.catalog?.videoId.orEmpty())
-        append(':')
-        append(media.episode?.season ?: -1)
-        append(':')
-        append(media.episode?.number ?: -1)
-    }
-    val providerIds = dispatch.watchedProviderIds.distinct().filter { providerId ->
-        synchronized(shownWatchedProviderToastKeys) {
-            shownWatchedProviderToastKeys.add("$mediaKey:${providerId.storageId}")
-        }
-    }
-    if (providerIds.isEmpty()) return
-
-    val providerNames = providerIds.joinToString { providerId ->
-        TrackingProviderRegistry.authProvider(providerId)?.descriptor?.displayName
-            ?: providerId.storageId
-    }
-    controller.showTransientMessage(
-        title = getString(Res.string.player_watched_provider_success),
-        value = providerNames,
-    )
-}
 
 private suspend fun dispatchTrackingScrobble(
     profileId: Int,
@@ -488,10 +444,9 @@ internal enum class FlushScrobbleStopKind {
  * any flush at or past the providers' 80% as a real stop, pause included ("a completion is a
  * completion even if paused"). Trakt and SIMKL both record a stop at 80% or more as a watch, so
  * pausing anywhere in the last fifth of an episode marked it watched on the provider, showed the
- * "Marked as watched" toast and dropped it from a provider-sourced Continue Watching, while
- * locally it was still in progress. Finishing is decided once, at [WatchProgressCompletionPercentThreshold]:
- * playback crossing it sends the completion (see [emitCompletionScrobbleAtThreshold]), and so
- * does a pause or exit that lands past it without one having been sent.
+ * dropped it from a provider-sourced Continue Watching, while locally it was still in progress.
+ * Playback is never cut short with a forced completion mid-file: providers decide from the stop that
+ * a pause past [WatchProgressCompletionPercentThreshold], an exit or the end of playback sends.
  *
  * An exit, source change or end of playback (not paused) keeps the providers' 80% rule: leaving
  * the player at 85% is the user being done with it.
@@ -688,9 +643,6 @@ internal fun PlayerScreenRuntime.scheduleProgressSyncAfterSeek() {
 
 internal fun PlayerScreenRuntime.persistPlaybackProgressTick() {
     if (progressTrackingDisabled) return
-    // Ahead of the throttle below, deliberately. The persist interval is a minute, and the whole
-    // point of this check is that the tracker learns the title is finished *when it is finished*.
-    emitCompletionScrobbleAtThreshold()
     val now = WatchProgressClock.nowEpochMs()
     if (now - lastProgressPersistEpochMs < PlaybackProgressPersistIntervalMs) return
     lastProgressPersistEpochMs = now
@@ -700,42 +652,6 @@ internal fun PlayerScreenRuntime.persistPlaybackProgressTick() {
         syncRemote = false,
     )
     emitTrackingProgressRefresh()
-}
-
-/**
- * Sends the completion scrobble the moment playback passes the completion threshold, instead of
- * waiting for something to flush.
- *
- * **The mark used to arrive at the end of the file, and only by accident of when a flush happened.**
- * A stop scrobble is the only thing that records a watched item on a provider, and the only callers
- * of one are pause, exit, source change and end of playback — nothing runs on a timer. So playing a
- * film straight through meant the app marked it watched locally at
- * [WatchProgressCompletionPercentThreshold] (Continue Watching updated, the poster got its tick)
- * while Trakt/Simkl heard nothing until the credits. Worse, a crash or a force-quit inside that last
- * stretch lost the tracker write entirely, on a title the app already considered watched.
- *
- * **The cost, accepted knowingly:** a stop closes the provider's session, so "watching now" goes
- * quiet for the remainder. That is a few minutes of presence traded for a mark that is on time and
- * survives the app dying. The end-of-playback stop still fires (see
- * [emitStopScrobbleForCurrentProgress]'s `isAtEnd` branch) and providers treat the repeat as a
- * duplicate; the toast does not repeat either, because it is deduped per media and provider.
- *
- * The local threshold is used rather than the scrobble path's own 80%, so this fires when the app
- * itself decides the title is finished — one moment, not two.
- */
-private fun PlayerScreenRuntime.emitCompletionScrobbleAtThreshold() {
-    if (hasSentCompletionScrobbleForCurrentItem) return
-    // Only from a live session on the current attempt: a leftover snapshot from the previous
-    // source would bank a completion for the wrong item, which is the same hazard the start and
-    // the refresh both guard against.
-    if (!hasRequestedScrobbleStartForCurrentItem) return
-    if (!playbackSnapshot.isPlaying) return
-    if (!snapshotBelongsToCurrentAttempt) return
-    // Speed-adjusted to decide completion, raw to report position — the same split the flush path
-    // uses, and for the same reason.
-    if (currentScrobbleProgressPercent() < WatchProgressCompletionPercentThreshold) return
-    hasSentCompletionScrobbleForCurrentItem = true
-    emitTrackingScrobbleStop(currentPlaybackProgressPercent())
 }
 
 /**

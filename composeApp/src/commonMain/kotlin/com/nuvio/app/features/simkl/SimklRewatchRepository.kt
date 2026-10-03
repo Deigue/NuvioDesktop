@@ -74,6 +74,14 @@ internal object SimklRewatchRepository {
     private var lastFullReadAtEpochMs = 0L
     private var loaded = false
 
+    /**
+     * `rewatchId:episodeKey` pairs SIMKL answered with `added=0` this run. SIMKL collapses a second
+     * write of an episode watched in the last 48 hours (the original watch counts), and repeating
+     * it only spends quota: one finished episode used to cost three identical POSTs, from the
+     * scrobbler and the completion edge.
+     */
+    private val ignoredBySimkl = mutableSetOf<String>()
+
     fun ensureLoaded() {
         if (loaded) return
         loaded = true
@@ -92,6 +100,7 @@ internal object SimklRewatchRepository {
 
     fun onProfileChanged() {
         loaded = false
+        ignoredBySimkl.clear()
         sessions = mutableListOf()
         lastActivitiesAt = null
         lastRemovedStamp = null
@@ -101,6 +110,7 @@ internal object SimklRewatchRepository {
 
     fun clearLocalState() {
         loaded = true
+        ignoredBySimkl.clear()
         sessions = mutableListOf()
         lastActivitiesAt = null
         lastRemovedStamp = null
@@ -313,7 +323,11 @@ internal object SimklRewatchRepository {
             "${item.season}:${item.number}"
         }
         if (episodeKey in session.watchedEpisodeKeys) return@withLock true
+        val ignoredKey = "${session.rewatchId}:$episodeKey"
+        if (ignoredKey in ignoredBySimkl) return@withLock false
 
+        // SIMKL's rewatch guide pins every appended episode to a watched_at; without it the write came back 201 with added=0.
+        val watchedAt = kotlin.time.Instant.fromEpochMilliseconds(System.currentTimeMillis()).toString()
         val media = RewatchHistoryMedia(
             title = item.showTitle,
             ids = item.ids,
@@ -321,14 +335,24 @@ internal object SimklRewatchRepository {
             rewatchId = session.rewatchId,
             rewatchStatus = "active",
             seasons = if (kind == SimklRewatchKind.SHOW) {
-                listOf(RewatchHistorySeason(item.season, listOf(RewatchHistoryEpisode(item.number))))
+                listOf(RewatchHistorySeason(item.season, listOf(RewatchHistoryEpisode(item.number, watchedAt))))
             } else emptyList(),
             episodes = if (kind == SimklRewatchKind.ANIME) {
-                listOf(RewatchHistoryEpisode(item.number))
+                listOf(RewatchHistoryEpisode(item.number, watchedAt))
             } else emptyList(),
         )
         val response = postMutation(buildRewatchRequest(kind, media), retryPinnedWrite = true).getOrThrow()
         val mutation = response.rewatchMutation()
+        if (response.added.episodes == 0) {
+            // SIMKL answered 2xx but stored nothing, so it is not recorded; but asking again will not
+            // change the answer, so not again this run.
+            ignoredBySimkl += ignoredKey
+            log.w {
+                "SIMKL rewatch #${session.rewatchId} (${session.title}): $episodeKey was not added (added=0); " +
+                    "SIMKL ignores an episode already in the session or watched within the last 48h"
+            }
+            return@withLock false
+        }
         log.i {
             "SIMKL rewatch #${session.rewatchId} (${session.title}): recorded $episodeKey, " +
                 "added=${response.added.episodes} status=${mutation?.rewatchStatus ?: session.status}"
@@ -365,6 +389,7 @@ internal object SimklRewatchRepository {
                     url = SimklAuthRepository.appendParams("$SIMKL_BASE_URL/sync/history?allow_rewatch=yes"),
                     body = json.encodeToString(body),
                 )
+                log.i { "SIMKL rewatch POST /sync/history ${response.status} req=${json.encodeToString(body)} resp=${response.body.take(600)}" }
                 if (response.status !in 200..299) {
                     error("SIMKL rewatch update failed (${response.status}): ${response.body.take(160)}")
                 }
@@ -568,7 +593,10 @@ internal data class RewatchHistorySeason(
 )
 
 @Serializable
-internal data class RewatchHistoryEpisode(val number: Int)
+internal data class RewatchHistoryEpisode(
+    val number: Int,
+    @SerialName("watched_at") val watchedAt: String? = null,
+)
 
 internal fun buildRewatchRequest(
     kind: SimklRewatchKind,

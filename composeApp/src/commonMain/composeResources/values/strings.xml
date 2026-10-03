@@ -3067,7 +3067,6 @@
     <string name="player_rate_limit_reconnecting">Reconnecting in %1$d s</string>
     <string name="player_rate_limit_switching_server">Switching TorBox server</string>
     <string name="player_failover_trying_next">Stream failed - trying next source</string>
-    <string name="player_watched_provider_success">Marked as watched</string>
     <string name="player_failover_stream_timed_out">Stream timed out</string>
     <string name="player_error_unable_to_play_stream">Unable to play this stream.</string>
     <string name="plugins_badge_disabled">Plugins disabled</string>
