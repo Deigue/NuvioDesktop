@@ -40,6 +40,7 @@ import java.awt.dnd.DropTargetDropEvent
 import com.nuvio.app.core.sync.AppForegroundMonitor
 import com.nuvio.app.core.build.AppVersionPolicy
 import com.nuvio.app.core.ui.DesktopNavigationGestureBridge
+import com.nuvio.app.core.ui.HoldToSelect
 import com.nuvio.app.core.ui.DesktopBackRequestSource
 import com.nuvio.app.core.ui.DesktopTrayMenu
 import com.nuvio.app.core.ui.DesktopTrayMenuEntry
@@ -672,6 +673,7 @@ fun main() {
                 }
                 val uninstallFullscreenShortcuts = installDesktopAppFullscreenShortcuts(window)
                 val backNavigationDispatcher = KeyEventDispatcher { event ->
+                    if (swallowHeldSelectKey(event)) return@KeyEventDispatcher true
                     if (event.keyCode == VK_BROWSER_FORWARD) {
                         when (event.id) {
                             KeyEvent.KEY_PRESSED ->
@@ -991,5 +993,30 @@ private fun configureDesktopRenderer() {
         // OpenGL is opt-in); it must match the PlayerSettingsRepository default Settings displays.
         val renderer = stored ?: DesktopRendererApi.D3D11
         renderer?.let { System.setProperty("skiko.renderApi", it.skikoRenderApi) }
+    }
+}
+
+/**
+ * Once a held select key has opened an item's actions (see [HoldToSelect]), the rest of that
+ * press — key-repeats and the release — is eaten here, before Compose sees it. Otherwise the
+ * release lands on whatever the hold just opened, and a focused menu row clicks on Enter's release.
+ */
+private fun swallowHeldSelectKey(event: KeyEvent): Boolean {
+    if (!HoldToSelect.swallowSelectUntilRelease) return false
+    if (event.keyCode != AppShortcutsRepository.keyCode(AppShortcutAction.SelectFocused)) return false
+    return when (event.id) {
+        KeyEvent.KEY_RELEASED -> {
+            HoldToSelect.stopSwallowingRelease()
+            true
+        }
+        KeyEvent.KEY_PRESSED -> if (HoldToSelect.isLikelyRepeat()) {
+            HoldToSelect.onRepeatSwallowed()
+            true
+        } else {
+            // The release went somewhere this window never saw; this is a new press.
+            HoldToSelect.stopSwallowingRelease()
+            false
+        }
+        else -> false
     }
 }

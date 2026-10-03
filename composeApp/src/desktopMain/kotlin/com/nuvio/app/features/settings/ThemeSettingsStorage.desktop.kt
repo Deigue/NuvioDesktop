@@ -24,6 +24,7 @@ internal actual object ThemeSettingsStorage {
     private const val desktopColumnGuidesVisibleKey = "desktop_column_guides_visible"
     private const val desktopSettingsFullWidthKey = "desktop_settings_full_width"
     private const val wasdNavigationEnabledKey = "wasd_navigation_enabled"
+    private const val holdToSelectEnabledKey = "hold_to_select_enabled"
     private const val desktopNavigationLayoutKey = "desktop_navigation_layout"
     private const val desktopTopBarAlwaysVisibleKey = "desktop_top_bar_always_visible"
     private const val desktopDiscoverTabVisibleKey = "desktop_discover_tab_visible"
@@ -132,6 +133,13 @@ internal actual object ThemeSettingsStorage {
 
     actual fun saveWasdNavigationEnabled(enabled: Boolean) {
         store.putBoolean(ProfileScopedKey.of(wasdNavigationEnabledKey), enabled)
+    }
+
+    actual fun loadHoldToSelectEnabled(): Boolean? =
+        store.getBoolean(ProfileScopedKey.of(holdToSelectEnabledKey))
+
+    actual fun saveHoldToSelectEnabled(enabled: Boolean) {
+        store.putBoolean(ProfileScopedKey.of(holdToSelectEnabledKey), enabled)
     }
 
     actual fun loadDesktopNavigationLayout(): String? =

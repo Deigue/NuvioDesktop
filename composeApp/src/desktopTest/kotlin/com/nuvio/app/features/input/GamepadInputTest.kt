@@ -354,6 +354,18 @@ class GamepadInputTest {
         )
     }
 
+    @Test
+    fun `only select keeps its key down while the button is held`() {
+        // Hold-to-select needs a real press and release from A; every other button keeps the
+        // instant pair, so nothing else changes timing.
+        val browsingA = GamepadDefaults.binding(GamepadButton.A).browsing
+        assertTrue(GamepadInput.holdsUntilRelease(browsingA))
+        assertEquals(
+            listOf(browsingA),
+            allTargets().filter(GamepadInput::holdsUntilRelease).distinct(),
+        )
+    }
+
     private fun firing(
         current: Set<GamepadButton>,
         previous: Set<GamepadButton>,

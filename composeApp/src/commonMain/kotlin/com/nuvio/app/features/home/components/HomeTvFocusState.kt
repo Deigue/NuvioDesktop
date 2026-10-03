@@ -17,6 +17,9 @@ internal class HomeTvRow(
     val itemCount: Int,
     val metaItems: List<MetaPreview>?,
     val onEnter: (index: Int) -> Unit,
+    // Holding select on an item: the same actions a right-click opens. Null for rows whose cards
+    // have none (collection folders), where select keeps firing on the press.
+    val onHold: ((index: Int) -> Unit)? = null,
     // For horizontally infinite-scrolling catalog rows: request the next page (called as focus nears
     // the end). Null for non-paginating rows.
     val onLoadMore: (() -> Unit)? = null,

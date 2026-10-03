@@ -27,6 +27,8 @@ internal expect object ThemeSettingsStorage {
     fun saveDesktopSettingsFullWidth(enabled: Boolean)
     fun loadWasdNavigationEnabled(): Boolean?
     fun saveWasdNavigationEnabled(enabled: Boolean)
+    fun loadHoldToSelectEnabled(): Boolean?
+    fun saveHoldToSelectEnabled(enabled: Boolean)
     fun loadDesktopNavigationLayout(): String?
     fun saveDesktopNavigationLayout(layoutName: String)
     fun loadDesktopTopBarAlwaysVisible(): Boolean?

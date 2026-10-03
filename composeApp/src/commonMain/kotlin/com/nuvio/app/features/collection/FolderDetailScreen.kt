@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import com.nuvio.app.core.ui.navigationKey
+import com.nuvio.app.core.ui.rememberHoldToSelectState
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -560,6 +561,7 @@ private fun ImmersiveCollectionContent(
     // must still resolve to a real item instead of going null and freezing the hero on
     // whatever the pager last showed.
     val focusedItem = activeRowEntries.getOrNull(activeItemIndex)
+    val selectHold = rememberHoldToSelectState()
 
     // Mirrors HomeScreen's handleHomeTvKey: a shared handler so the same navigation works
     // whether Compose still owns keyboard focus or the native hero-trailer surface has
@@ -665,6 +667,17 @@ private fun ImmersiveCollectionContent(
                 }
             }
             .onPreviewKeyEvent { event ->
+                val selectKey = event.navigationKey()
+                if (selectKey == Key.Enter || selectKey == Key.NumPadEnter) {
+                    val item = focusedItem
+                    return@onPreviewKeyEvent selectHold.handle(
+                        event = event,
+                        onSelect = { handleTvKey(HomeTvKey.Select) },
+                        onHold = item?.let { focused ->
+                            onPosterLongClick?.let { longPress -> { longPress(focused) } }
+                        },
+                    )
+                }
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.navigationKey()) {
                     Key.Backspace -> {
@@ -681,7 +694,6 @@ private fun ImmersiveCollectionContent(
                     Key.PageUp -> handleTvKey(HomeTvKey.PageUp)
                     Key.MoveHome -> handleTvKey(HomeTvKey.Home)
                     Key.MoveEnd -> handleTvKey(HomeTvKey.End)
-                    Key.Enter, Key.NumPadEnter -> handleTvKey(HomeTvKey.Select)
                     Key.T -> handleTvKey(HomeTvKey.ToggleTrailer)
                     Key.Escape -> handleTvKey(HomeTvKey.Dismiss)
                     else -> false
@@ -935,6 +947,7 @@ private fun AdaptiveCollectionContent(
     // must still resolve to a real item instead of going null and freezing the hero on
     // whatever the pager last showed.
     val focusedItem = activeRowEntries.getOrNull(activeItemIndex)
+    val selectHold = rememberHoldToSelectState()
 
     // Mirrors HomeScreen's handleHomeTvKey: a shared handler so the same navigation works
     // whether Compose still owns keyboard focus or the native hero-trailer surface has
@@ -1029,6 +1042,17 @@ private fun AdaptiveCollectionContent(
                 mouseActivity.onMouseMoved(event.changes.first().position)
             }
             .onPreviewKeyEvent { event ->
+                val selectKey = event.navigationKey()
+                if (selectKey == Key.Enter || selectKey == Key.NumPadEnter) {
+                    val item = focusedItem
+                    return@onPreviewKeyEvent selectHold.handle(
+                        event = event,
+                        onSelect = { handleTvKey(HomeTvKey.Select) },
+                        onHold = item?.let { focused ->
+                            onPosterLongClick?.let { longPress -> { longPress(focused) } }
+                        },
+                    )
+                }
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.navigationKey()) {
                     Key.Backspace -> {
@@ -1043,7 +1067,6 @@ private fun AdaptiveCollectionContent(
                     Key.PageUp -> handleTvKey(HomeTvKey.PageUp)
                     Key.MoveHome -> handleTvKey(HomeTvKey.Home)
                     Key.MoveEnd -> handleTvKey(HomeTvKey.End)
-                    Key.Enter, Key.NumPadEnter -> handleTvKey(HomeTvKey.Select)
                     Key.T -> handleTvKey(HomeTvKey.ToggleTrailer)
                     Key.Escape -> handleTvKey(HomeTvKey.Dismiss)
                     else -> false
