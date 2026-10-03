@@ -4465,7 +4465,7 @@ private fun MainAppContent(
                 onToggleWatched = {
                     selectedPosterActionTarget?.preview?.let { preview ->
                         coroutineScope.launch {
-                            WatchingActions.togglePosterWatched(preview)
+                            WatchingActions.togglePosterWatched(preview, origin = "poster menu")
                         }
                     }
                 },

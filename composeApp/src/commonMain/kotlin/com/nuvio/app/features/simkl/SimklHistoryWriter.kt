@@ -1,5 +1,6 @@
 package com.nuvio.app.features.simkl
 
+import co.touchlab.kermit.Logger
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.tracking.TrackingHistoryItem
 import com.nuvio.app.features.tracking.TrackingHistoryWriter
@@ -7,6 +8,7 @@ import com.nuvio.app.features.tracking.TrackingMediaKind
 import com.nuvio.app.features.tracking.TrackingMediaReference
 import com.nuvio.app.features.tracking.TrackingMutationResult
 import com.nuvio.app.features.tracking.TrackingProviderId
+import com.nuvio.app.features.watching.application.formatEpisodeCoordinates
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -16,6 +18,7 @@ internal object SimklHistoryWriter : TrackingHistoryWriter {
 
     private const val BASE_URL = "https://api.simkl.com"
     private val json = Json { encodeDefaults = false; explicitNulls = false }
+    private val log = Logger.withTag("SimklHistory")
 
     override suspend fun addToHistory(
         profileId: Int,
@@ -46,13 +49,21 @@ internal object SimklHistoryWriter : TrackingHistoryWriter {
         if (!SimklAuthRepository.hasUsableToken()) error("SIMKL is not connected")
         val resolved = media.mapNotNull { reference -> reference.toHistoryEntry() }
         if (resolved.isEmpty()) {
+            log.i { "SIMKL $endpoint: none of ${media.size} item(s) resolved to a SIMKL id; nothing sent" }
             return TrackingMutationResult(media.size, notFoundCount = media.size)
+        }
+        // Exactly what is written to the account's history, after id resolution and coordinate
+        // projection — the one place a "SIMKL shows episodes I never marked" report can be checked
+        // against what this client actually sent.
+        log.i {
+            "SIMKL $endpoint: sending ${resolved.size} of ${media.size} item(s): ${resolved.describe()}"
         }
         val response = simklRequest(
             method = "POST",
             url = SimklAuthRepository.appendParams("$BASE_URL$endpoint"),
             body = json.encodeToString(resolved.toRequest()),
         )
+        log.i { "SIMKL $endpoint response: ${response.status} ${response.body.take(300)}" }
         if (response.status !in 200..299) {
             error("SIMKL watched-history update failed (${response.status}): ${response.body.take(200)}")
         }
@@ -120,6 +131,21 @@ internal object SimklHistoryWriter : TrackingHistoryWriter {
 
         val movies = titleEntries(TrackingMediaKind.MOVIE)
         return HistoryRequest(movies = movies, shows = shows, anime = anime)
+    }
+
+    private fun Collection<HistoryEntry>.describe(): String {
+        val titles = filterIsInstance<HistoryEntry.Title>().map { "${it.kind} ${it.title} ${it.ids}" }
+        val episodes = filterIsInstance<HistoryEntry.Episode>()
+            .groupBy { it.ids.stableKey() to it.anime }
+            .values
+            .map { entries ->
+                val first = entries.first()
+                val kind = if (first.anime) "anime" else "show"
+                "$kind ${first.title} ${first.ids} " + formatEpisodeCoordinates(
+                    entries.map { it.season to it.episode },
+                )
+            }
+        return (titles + episodes).joinToString("; ")
     }
 
     private fun SimklScrobbleRepository.SimklIds.stableKey(): String =

@@ -2,6 +2,7 @@ package com.nuvio.app.features.simkl
 
 import co.touchlab.kermit.Logger
 import com.nuvio.app.features.tracking.WatchedHistoryReset
+import com.nuvio.app.features.watched.WatchedIdAliases
 import com.nuvio.app.features.watched.WatchedItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -70,6 +71,7 @@ internal object SimklWatchedRepository {
         cachedStamp = stamp
         cachedStampProfileId = profileId
         pendingResets = payload.toHistoryResets()
+        WatchedIdAliases.replace(payload.toContentIdAliasGroups())
         return items
     }
 
@@ -174,6 +176,21 @@ internal fun SimklAllItemsResponse.toHistoryResets(): List<WatchedHistoryReset> 
         }
     }
     WatchedHistoryReset(type = "series", id = id, resetAtEpochMs = resetAt, remoteEpisodes = remote)
+}
+
+/**
+ * Each non-anime title's IMDb and TMDB ids as one alias group — see [WatchedIdAliases]. Includes
+ * rewatch rows: the ids name the title whatever list it is on.
+ */
+internal fun SimklAllItemsResponse.toContentIdAliasGroups(): List<Set<String>> = buildList {
+    fun addGroup(ids: SimklMediaIds?) {
+        if (ids == null || ids.isKnownAnime()) return
+        val imdb = ids.imdb?.takeIf { it.isNotBlank() && it != PLACEHOLDER_IMDB_ID } ?: return
+        val tmdb = ids.tmdb?.takeIf(String::isNotBlank) ?: return
+        add(setOf(imdb, "tmdb:$tmdb"))
+    }
+    movies.forEach { addGroup(it.movie?.ids) }
+    shows.forEach { addGroup(it.showMedia?.ids) }
 }
 
 internal fun SimklAllItemsResponse.toWatchedItems(): List<WatchedItem> = buildList {

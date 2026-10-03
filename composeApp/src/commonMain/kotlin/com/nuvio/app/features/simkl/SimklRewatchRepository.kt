@@ -233,36 +233,62 @@ internal object SimklRewatchRepository {
         if (!rewatchRequestsAllowed()) return
         if (sessions.none { it.status.equals("active", true) && it.mayAddress(entry.parentMetaId) }) return
         scope.launch {
-            runCatching { recordPlaybackCompletion(entry) }
-                .onFailure { error ->
-                    if (error is CancellationException) throw error
-                    log.w(error) { "Failed to append playback completion to SIMKL rewatch" }
+            runCatching {
+                val item = SimklScrobbleRepository.buildItem(
+                    contentType = entry.contentType,
+                    parentMetaId = entry.parentMetaId,
+                    videoId = entry.videoId,
+                    title = entry.title,
+                    seasonNumber = entry.seasonNumber,
+                    episodeNumber = entry.episodeNumber,
+                    isAnime = false,
+                ) as? SimklScrobbleItem.Episode
+                if (item == null) {
+                    log.i { "SIMKL rewatch: ${entry.videoId} did not resolve to a SIMKL episode; not recorded" }
+                } else {
+                    recordEpisode(item)
                 }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                log.w(error) { "Failed to append playback completion to SIMKL rewatch" }
+            }
         }
     }
 
-    private suspend fun recordPlaybackCompletion(entry: WatchProgressEntry) = mutex.withLock {
-        val item = SimklScrobbleRepository.buildItem(
-            contentType = entry.contentType,
-            parentMetaId = entry.parentMetaId,
-            videoId = entry.videoId,
-            title = entry.title,
-            seasonNumber = entry.seasonNumber,
-            episodeNumber = entry.episodeNumber,
-            isAnime = false,
-        ) as? SimklScrobbleItem.Episode ?: return@withLock
-        val kind = if (item.isAnime) SimklRewatchKind.ANIME else SimklRewatchKind.SHOW
-        val index = sessions.indexOfFirst { session ->
-            session.kind == kind && session.status.equals("active", true) && session.ids.matches(item.ids)
+    /**
+     * Whether a finished playback of [item] belongs to an active rewatch session rather than the
+     * title's original watch.
+     *
+     * The scrobbler asks this before its completing `stop`: a plain `/scrobble/stop` always lands on
+     * the canonical (original) watch, so during a rewatch every finished episode used to be written
+     * to the original as well — or instead, when the pinned write below did not land — and SIMKL
+     * then reports the original as restarted at the rewatched episodes.
+     */
+    fun hasActiveRewatchFor(item: SimklScrobbleItem.Episode): Boolean {
+        ensureLoaded()
+        if (!rewatchRequestsAllowed()) return false
+        return sessions.findActiveFor(item) >= 0
+    }
+
+    /**
+     * Appends one finished episode to its active rewatch session, pinned to the session's id.
+     * Idempotent per episode, so the scrobbler and the playback-completion edge may both call it.
+     * Returns whether the episode is now recorded in the session.
+     */
+    suspend fun recordEpisode(item: SimklScrobbleItem.Episode): Boolean = mutex.withLock {
+        val index = sessions.findActiveFor(item)
+        if (index < 0) {
+            log.i { "SIMKL rewatch: no active session matches ${item.itemKey} (ids=${item.ids}); not recorded" }
+            return@withLock false
         }
-        if (index < 0) return@withLock
         val session = sessions[index]
+        val kind = session.kind
         val episodeKey = if (kind == SimklRewatchKind.ANIME) {
             item.number.toString()
         } else {
             "${item.season}:${item.number}"
         }
-        if (episodeKey in session.watchedEpisodeKeys) return@withLock
+        if (episodeKey in session.watchedEpisodeKeys) return@withLock true
 
         val media = RewatchHistoryMedia(
             title = item.showTitle,
@@ -279,6 +305,10 @@ internal object SimklRewatchRepository {
         )
         val response = postMutation(buildRewatchRequest(kind, media), retryPinnedWrite = true).getOrThrow()
         val mutation = response.rewatchMutation()
+        log.i {
+            "SIMKL rewatch #${session.rewatchId} (${session.title}): recorded $episodeKey, " +
+                "added=${response.added.episodes} status=${mutation?.rewatchStatus ?: session.status}"
+        }
         sessions[index] = session.copy(
             status = mutation?.rewatchStatus ?: session.status,
             watchedEpisodeKeys = session.watchedEpisodeKeys + episodeKey,
@@ -287,6 +317,14 @@ internal object SimklRewatchRepository {
         persist()
         publish()
         invalidateHistoryCaches()
+        true
+    }
+
+    private fun List<SimklRewatchSession>.findActiveFor(item: SimklScrobbleItem.Episode): Int {
+        val kind = if (item.isAnime) SimklRewatchKind.ANIME else SimklRewatchKind.SHOW
+        return indexOfFirst { session ->
+            session.kind == kind && session.status.equals("active", true) && session.ids.matches(item.ids)
+        }
     }
 
     private suspend fun postMutation(

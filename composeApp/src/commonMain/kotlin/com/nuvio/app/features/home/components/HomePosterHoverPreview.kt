@@ -202,7 +202,7 @@ internal fun HomePosterHoverPreview(
     val onWatchedClick = remember(item) {
         {
             actionScope.launch {
-                WatchingActions.togglePosterWatched(item)
+                WatchingActions.togglePosterWatched(item, origin = "home hover preview")
             }
             Unit
         }
