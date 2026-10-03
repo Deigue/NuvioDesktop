@@ -74,6 +74,7 @@ class PlaybackRedirectResolverTest {
     @Test
     fun directMediaHostsAreSkipped() {
         assertTrue(PlaybackRedirectResolver.isDirectMediaHost("https://nexus-179.neur.tb-cdn.st/dld/abc?token=x"))
+        assertTrue(PlaybackRedirectResolver.isDirectMediaHost("https://store-046.wnam.tb-cdn.io/dld/abc?token=x"))
         assertTrue(PlaybackRedirectResolver.isDirectMediaHost("https://sgp1-4.download.real-debrid.com/d/ABC/file.mkv"))
         assertFalse(PlaybackRedirectResolver.isDirectMediaHost("https://addon.debridio.com/play/series/torbox/a/b/c/d"))
         assertFalse(PlaybackRedirectResolver.isDirectMediaHost("https://aio.example.xyz/api/v1/debrid/playback/a/b/c"))
