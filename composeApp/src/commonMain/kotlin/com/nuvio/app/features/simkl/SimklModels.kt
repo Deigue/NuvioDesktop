@@ -128,6 +128,7 @@ internal data class SimklCategoryActivity(
     val watching: String? = null,
     val playback: String? = null,
     val completed: String? = null,
+    @SerialName("removed_from_list") val removedFromList: String? = null,
 )
 
 // ── Library / all-items ───────────────────────────────────────────────────────

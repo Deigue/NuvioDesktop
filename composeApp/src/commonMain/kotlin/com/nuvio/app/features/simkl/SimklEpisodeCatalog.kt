@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /** One episode of a show, from SIMKL's public episode listing. */
@@ -27,26 +28,45 @@ internal data class SimklCatalogEpisode(
 /**
  * The episode list for a show, fetched from SIMKL's public `/tv/episodes` endpoint.
  *
- * Needed because `/sync/all-items` **omits the `seasons` array entirely once a show is completed or
- * dropped** — it reports `watched_episodes_count` and nothing to attach it to. Measured on a real
- * account: 145 of 298 shows, 8,017 watched episodes, silently importing as zero. No request shape
- * changes that; `extended=full`, `episode_watched_at=yes` and the per-status endpoints all return
- * the same season-less entry, so the numbers have to come from somewhere else.
+ * Needed when `/sync/all-items` **omits the `seasons` array for a completed or dropped show** — it
+ * reports `watched_episodes_count` and nothing to attach it to. Measured on a real account: 145 of
+ * 298 shows, 8,017 watched episodes, silently importing as zero. SIMKL's sync guide documents the
+ * cause: `extended=full` loads episodes for watching / hold / plantowatch only, and completed and
+ * dropped need `include_all_episodes=yes` as well. The history read now sends it, so this is a
+ * fallback for whatever still arrives season-less rather than a pass over every finished show.
  *
- * Unauthenticated: this is public catalogue metadata, not user data. Cached for the session because
- * an import touches every affected show at once and the episode list of a finished show does not
- * change.
+ * Unauthenticated: this is public catalogue metadata, not user data. Kept on disk, shared by every
+ * profile: a full history read touches every affected show at once (145 requests on the account
+ * above), and while the list lived only in memory every launch paid for all of them again. An entry
+ * is fetched again once it is [MAX_AGE_MS] old, or sooner when it is too short to hold the watched
+ * count it is asked to cover — a new season the user has started (at most daily; see below).
  */
 internal object SimklEpisodeCatalog {
     private const val BASE_URL = "https://api.simkl.com"
+    private const val MAX_AGE_MS = 30L * 24L * 60L * 60L * 1000L
+    private const val SHORT_RETRY_MS = 24L * 60L * 60L * 1000L
     private val log = Logger.withTag("SimklEpisodes")
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = false; explicitNulls = false }
     private val cacheMutex = Mutex()
-    private val cache = mutableMapOf<Int, List<SimklCatalogEpisode>>()
+    private var cache: MutableMap<Int, StoredCatalogEntry>? = null
+    private var dirty = false
 
-    suspend fun episodesFor(simklId: Int): List<SimklCatalogEpisode> {
+    /**
+     * The episode list for [simklId]. [minNumberedEpisodes] is the watched count the caller is about
+     * to spread over it; a cached list shorter than that is stale and fetched again.
+     */
+    suspend fun episodesFor(simklId: Int, minNumberedEpisodes: Int = 0): List<SimklCatalogEpisode> {
         if (simklId <= 0) return emptyList()
-        cacheMutex.withLock { cache[simklId] }?.let { return it }
+        val now = System.currentTimeMillis()
+        cacheMutex.withLock { loadedCache()[simklId] }
+            ?.takeIf { entry ->
+                val age = now - entry.fetchedAtEpochMs
+                // A list that stays short after a refetch is SIMKL's data, not staleness, so it is
+                // retried at most daily rather than on every read.
+                val short = entry.episodes.count(SimklCatalogEpisode::isNumberedEpisode) < minNumberedEpisodes
+                age < MAX_AGE_MS && !(short && age >= SHORT_RETRY_MS)
+            }
+            ?.let { return it.episodes }
         val url = SimklAuthRepository.appendParams("$BASE_URL/tv/episodes/$simklId")
         val episodes = try {
             // Edge-cached catalog data: no Authorization header, but SIMKL still wants the User-Agent.
@@ -59,10 +79,43 @@ internal object SimklEpisodeCatalog {
             log.w { "Episode list for simkl:$simklId failed: ${failure.message}" }
             return emptyList()
         }
-        cacheMutex.withLock { cache[simklId] = episodes }
+        cacheMutex.withLock {
+            // Specials are never backfilled, so they are not worth the disk.
+            val kept = episodes.filter(SimklCatalogEpisode::isNumberedEpisode)
+            loadedCache()[simklId] = StoredCatalogEntry(fetchedAtEpochMs = now, episodes = kept)
+            dirty = true
+        }
         return episodes
     }
+
+    /** Writes what [episodesFor] fetched since the last call. Once per backfill, not per show. */
+    suspend fun flush() {
+        cacheMutex.withLock {
+            val current = cache ?: return
+            if (!dirty) return
+            dirty = false
+            runCatching {
+                SimklEpisodeCatalogStorage.savePayload(json.encodeToString(StoredCatalog(current)))
+            }.onFailure { log.w(it) { "Episode catalog could not be saved" } }
+        }
+    }
+
+    private fun loadedCache(): MutableMap<Int, StoredCatalogEntry> =
+        cache ?: runCatching {
+            SimklEpisodeCatalogStorage.loadPayload()
+                ?.takeIf(String::isNotBlank)
+                ?.let { json.decodeFromString<StoredCatalog>(it).shows.toMutableMap() }
+        }.getOrNull().let { it ?: mutableMapOf() }.also { cache = it }
 }
+
+@Serializable
+private data class StoredCatalog(val shows: Map<Int, StoredCatalogEntry> = emptyMap())
+
+@Serializable
+private data class StoredCatalogEntry(
+    val fetchedAtEpochMs: Long = 0L,
+    val episodes: List<SimklCatalogEpisode> = emptyList(),
+)
 
 /** A show whose watch state arrived as a bare count, with no episodes attached to it. */
 internal data class SimklEpisodeBackfillTarget(

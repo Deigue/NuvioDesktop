@@ -827,9 +827,9 @@ private suspend fun warmProfileDeferredRepositories() {
                 SimklSettingsRepository.isRewatchTrackingEnabled() &&
                 SimklAuthRepository.uiState.value.canUseRewatches
             ) {
-                // Full, once per launch: the only read that notices a rewatch deleted on SIMKL.
-                // Backgrounded because it is the whole all-items payload, not a delta.
-                SimklRewatchRepository.refreshAsync(full = true)
+                // Gated on activities: a delta when something moved, a full read only when
+                // `removed_from_list` moved or the last full read is a day old. See refreshNow.
+                SimklRewatchRepository.refreshAsync()
             }
         }
         startupWarmStep("tvdb settings load", rethrow = false) { com.nuvio.app.features.tvdb.TvdbSettingsRepository.ensureLoaded() }
@@ -1783,7 +1783,10 @@ private fun MainAppContent(
         if (ResumePromptRepository.recoverUncleanPlayerExit()) {
             launch {
                 runCatching {
-                    WatchProgressRepository.forceContinueWatchingSync(ProfileRepository.activeProfileId)
+                    WatchProgressRepository.forceContinueWatchingSync(
+                        ProfileRepository.activeProfileId,
+                        rereadHistoryInFull = false,
+                    )
                 }.onFailure { error ->
                     if (error is CancellationException) throw error
                     appStartupLog.e(error) { "Continue Watching resync after unclean exit failed" }

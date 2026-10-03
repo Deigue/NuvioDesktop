@@ -269,6 +269,7 @@ internal object SimklAuthRepository {
         clearActivitiesCache()
         SimklAuthStorage.clearPayload()
         SimklRewatchRepository.clearLocalState()
+        SimklWatchedRepository.clearLocalState()
         publishState()
         if (previous.isV2) scope.launch { revoke(previous) }
     }
