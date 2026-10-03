@@ -31,12 +31,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
@@ -44,6 +47,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,10 +74,26 @@ import kotlin.time.TimeSource
 object ContextMenuInvocation {
     private var pending: IntOffset? = null
     private var recordedAt: TimeMark? = null
+    private var pendingFromKeyboard = false
+
+    /**
+     * Whether the position last handed out by [consume] came from a held select key rather than a
+     * right-click. The menu reads it as it opens: a keyboard-opened menu focuses its first row and
+     * ignores a cursor that merely happens to sit where it appeared.
+     */
+    var lastConsumedFromKeyboard: Boolean = false
+        private set
 
     internal fun recordSecondaryPress(windowPosition: IntOffset) {
         pending = windowPosition
         recordedAt = TimeSource.Monotonic.markNow()
+        pendingFromKeyboard = false
+    }
+
+    /** A hold-to-select on a keyboard-focused card, opening its menu beside the card. */
+    internal fun recordKeyboardInvocation(windowPosition: IntOffset) {
+        recordSecondaryPress(windowPosition)
+        pendingFromKeyboard = true
     }
 
     /**
@@ -84,13 +104,17 @@ object ContextMenuInvocation {
     fun consume(): IntOffset? {
         val position = pending
         val fresh = recordedAt?.let { it.elapsedNow() < ConsumeWindow } == true
+        lastConsumedFromKeyboard = pendingFromKeyboard && fresh && position != null
         pending = null
         recordedAt = null
+        pendingFromKeyboard = false
         return position?.takeIf { fresh }
     }
 
     private val ConsumeWindow = 750.milliseconds
 }
+
+private const val PointerEngageDistancePx = 4f
 
 /**
  * Desktop-style right-click menu: a compact panel opened at the cursor, the same look as the
@@ -110,6 +134,11 @@ fun NuvioContextMenu(
     val rowFocus = remember(frozenActions) { List(frozenActions.size) { FocusRequester() } }
     val menuFocus = remember { FocusRequester() }
     val focusedIndex = remember { intArrayOf(-1) }
+    // Opened by a held select key: the keyboard owns the menu until the mouse is actually moved.
+    // Without this the row under a resting cursor lit up and took focus the moment the menu
+    // appeared, and the keyboard had nothing focused to start from.
+    val openedByKeyboard = remember { ContextMenuInvocation.lastConsumedFromKeyboard }
+    var pointerEngaged by remember { mutableStateOf(!openedByKeyboard) }
 
     // Stands the hover preview down, same as the zoom overlay: the menu opens on the very card the
     // preview is anchored to.
@@ -118,7 +147,11 @@ fun NuvioContextMenu(
         onDispose { PosterZoomOverlayCoordinator.hide() }
     }
     LaunchedEffect(Unit) {
-        runCatching { menuFocus.requestFocus() }
+        // Falls back to the panel if the row cannot take focus: a menu with nothing focused would
+        // leave the keyboard with no way in at all.
+        val rowFocused = openedByKeyboard && rowFocus.isNotEmpty() &&
+            runCatching { rowFocus[0].requestFocus() }.isSuccess
+        if (!rowFocused) runCatching { menuFocus.requestFocus() }
         fadeIn.animateTo(1f, tween(durationMillis = 110, easing = NuvioTokens.Motion.standard))
     }
     PlatformBackHandler(enabled = true, onBack = onDismiss)
@@ -158,6 +191,30 @@ fun NuvioContextMenu(
         ) {
             Column(
                 modifier = Modifier
+                    .then(
+                        if (pointerEngaged) {
+                            Modifier
+                        } else {
+                            // Initial pass, so the rows see the menu as engaged on the very move
+                            // that engaged it and the row under the cursor takes focus there.
+                            Modifier.pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    var origin: Offset? = null
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        if (event.type != PointerEventType.Move) continue
+                                        val position = event.changes.firstOrNull()?.position ?: continue
+                                        val start = origin ?: position.also { origin = it }
+                                        // Compose replays a synthetic move when content appears
+                                        // under a still cursor; only real travel counts.
+                                        if ((position - start).getDistance() > PointerEngageDistancePx) {
+                                            pointerEngaged = true
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    )
                     .focusRequester(menuFocus)
                     .onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -184,6 +241,7 @@ fun NuvioContextMenu(
                     ContextMenuRow(
                         action = action,
                         focusRequester = rowFocus[index],
+                        pointerEngaged = { pointerEngaged },
                         onFocused = { focusedIndex[0] = index },
                         onClick = { select(action) },
                         onSecondaryClick = action.onSecondarySelected?.let { secondary ->
@@ -203,6 +261,7 @@ fun NuvioContextMenu(
 private fun ContextMenuRow(
     action: PosterZoomOverlayAction,
     focusRequester: FocusRequester,
+    pointerEngaged: () -> Boolean,
     onFocused: () -> Unit,
     onClick: () -> Unit,
     onSecondaryClick: (() -> Unit)?,
@@ -211,7 +270,7 @@ private fun ContextMenuRow(
     val hovered by interactionSource.collectIsHoveredAsState()
     val focused by interactionSource.collectIsFocusedAsState()
     LaunchedEffect(focused) { if (focused) onFocused() }
-    val highlighted = hovered || focused
+    val highlighted = focused || (hovered && pointerEngaged())
     val labelColor = if (action.isDestructive) MaterialTheme.nuvio.colors.danger else Color.White
     val iconTint = when {
         action.isDestructive -> MaterialTheme.nuvio.colors.danger
@@ -230,9 +289,18 @@ private fun ContextMenuRow(
             // and only one row is ever lit.
             .pointerInput(Unit) {
                 awaitPointerEventScope {
+                    var focusedByPointer = false
                     while (true) {
-                        if (awaitPointerEvent().type == PointerEventType.Enter) {
-                            runCatching { focusRequester.requestFocus() }
+                        when (awaitPointerEvent().type) {
+                            // Move as well as Enter: on a keyboard-opened menu the cursor may
+                            // already be over this row when the first real move engages it.
+                            PointerEventType.Enter, PointerEventType.Move -> {
+                                if (!focusedByPointer && pointerEngaged()) {
+                                    focusedByPointer = true
+                                    runCatching { focusRequester.requestFocus() }
+                                }
+                            }
+                            PointerEventType.Exit -> focusedByPointer = false
                         }
                     }
                 }

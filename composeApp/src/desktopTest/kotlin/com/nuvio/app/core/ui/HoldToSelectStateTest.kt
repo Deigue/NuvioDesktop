@@ -1,5 +1,6 @@
 package com.nuvio.app.core.ui
 
+import androidx.compose.ui.unit.IntOffset
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
@@ -76,5 +77,20 @@ class HoldToSelectStateTest {
         assertTrue(HoldToSelect.isLikelyRepeat())
         HoldToSelect.stopSwallowingRelease()
         assertFalse(HoldToSelect.isLikelyRepeat())
+    }
+
+    @Test
+    fun `a menu knows whether a held key or a right-click opened it`() {
+        ContextMenuInvocation.recordKeyboardInvocation(IntOffset(10, 20))
+        assertEquals(IntOffset(10, 20), ContextMenuInvocation.consume())
+        assertTrue(ContextMenuInvocation.lastConsumedFromKeyboard, "keyboard menus focus their first row")
+
+        ContextMenuInvocation.recordSecondaryPress(IntOffset(30, 40))
+        assertEquals(IntOffset(30, 40), ContextMenuInvocation.consume())
+        assertFalse(ContextMenuInvocation.lastConsumedFromKeyboard, "right-click menus follow the cursor")
+
+        // Nothing pending: a menu opened with no position is not a keyboard menu either.
+        ContextMenuInvocation.consume()
+        assertFalse(ContextMenuInvocation.lastConsumedFromKeyboard)
     }
 }
