@@ -130,14 +130,14 @@ internal object SimklRewatchRepository {
             // Read before the all-items request, so a change landing while it is in flight is
             // newer than the stored watermark and the next delta still sees it.
             val activities = SimklAuthRepository.fetchActivities()
+                ?: error("SIMKL activity state could not be read.")
             val removedStamp = simklRemovedFromListStamp(activities)
             val needsFull = full ||
                 lastActivitiesAt.isNullOrBlank() ||
                 (removedStamp != null && removedStamp != lastRemovedStamp) ||
                 System.currentTimeMillis() - lastFullReadAtEpochMs > FULL_READ_MAX_AGE_MS
-            if (!needsFull && activities == null) error("SIMKL activity state could not be read.")
             val deltaFrom = lastActivitiesAt?.takeIf(String::isNotBlank)?.takeUnless { needsFull }
-            if (deltaFrom != null && activities?.all == deltaFrom) {
+            if (deltaFrom != null && activities.all == deltaFrom) {
                 publish()
                 return@runCatching true
             }
@@ -162,7 +162,7 @@ internal object SimklRewatchRepository {
                 } else {
                     sessions.mergeRewatchDelta(remote)
                 }
-                lastActivitiesAt = activities?.all?.takeIf(String::isNotBlank) ?: lastActivitiesAt
+                lastActivitiesAt = activities.all?.takeIf(String::isNotBlank) ?: lastActivitiesAt
                 if (deltaFrom == null) {
                     lastFullReadAtEpochMs = System.currentTimeMillis()
                     lastRemovedStamp = removedStamp ?: lastRemovedStamp

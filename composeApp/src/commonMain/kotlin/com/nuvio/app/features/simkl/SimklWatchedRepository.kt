@@ -87,7 +87,11 @@ internal object SimklWatchedRepository {
         // merges additively, so it leaves the local store exactly as it is. Handing back a cached
         // snapshot instead would re-add every tick the user has removed since — see the class
         // comment.
+        // No activities, no all-items: the guide's first rule, and the one that matters most when
+        // the failure is a spent daily quota. Thrown, so the importer skips the merge and keeps the
+        // watermark for the next attempt instead of losing it to a read it could not gate.
         val activities = SimklAuthRepository.fetchActivities()
+            ?: error("SIMKL activity state could not be read; watched history not fetched")
         val stamp = simklWatchedHistoryActivitiesStamp(activities)
         if (stamp != null && stamp == state.stamp) {
             log.d { "SIMKL watched history: activities unchanged, skipping fetch" }
@@ -96,8 +100,9 @@ internal object SimklWatchedRepository {
         // The watermark for the *next* read is the stamp seen before this one starts, never one
         // read after it: a change landing while this request is in flight is newer than it, so the
         // next delta picks it up instead of it falling between two reads.
-        val nextDateFrom = activities?.all?.takeIf(String::isNotBlank)
         val dateFrom = state.dateFrom?.takeIf(String::isNotBlank)
+        // Without an `all` stamp the old watermark stays: an older `date_from` only returns more.
+        val nextDateFrom = activities.all?.takeIf(String::isNotBlank) ?: dateFrom
         val payload = if (dateFrom != null) {
             // Phase 2: one bare all-items call covers every type and status.
             fetchAllItems("/sync/all-items?$HISTORY_QUERY&date_from=${simklUrlEncode(dateFrom)}")

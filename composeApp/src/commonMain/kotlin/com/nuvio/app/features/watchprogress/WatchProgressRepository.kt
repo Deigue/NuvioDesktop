@@ -74,9 +74,13 @@ private const val WATCH_PROGRESS_DELTA_PAGE_SIZE = 900
 private const val WATCH_PROGRESS_DELTA_OPERATION_UPSERT = "upsert"
 private const val WATCH_PROGRESS_DELTA_OPERATION_DELETE = "delete"
 private const val WATCH_PROGRESS_REMOTE_STOP_REFRESH_DELAY_MS = 2_500L
-private const val WATCH_PROGRESS_REMOTE_POLL_INTERVAL_MS = 5 * 60_000L
-private const val WATCH_PROGRESS_REMOTE_POLL_MIN_WAIT_MS = 30_000L
-private const val WATCH_PROGRESS_FOREGROUND_POLL_MIN_INTERVAL_MS = 60_000L
+
+/**
+ * SIMKL's sync guide: refresh on launch, on coming back to the app and when playback ends, never on
+ * a background timer, and throttle the foreground trigger to once every 15–30 minutes so switching
+ * windows back and forth does not turn into a poll of its own.
+ */
+private const val WATCH_PROGRESS_FOREGROUND_POLL_MIN_INTERVAL_MS = 15 * 60_000L
 
 private data class RemoteMetadataResolutionResult(
     val key: Pair<String, String>,
@@ -347,51 +351,15 @@ object WatchProgressRepository {
                 retryMetadataResolutionWhenAddonMetaProvidersReady(state)
             }
         }
-
-        // Every other Continue Watching trigger is a *local* event: startup, a settings change, or
-        // playback on this machine. Nothing asks the remote source whether anything changed while
-        // the app sat there, so an episode watched on a phone or a TV stayed invisible until the
-        // next restart — the single most-reported symptom of a remote CW source. Foreground events
-        // cover an app the user came back to; this covers the HTPC that never lost focus.
-        syncScope.launch {
-            while (true) {
-                delay(nextRemoteContinueWatchingPollDelayMs())
-                runCatching {
-                    pullRemoteContinueWatching(
-                        reason = "poll",
-                        // Measured from the last pull of any kind, so a foreground refresh that has
-                        // just done this work makes the tick a no-op instead of repeating it. The
-                        // first build shipped a blind delay and the logs showed exactly that: a
-                        // foreground pull and a poll ten seconds apart, both full round trips.
-                        minIntervalMs = WATCH_PROGRESS_REMOTE_POLL_INTERVAL_MS,
-                    )
-                }.onFailure { error ->
-                    if (error is CancellationException) throw error
-                    log.w { "Scheduled Continue Watching poll failed: ${error.message}" }
-                }
-            }
-        }
-    }
-
-    /**
-     * How long until the next poll is actually due, given whatever pulled last.
-     *
-     * Floored, so a tick that declines to do anything (nothing loaded yet, a local source) cannot
-     * turn the loop into a spin.
-     */
-    private fun nextRemoteContinueWatchingPollDelayMs(): Long {
-        val last = lastRemoteContinueWatchingPullAtMs
-        if (last == 0L) return WATCH_PROGRESS_REMOTE_POLL_INTERVAL_MS
-        val elapsed = WatchProgressClock.nowEpochMs() - last
-        return (WATCH_PROGRESS_REMOTE_POLL_INTERVAL_MS - elapsed)
-            .coerceIn(WATCH_PROGRESS_REMOTE_POLL_MIN_WAIT_MS, WATCH_PROGRESS_REMOTE_POLL_INTERVAL_MS)
     }
 
     /**
      * Re-reads the remote Continue Watching source because the app came back to the foreground.
      *
-     * Rate-limited on its own account: Windows delivers focus events in pairs, and a resume can
-     * land next to the scheduled poll.
+     * Rate-limited on its own account (see [WATCH_PROGRESS_FOREGROUND_POLL_MIN_INTERVAL_MS]):
+     * Windows delivers focus events in pairs, and alt-tabbing would otherwise re-read every time.
+     * There is deliberately no background timer — SIMKL's sync guide forbids one — so launch, this,
+     * and the end of playback are the only automatic refreshes.
      */
     suspend fun refreshContinueWatchingOnForeground() {
         pullRemoteContinueWatching(
@@ -456,6 +424,7 @@ object WatchProgressRepository {
     suspend fun forceContinueWatchingSync(
         profileId: Int,
         reimportProviderHistory: Boolean = true,
+        rereadHistoryInFull: Boolean = true,
     ) {
         ensureLoaded()
         // Counts as a pull for the foreground rate limit: the startup sync and the window's first
@@ -471,9 +440,15 @@ object WatchProgressRepository {
         // row moved on but the episode list behind it did not. Forced, because a user-initiated
         // resync is precisely the case the request budget should not silently swallow.
         // [reimportProviderHistory] is off for the startup call, which has already imported.
+        // [rereadHistoryInFull] is off for calls the user did not make (crash recovery): those
+        // only need what changed, and a full history download is the costliest read there is.
         if (reimportProviderHistory) {
             runCatching {
-                WatchedRepository.pullConnectedProviderHistory(profileId, force = true)
+                WatchedRepository.pullConnectedProviderHistory(
+                    profileId,
+                    force = true,
+                    rereadInFull = rereadHistoryInFull,
+                )
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 log.w { "Failed to re-import provider watched history during resync: ${error.message}" }

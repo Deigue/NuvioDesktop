@@ -183,7 +183,7 @@ object WatchedRepository {
         // Provider history is merged additively after the account's primary watched store. A
         // missing row from SIMKL, MDBList or Floppy must never erase a tick written locally or by
         // another service; those APIs are independent histories, not mirrors of one another.
-        pullConnectedProviderHistoryAdditively(profileId, force = false)
+        pullConnectedProviderHistoryAdditively(profileId, rereadInFull = false)
     }
 
     /**
@@ -195,9 +195,16 @@ object WatchedRepository {
      * account" meant provider history was never imported at all.
      *
      * [force] skips the request-budget interval for an explicit source change, where the whole point
-     * of the call is that the answer has just changed.
+     * of the call is that the answer has just changed. [rereadInFull] also drops the provider's
+     * change detection, and is only for a resync the user asked for: a source change is answered by
+     * a delta like any other read, and forcing a full one there meant a full history download
+     * whenever the saved source loaded after the startup emission.
      */
-    suspend fun pullConnectedProviderHistory(profileId: Int, force: Boolean = false) {
+    suspend fun pullConnectedProviderHistory(
+        profileId: Int,
+        force: Boolean = false,
+        rereadInFull: Boolean = false,
+    ) {
         ensureLoaded()
         // This path is silent unless it throws, which made "imported nothing" and "never ran"
         // indistinguishable from the log. Every early return now says which gate closed.
@@ -222,7 +229,7 @@ object WatchedRepository {
             claimedAtMs = now
             lastProviderHistoryPullAtMs.also { lastProviderHistoryPullAtMs = now }
         }
-        val requested = pullConnectedProviderHistoryAdditively(profileId, force = force)
+        val requested = pullConnectedProviderHistoryAdditively(profileId, rereadInFull = rereadInFull)
         if (!requested) {
             // Nothing was spent, so nothing should be charged. The startup import runs before the
             // tracking registry reports any connected provider, and charging that no-op used to
@@ -248,7 +255,7 @@ object WatchedRepository {
      * door, by the one provider read that never asked which source was selected. Trakt has always
      * followed the selection (see [activeRemoteWatchedAdapter]); the additive providers now do too.
      */
-    private suspend fun pullConnectedProviderHistoryAdditively(profileId: Int, force: Boolean): Boolean {
+    private suspend fun pullConnectedProviderHistoryAdditively(profileId: Int, rereadInFull: Boolean): Boolean {
         val importProviderId = activeWatchedHistoryImportProviderId()
         val connected = TrackingProviderRegistry.connectedWatchedProviders()
         val provider = connected.firstOrNull { candidate -> candidate.providerId == importProviderId }
@@ -269,7 +276,7 @@ object WatchedRepository {
         if (provider != null) {
             // A provider may skip its own fetch when the service reports nothing has changed. That
             // is the right default for a poll and the wrong one for a resync the user asked for,
-            // so a forced pull drops that state first and makes the provider read in full.
+            // so that one drops the state first and makes the provider read in full.
             //
             // A provider that reads deltas also has to start over when nothing it imported is
             // left here — first import, a source switch that withdrew its rows, cleared local
@@ -277,7 +284,7 @@ object WatchedRepository {
             val holdsImport = synchronized(itemsLock) {
                 itemsByKey.values.any { item -> item.importedFrom == provider.providerId.storageId }
             }
-            if (force || !holdsImport) provider.invalidateChangeDetection()
+            if (rereadInFull || !holdsImport) provider.invalidateChangeDetection()
             val remoteItems = try {
                 provider.pull(profileId = profileId, pageSize = watchedItemsPageSize)
             } catch (error: CancellationException) {

@@ -1783,7 +1783,10 @@ private fun MainAppContent(
         if (ResumePromptRepository.recoverUncleanPlayerExit()) {
             launch {
                 runCatching {
-                    WatchProgressRepository.forceContinueWatchingSync(ProfileRepository.activeProfileId)
+                    WatchProgressRepository.forceContinueWatchingSync(
+                        ProfileRepository.activeProfileId,
+                        rereadHistoryInFull = false,
+                    )
                 }.onFailure { error ->
                     if (error is CancellationException) throw error
                     appStartupLog.e(error) { "Continue Watching resync after unclean exit failed" }
