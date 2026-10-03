@@ -28,11 +28,12 @@ internal data class SimklCatalogEpisode(
 /**
  * The episode list for a show, fetched from SIMKL's public `/tv/episodes` endpoint.
  *
- * Needed because `/sync/all-items` **omits the `seasons` array entirely once a show is completed or
- * dropped** — it reports `watched_episodes_count` and nothing to attach it to. Measured on a real
- * account: 145 of 298 shows, 8,017 watched episodes, silently importing as zero. No request shape
- * changes that; `extended=full`, `episode_watched_at=yes` and the per-status endpoints all return
- * the same season-less entry, so the numbers have to come from somewhere else.
+ * Needed when `/sync/all-items` **omits the `seasons` array for a completed or dropped show** — it
+ * reports `watched_episodes_count` and nothing to attach it to. Measured on a real account: 145 of
+ * 298 shows, 8,017 watched episodes, silently importing as zero. SIMKL's sync guide documents the
+ * cause: `extended=full` loads episodes for watching / hold / plantowatch only, and completed and
+ * dropped need `include_all_episodes=yes` as well. The history read now sends it, so this is a
+ * fallback for whatever still arrives season-less rather than a pass over every finished show.
  *
  * Unauthenticated: this is public catalogue metadata, not user data. Kept on disk, shared by every
  * profile: a full history read touches every affected show at once (145 requests on the account

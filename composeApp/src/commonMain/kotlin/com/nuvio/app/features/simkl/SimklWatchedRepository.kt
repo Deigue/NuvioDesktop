@@ -16,8 +16,8 @@ import kotlinx.serialization.json.Json
 /**
  * SIMKL watched history, including per-episode timestamps, following SIMKL's two-phase sync.
  *
- * Phase 1 — the first read for a profile, or one after [invalidate] — downloads the whole history
- * (`/sync/all-items/all?extended=full`, ~14k rows and several MB on a real account). Phase 2 is
+ * Phase 1 — the first read for a profile, or one after [invalidate] — downloads the whole history,
+ * one type at a time (~14k rows and several MB on a real account). Phase 2 is
  * every read after that: `/sync/activities` says whether anything moved, and if it did only the
  * entries that changed since the last read are fetched, with `date_from` set to the `all` stamp
  * that read saw. That watermark is persisted per profile, so a relaunch is a delta too — it used to
@@ -98,26 +98,16 @@ internal object SimklWatchedRepository {
         // next delta picks it up instead of it falling between two reads.
         val nextDateFrom = activities?.all?.takeIf(String::isNotBlank)
         val dateFrom = state.dateFrom?.takeIf(String::isNotBlank)
-        // `extended=full` supplies seasons/episodes and `episode_watched_at=yes` distinguishes
-        // watched episodes from the unwatched episode rows included in that extended response.
-        val dateFromQuery = dateFrom?.let { "&date_from=${simklUrlEncode(it)}" }.orEmpty()
-        val url = SimklAuthRepository.appendParams(
-            "$BASE_URL/sync/all-items/all?extended=full&episode_watched_at=yes$dateFromQuery",
-        )
-        val response = simklRequest(method = "GET", url = url, body = "")
-        if (response.status !in 200..299) {
-            error("SIMKL watched-history fetch failed: HTTP ${response.status}")
-        }
-        // An empty body is SIMKL's answer to a delta with nothing in it.
-        val payload = if (response.body.trim().let { it.isEmpty() || it == "null" || it == "[]" }) {
-            SimklAllItemsResponse()
+        val payload = if (dateFrom != null) {
+            // Phase 2: one bare all-items call covers every type and status.
+            fetchAllItems("/sync/all-items?$HISTORY_QUERY&date_from=${simklUrlEncode(dateFrom)}")
         } else {
-            runCatching {
-                json.decodeFromString<SimklAllItemsResponse>(response.body)
-            }.getOrElse { failure ->
-                if (failure is CancellationException) throw failure
-                error("SIMKL watched-history payload could not be parsed: ${failure.message}")
-            }
+            // Phase 1: one type at a time, as the guide asks — three full payloads at once is the
+            // CPU spike it warns about on both ends.
+            val shows = fetchAllItems("/sync/all-items/shows?$HISTORY_QUERY")
+            val movies = fetchAllItems("/sync/all-items/movies?$HISTORY_QUERY")
+            val anime = fetchAllItems("/sync/all-items/anime?$HISTORY_QUERY")
+            SimklAllItemsResponse(shows = shows.shows, movies = movies.movies, anime = anime.anime)
         }
         val items = payload.toWatchedItems() + backfillSeasonlessEntries(payload)
         if (profileId != loadedProfileId) return emptyList()
@@ -145,6 +135,34 @@ internal object SimklWatchedRepository {
         return items
     }
 
+    private suspend fun fetchAllItems(pathAndQuery: String): SimklAllItemsResponse {
+        val response = simklRequest(
+            method = "GET",
+            url = SimklAuthRepository.appendParams("$BASE_URL$pathAndQuery"),
+            body = "",
+        )
+        if (response.status !in 200..299) {
+            error("SIMKL watched-history fetch failed: HTTP ${response.status}")
+        }
+        // An empty body is SIMKL's answer to a delta, or a type, with nothing in it.
+        val body = response.body.trim()
+        if (body.isEmpty() || body == "null" || body == "[]") return SimklAllItemsResponse()
+        return runCatching {
+            json.decodeFromString<SimklAllItemsResponse>(body)
+        }.getOrElse { failure ->
+            if (failure is CancellationException) throw failure
+            error("SIMKL watched-history payload could not be parsed: ${failure.message}")
+        }
+    }
+
+    /**
+     * `extended=full` turns on the `seasons[].episodes[]` arrays, `episode_watched_at=yes` stamps
+     * each one, and `include_all_episodes=yes` extends both to completed and dropped entries, which
+     * otherwise arrive as a bare `watched_episodes_count`. For a show marked complete in one action
+     * SIMKL synthesizes the rows, stamped with the show's last-watched time.
+     */
+    private const val HISTORY_QUERY = "extended=full&episode_watched_at=yes&include_all_episodes=yes"
+
     // Set by each read, taken by the importer; see consumeHistoryResets.
     private var pendingResets: List<WatchedHistoryReset> = emptyList()
 
@@ -153,11 +171,12 @@ internal object SimklWatchedRepository {
         pendingResets.also { pendingResets = emptyList() }
 
     /**
-     * Recovers the watch state of shows SIMKL reports as a bare count.
+     * Recovers the watch state of shows SIMKL still reports as a bare count.
      *
-     * See [SimklEpisodeCatalog] for why this is necessary at all. One extra request per affected
-     * show, so it is chunked rather than fanned out: an import touches every completed show at once,
-     * and 145 simultaneous requests is how an account earns a rate limit.
+     * A fallback only: [HISTORY_QUERY] asks SIMKL for the episodes of completed and dropped entries,
+     * so this should find nothing to do. It stays for any entry that still arrives season-less —
+     * see [SimklEpisodeCatalog]. One extra request per affected show, so it is chunked rather than
+     * fanned out, and the log line below says whether it is still being reached.
      */
     private suspend fun backfillSeasonlessEntries(
         payload: SimklAllItemsResponse,
