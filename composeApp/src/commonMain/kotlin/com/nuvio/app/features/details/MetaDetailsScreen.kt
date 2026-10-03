@@ -596,7 +596,7 @@ fun MetaDetailsScreen(
                 val toggleWatched = remember(metaPreview) {
                     {
                         detailsScope.launch {
-                            WatchingActions.togglePosterWatched(metaPreview)
+                            WatchingActions.togglePosterWatched(metaPreview, origin = "details page")
                         }
                         Unit
                     }

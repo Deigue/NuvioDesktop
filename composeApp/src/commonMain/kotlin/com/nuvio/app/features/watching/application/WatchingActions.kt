@@ -1,8 +1,12 @@
 package com.nuvio.app.features.watching.application
 
+import co.touchlab.kermit.Logger
+import com.nuvio.app.core.ui.NuvioToastController
 import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.details.MetaDetailsRepository
 import com.nuvio.app.features.details.MetaVideo
+import com.nuvio.app.features.details.effectiveEpisodeNumber
+import com.nuvio.app.features.details.effectiveSeasonNumber
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.watched.WatchedItem
 import com.nuvio.app.features.watched.WatchedRepository
@@ -24,12 +28,23 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.watched_bulk_marked
+import nuvio.composeapp.generated.resources.watched_bulk_unmarked
+import org.jetbrains.compose.resources.getString
 
 object WatchingActions {
     private val actionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val log = Logger.withTag("WatchingActions")
 
-    suspend fun togglePosterWatched(preview: MetaPreview) {
+    /**
+     * Whole-title watched toggle. For a series this marks or unmarks every released main-season
+     * episode at once, which is why every call is logged with the UI surface it came from: a stray
+     * click here is otherwise indistinguishable, in a user's log, from episodes appearing on its own.
+     */
+    suspend fun togglePosterWatched(preview: MetaPreview, origin: String = "unspecified") {
         if (!preview.type.isSeriesLikeType()) {
+            log.i { "Toggle watched ($origin): ${preview.type}:${preview.id} (${preview.name})" }
             WatchedRepository.toggleWatched(preview.toWatchedItem(markedAtEpochMs = 0L))
             return
         }
@@ -40,6 +55,10 @@ object WatchingActions {
         )
         val meta = MetaDetailsRepository.fetch(type = preview.type, id = preview.id)
         if (meta == null) {
+            log.i {
+                "Toggle series watched ($origin): ${preview.type}:${preview.id} (${preview.name}) " +
+                    "has no metadata; wasWatched=$isCurrentlyWatched"
+            }
             if (isCurrentlyWatched) {
                 WatchedRepository.unmarkWatched(preview.toWatchedItem(markedAtEpochMs = 0L))
             }
@@ -49,6 +68,10 @@ object WatchingActions {
         val todayIsoDate = CurrentDateProvider.todayIsoDate()
         val releasedMainEpisodes = meta.releasedMainSeasonEpisodes(todayIsoDate)
         if (releasedMainEpisodes.isEmpty()) {
+            log.i {
+                "Toggle series watched ($origin): ${meta.type}:${meta.id} (${meta.name}) " +
+                    "has no released episodes; wasWatched=$isCurrentlyWatched"
+            }
             if (isCurrentlyWatched) {
                 WatchedRepository.unmarkWatched(meta.toSeriesWatchedItem())
             }
@@ -59,6 +82,7 @@ object WatchingActions {
             addAll(releasedMainEpisodes.map(meta::toEpisodeWatchedItem))
         }
 
+        logEpisodeAction("whole series ($origin)", meta, releasedMainEpisodes, unmark = isCurrentlyWatched)
         if (isCurrentlyWatched) {
             WatchedRepository.unmarkWatched(seriesItems)
             WatchProgressRepository.clearProgress(
@@ -70,6 +94,7 @@ object WatchingActions {
                 releasedMainEpisodes.flatMap(meta::episodePlaybackIds),
             )
         }
+        showBulkToast(meta, releasedMainEpisodes.size, unmark = isCurrentlyWatched)
     }
 
     fun toggleEpisodeWatched(
@@ -78,6 +103,7 @@ object WatchingActions {
         isCurrentlyWatched: Boolean,
     ) {
         val watchedItem = meta.toEpisodeWatchedItem(episode)
+        logEpisodeAction("episode", meta, listOf(episode), unmark = isCurrentlyWatched)
         if (isCurrentlyWatched) {
             WatchedRepository.unmarkWatched(watchedItem)
             WatchProgressRepository.clearProgress(meta.episodePlaybackIds(episode))
@@ -94,6 +120,7 @@ object WatchingActions {
         areCurrentlyWatched: Boolean,
     ) {
         toggleEpisodesWatched(
+            action = "previous episodes",
             meta = meta,
             episodes = episodes,
             areCurrentlyWatched = areCurrentlyWatched,
@@ -106,6 +133,7 @@ object WatchingActions {
         areCurrentlyWatched: Boolean,
     ) {
         toggleEpisodesWatched(
+            action = "season",
             meta = meta,
             episodes = episodes,
             areCurrentlyWatched = areCurrentlyWatched,
@@ -215,11 +243,13 @@ object WatchingActions {
     }
 
     private fun toggleEpisodesWatched(
+        action: String,
         meta: MetaDetails,
         episodes: Collection<MetaVideo>,
         areCurrentlyWatched: Boolean,
     ) {
         if (episodes.isEmpty()) return
+        logEpisodeAction(action, meta, episodes, unmark = areCurrentlyWatched)
         val watchedItems = episodes.map(meta::toEpisodeWatchedItem)
         if (areCurrentlyWatched) {
             WatchedRepository.unmarkWatched(watchedItems)
@@ -229,8 +259,64 @@ object WatchingActions {
             WatchProgressRepository.clearProgress(episodes.flatMap(meta::episodePlaybackIds))
         }
         reconcileSeriesWatchedState(meta)
+        actionScope.launch { showBulkToast(meta, episodes.size, unmark = areCurrentlyWatched) }
+    }
+
+    /**
+     * One line per manual watched action, naming the title and every episode it touched. These
+     * actions push straight to the connected tracker's history, so without this a user's log cannot
+     * tell "I clicked Mark Season" apart from episodes the app marked by itself.
+     */
+    private fun logEpisodeAction(
+        action: String,
+        meta: MetaDetails,
+        episodes: Collection<MetaVideo>,
+        unmark: Boolean,
+    ) {
+        log.i {
+            val coordinates = formatEpisodeCoordinates(
+                episodes.map { it.effectiveSeasonNumber() to it.effectiveEpisodeNumber() },
+            )
+            "${if (unmark) "Unmark" else "Mark"} watched [$action]: ${meta.type}:${meta.id} (${meta.name}) " +
+                "${episodes.size} episode(s) $coordinates"
+        }
+    }
+
+    /**
+     * Bulk marks change many rows on the connected tracker at once and are otherwise silent — only
+     * a single-episode mark shows a toast, after the provider confirms it. Say how many, and of
+     * what, so an accidental whole-season or whole-show click is noticed when it happens.
+     */
+    private suspend fun showBulkToast(meta: MetaDetails, episodeCount: Int, unmark: Boolean) {
+        if (episodeCount <= 1) return
+        val message = getString(
+            if (unmark) Res.string.watched_bulk_unmarked else Res.string.watched_bulk_marked,
+            episodeCount,
+            meta.name,
+        )
+        NuvioToastController.show(message = message, durationMillis = 4_000L)
     }
 }
+
+/** `S1:E1-8,10 S2:E1-3`, with unknown coordinates shown as `?`. */
+internal fun formatEpisodeCoordinates(coordinates: Collection<Pair<Int?, Int?>>): String =
+    coordinates
+        .groupBy({ (season, _) -> season }, { (_, episode) -> episode })
+        .toList()
+        .sortedBy { (season, _) -> season ?: Int.MIN_VALUE }
+        .joinToString(" ") { (season, episodes) ->
+            val known = episodes.filterNotNull().distinct().sorted()
+            val ranges = mutableListOf<String>()
+            var index = 0
+            while (index < known.size) {
+                var last = index
+                while (last + 1 < known.size && known[last + 1] == known[last] + 1) last++
+                ranges += if (last == index) "${known[index]}" else "${known[index]}-${known[last]}"
+                index = last + 1
+            }
+            repeat(episodes.count { it == null }) { ranges += "?" }
+            "S${season ?: "?"}:E${ranges.joinToString(",")}"
+        }
 
 private fun String.isSeriesLikeType(): Boolean =
     trim().lowercase() in setOf("series", "show", "tv", "tvshow")

@@ -951,6 +951,8 @@
     <string name="hero_mark_unwatched">Mark as unwatched</string>
     <string name="hero_mark_watched">Mark as watched</string>
     <string name="watched_episode_provider_success">Episode marked as watched on %1$s.</string>
+    <string name="watched_bulk_marked">Marked %1$d episodes of %2$s as watched.</string>
+    <string name="watched_bulk_unmarked">Unmarked %1$d episodes of %2$s.</string>
     <string name="hero_mark_series_unwatched">Mark series unwatched</string>
     <string name="hero_mark_series_watched">Mark series watched</string>
     <string name="hero_play_trailer">Play trailer</string>
