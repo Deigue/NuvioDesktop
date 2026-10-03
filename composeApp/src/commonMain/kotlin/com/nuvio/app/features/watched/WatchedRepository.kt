@@ -89,6 +89,10 @@ object WatchedRepository {
      */
     private val itemsLock = Any()
 
+    private var publishedAliasVersion = -1L
+
+    private fun idWithAliases(id: String): Set<String> = setOf(id) + WatchedIdAliases.aliasesOf(id)
+
     private fun itemSnapshot(): List<WatchedItem> = synchronized(itemsLock) { itemsByKey.values.toList() }
     private var lastSuccessfulPushEpochMs: Long = 0L
     private var deltaCursorEventId: Long = 0L
@@ -286,7 +290,10 @@ object WatchedRepository {
                 }
                 val resets = provider.consumeHistoryResets()
                 synchronized(itemsLock) {
-                    val merged = mergeWatchedItemsAdditively(itemsByKey.values, imported)
+                    val merged = dropAliasedImportDuplicates(
+                        items = mergeWatchedItemsAdditively(itemsByKey.values, imported),
+                        aliasesOf = WatchedIdAliases::aliasesOf,
+                    )
                     val pruned = pruneResetWatchedItems(
                         items = merged,
                         resets = resets,
@@ -304,6 +311,10 @@ object WatchedRepository {
                     }
                 }
             }
+        }
+        if (!changed && publishedAliasVersion != WatchedIdAliases.version && profileId == currentProfileId) {
+            // Only the alias keys moved: republish so the other id space answers, nothing to persist.
+            publish()
         }
         if (changed && profileId == currentProfileId) {
             hasLoaded = true
@@ -535,8 +546,7 @@ object WatchedRepository {
 
     fun toggleWatched(item: WatchedItem) {
         ensureLoaded()
-        val key = watchedItemKey(item.type, item.id, item.season, item.episode)
-        if (synchronized(itemsLock) { itemsByKey.containsKey(key) }) {
+        if (isWatched(id = item.id, type = item.type, season = item.season, episode = item.episode)) {
             unmarkWatched(item)
         } else {
             markWatched(item)
@@ -614,13 +624,22 @@ object WatchedRepository {
         ensureLoaded()
         if (items.isEmpty()) return
         val removedByKey = mutableMapOf<String, WatchedItem>()
+        var removedAlias = false
         synchronized(itemsLock) {
             items.forEach { watchedItem ->
                 val key = watchedItemKey(watchedItem.type, watchedItem.id, watchedItem.season, watchedItem.episode)
                 itemsByKey.remove(key)?.let { removed -> removedByKey[key] = removed }
+                // The same episode imported under another id would otherwise keep it reading as
+                // watched through the alias keys. Local only: the provider delete below already
+                // addresses the title by every id it resolves to.
+                WatchedIdAliases.aliasesOf(watchedItem.id).forEach { alias ->
+                    if (itemsByKey.remove(watchedItemKey(watchedItem.type, alias, watchedItem.season, watchedItem.episode)) != null) {
+                        removedAlias = true
+                    }
+                }
             }
         }
-        if (removedByKey.isNotEmpty()) {
+        if (removedByKey.isNotEmpty() || removedAlias) {
             publish()
             persist()
         }
@@ -636,14 +655,17 @@ object WatchedRepository {
         episode: Int? = null,
     ): Boolean {
         ensureLoaded()
-        return synchronized(itemsLock) { itemsByKey.containsKey(watchedItemKey(type, id, season, episode)) }
+        return synchronized(itemsLock) {
+            idWithAliases(id).any { candidate -> itemsByKey.containsKey(watchedItemKey(type, candidate, season, episode)) }
+        }
     }
 
     /** Whether anything of this title — the title itself or any episode — is on the watched list. */
     fun hasAnyWatched(id: String, type: String): Boolean {
         ensureLoaded()
+        val ids = idWithAliases(id)
         return synchronized(itemsLock) {
-            itemsByKey.values.any { item -> item.id == id && item.type.equals(type, ignoreCase = true) }
+            itemsByKey.values.any { item -> item.id in ids && item.type.equals(type, ignoreCase = true) }
         }
     }
 
@@ -660,7 +682,11 @@ object WatchedRepository {
         episode: Int? = null,
     ): Long? {
         ensureLoaded()
-        return synchronized(itemsLock) { itemsByKey[watchedItemKey(type, id, season, episode)] }?.markedAtEpochMs
+        return synchronized(itemsLock) {
+            idWithAliases(id).firstNotNullOfOrNull { candidate ->
+                itemsByKey[watchedItemKey(type, candidate, season, episode)]
+            }
+        }?.markedAtEpochMs
     }
 
     fun reconcileSeriesWatchedState(
@@ -784,6 +810,9 @@ object WatchedRepository {
         // History keyed on a native anime id also answers under the franchise ids the same entry
         // is known by, so switching content ids to franchise-first does not orphan it.
         watchedKeys += animeAlternateWatchedKeys(items)
+        // The same title under another id space (`tmdb:` page vs `tt` import) — see WatchedIdAliases.
+        publishedAliasVersion = WatchedIdAliases.version
+        watchedKeys += aliasedWatchedKeys(items, WatchedIdAliases::aliasesOf)
         _uiState.value = WatchedUiState(
             items = items,
             watchedKeys = watchedKeys,
