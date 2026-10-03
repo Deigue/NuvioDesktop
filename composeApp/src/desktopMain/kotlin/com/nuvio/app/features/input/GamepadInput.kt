@@ -2,6 +2,7 @@ package com.nuvio.app.features.input
 
 import co.touchlab.kermit.Logger
 import com.nuvio.app.core.ui.TextInputFocusTracker
+import com.nuvio.app.features.player.AppShortcutAction
 import com.nuvio.app.features.player.desktop.DesktopHostOs
 import com.nuvio.app.features.player.desktop.NativePlayerBridge
 import java.util.concurrent.TimeUnit
@@ -192,6 +193,8 @@ object GamepadInput {
         val state = IntArray(SLOT_COUNT * SLOT_STRIDE)
         var pressed = emptySet<GamepadButton>()
         val repeatDueAt = HashMap<GamepadButton, Long>()
+        // Buttons whose key press is still down, waiting for the button to come up to release it.
+        val heldKeys = HashMap<GamepadButton, Int>()
         var connectedMask = 0
         var nextRescanAt = 0L
 
@@ -200,6 +203,7 @@ object GamepadInput {
                 // Parked: no polling, no native call, no wakeups until the setting changes.
                 pressed = emptySet()
                 repeatDueAt.clear()
+                releaseHeldKeys(heldKeys)
                 connectedMask = 0
                 nextRescanAt = 0L
                 GamepadSettingsRepository.setConnected(false)
@@ -235,14 +239,20 @@ object GamepadInput {
             }
 
             val current = if (connectedMask == 0) emptySet() else readPressed(state, connectedMask)
-            dispatch(current, pressed, repeatDueAt, now)
+            dispatch(current, pressed, repeatDueAt, heldKeys, now)
             pressed = current
 
             // With nothing plugged in there is no input to miss, so idle until the next rescan
             // rather than waking sixty times a second on a machine that has no controller.
             sleep(if (connectedMask == 0) IDLE_POLL_INTERVAL_MS else POLL_INTERVAL_MS)
         }
+        releaseHeldKeys(heldKeys)
         GamepadSettingsRepository.setConnected(false)
+    }
+
+    private fun releaseHeldKeys(heldKeys: MutableMap<GamepadButton, Int>) {
+        heldKeys.values.forEach(GamepadKeyInjector::release)
+        heldKeys.clear()
     }
 
     /**
@@ -354,14 +364,26 @@ object GamepadInput {
         current: Set<GamepadButton>,
         previous: Set<GamepadButton>,
         repeatDueAt: MutableMap<GamepadButton, Long>,
+        heldKeys: MutableMap<GamepadButton, Int>,
         now: Long,
     ) {
+        previous.forEach { button ->
+            if (button !in current) heldKeys.remove(button)?.let(GamepadKeyInjector::release)
+        }
         val inPlayer = GamepadContext.playerActive
         resolveFiring(current, previous, repeatDueAt, now, GamepadSettingsRepository.repeatIntervalMs)
-            .forEach { button -> send(button, inPlayer) }
+            .forEach { button -> send(button, inPlayer, heldKeys) }
     }
 
-    private fun send(button: GamepadButton, inPlayer: Boolean) {
+    /**
+     * Whether [target] keeps its key down for as long as the button is held, instead of a press and
+     * release on the same tick. Select needs that so holding A can mean hold-to-select, exactly as
+     * holding Enter does; every other button keeps the instant pair.
+     */
+    internal fun holdsUntilRelease(target: GamepadTarget): Boolean =
+        target is GamepadTarget.AppAction && target.action == AppShortcutAction.SelectFocused
+
+    private fun send(button: GamepadButton, inPlayer: Boolean, heldKeys: MutableMap<GamepadButton, Int>) {
         lastInputAtMs = System.currentTimeMillis()
         // Picking up the pad while a text field already holds focus summons the keyboard, for the
         // case where the field was reached with the mouse.
@@ -371,7 +393,12 @@ object GamepadInput {
         // the middle of a word.
         if (OnScreenKeyboard.consume(button)) return
         val binding = GamepadDefaults.binding(button)
-        GamepadKeyInjector.send(if (inPlayer) binding.player else binding.browsing)
+        val target = if (inPlayer) binding.player else binding.browsing
+        if (holdsUntilRelease(target)) {
+            GamepadKeyInjector.press(target)?.let { keyCode -> heldKeys[button] = keyCode }
+        } else {
+            GamepadKeyInjector.send(target)
+        }
     }
 
     private fun sleep(millis: Long) {

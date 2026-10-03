@@ -32,6 +32,24 @@ internal object GamepadKeyInjector {
         return sendKeyCode(keyCode)
     }
 
+    /**
+     * Posts only the press for [target] and returns the key code it sent, for a button whose
+     * release has to wait for the button itself — see [GamepadInput]'s hold-to-select handling.
+     * Null when nothing was sent.
+     */
+    fun press(target: GamepadTarget): Int? {
+        val keyCode = resolveKeyCode(target) ?: return null
+        val source = focusTarget() ?: return null
+        post(KeyEvent(source, KeyEvent.KEY_PRESSED, System.currentTimeMillis(), 0, keyCode, KeyEvent.CHAR_UNDEFINED))
+        return keyCode
+    }
+
+    /** The release matching an earlier [press]. */
+    fun release(keyCode: Int) {
+        val source = focusTarget() ?: return
+        post(KeyEvent(source, KeyEvent.KEY_RELEASED, System.currentTimeMillis(), 0, keyCode, KeyEvent.CHAR_UNDEFINED))
+    }
+
     /** Posts one press/release pair for a `VK_` code. */
     fun sendKeyCode(keyCode: Int): Boolean {
         val source = focusTarget() ?: return false

@@ -52,6 +52,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
@@ -66,16 +67,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -91,6 +95,7 @@ import nuvio.composeapp.generated.resources.home_view_all
 import nuvio.composeapp.generated.resources.poster_logo_content_description
 import org.jetbrains.compose.resources.stringResource
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 enum class NuvioPosterShape {
@@ -1076,19 +1081,48 @@ internal fun Modifier.posterCardClickable(
 ): Modifier {
     if (onClick == null && onLongClick == null) return this
     val bounds = remember { mutableStateOf<Rect?>(null) }
+    val windowOrigin = remember { mutableStateOf<Offset?>(null) }
+    fun stashZoomAnchor() {
+        bounds.value?.takeIf { zoomImageUrl != null }?.let { cardBounds ->
+            PosterZoomAnchorHolder.stash(
+                PosterZoomAnchor(
+                    boundsInRoot = cardBounds,
+                    imageUrl = zoomImageUrl,
+                    fallbackImageUrl = zoomFallbackImageUrl,
+                    cornerRadius = zoomCornerRadius,
+                ),
+            )
+        }
+    }
     val handleLongClick = onLongClick?.let { longClick ->
         {
-            bounds.value?.takeIf { zoomImageUrl != null }?.let { cardBounds ->
-                PosterZoomAnchorHolder.stash(
-                    PosterZoomAnchor(
-                        boundsInRoot = cardBounds,
-                        imageUrl = zoomImageUrl,
-                        fallbackImageUrl = zoomFallbackImageUrl,
-                        cornerRadius = zoomCornerRadius,
-                    ),
-                )
-            }
+            stashZoomAnchor()
             longClick()
+        }
+    }
+    // While keyboard focus highlights this card, a held select key opens its actions here, beside
+    // the card, as a right-click would at the cursor. The screen's key handler decides what the
+    // hold does; the card only says where it is.
+    // Read through the updated state so a card whose artwork changes while it stays highlighted
+    // stashes the current art, not what it showed when it was first highlighted.
+    val currentStashZoomAnchor = rememberUpdatedState<() -> Unit>({ stashZoomAnchor() })
+    if (onLongClick != null && LocalNuvioShelfItemHighlighted.current) {
+        DisposableEffect(Unit) {
+            val prepare: () -> Unit = {
+                currentStashZoomAnchor.value()
+                val origin = windowOrigin.value
+                val cardBounds = bounds.value
+                if (origin != null && cardBounds != null) {
+                    ContextMenuInvocation.recordSecondaryPress(
+                        IntOffset(
+                            (origin.x + cardBounds.width / 2f).roundToInt(),
+                            (origin.y + cardBounds.height / 2f).roundToInt(),
+                        ),
+                    )
+                }
+            }
+            HighlightedCardAnchor.register(prepare)
+            onDispose { HighlightedCardAnchor.unregister(prepare) }
         }
     }
     // Material's hover state layer is black app-wide (see NuvioRippleConfiguration) and measures
@@ -1102,6 +1136,7 @@ internal fun Modifier.posterCardClickable(
     val positioned = onGloballyPositioned { coordinates ->
         val position = coordinates.positionInRoot()
         bounds.value = Rect(position.x, position.y, position.x + coordinates.size.width, position.y + coordinates.size.height)
+        windowOrigin.value = coordinates.positionInWindow()
     }
     val clickable = if (shineHighlighted) {
         positioned.combinedClickable(

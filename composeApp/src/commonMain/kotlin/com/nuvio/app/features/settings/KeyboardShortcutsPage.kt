@@ -165,6 +165,7 @@ internal fun LazyListScope.keyboardShortcutsContent(isTablet: Boolean) {
     item(key = "keyboard-shortcuts-navigation") {
         LaunchedEffect(Unit) { ensureAppShortcutBindingsLoaded() }
         val wasdEnabled by ThemeSettingsRepository.wasdNavigationEnabled.collectAsState()
+        val holdToSelectEnabled by ThemeSettingsRepository.holdToSelectEnabled.collectAsState()
         val appLabels by appShortcutKeyLabels().collectAsState()
         var rebindingApp by remember { mutableStateOf<AppShortcutAction?>(null) }
         SettingsSection(
@@ -186,6 +187,14 @@ internal fun LazyListScope.keyboardShortcutsContent(isTablet: Boolean) {
                         ThemeSettingsRepository.setWasdNavigationEnabled(enabled)
                         ensureAppShortcutBindingsLoaded()
                     },
+                )
+                SettingsGroupDivider(isTablet = isTablet)
+                SettingsSwitchRow(
+                    title = stringResource(Res.string.settings_shortcuts_hold_to_select),
+                    description = stringResource(Res.string.settings_shortcuts_hold_to_select_description),
+                    checked = holdToSelectEnabled,
+                    isTablet = isTablet,
+                    onCheckedChange = ThemeSettingsRepository::setHoldToSelectEnabled,
                 )
                 navigationShortcuts(appLabels).forEach { shortcut ->
                     SettingsGroupDivider(isTablet = isTablet)

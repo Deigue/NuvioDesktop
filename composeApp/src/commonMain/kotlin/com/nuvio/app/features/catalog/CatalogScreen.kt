@@ -72,6 +72,7 @@ import com.nuvio.app.core.ui.nuvioPosterHighlight
 import com.nuvio.app.core.ui.rememberMouseActivityState
 import com.nuvio.app.core.ui.rememberPosterCardStyleUiState
 import com.nuvio.app.core.ui.posterCardClickable
+import com.nuvio.app.core.ui.rememberHoldToSelectState
 import com.nuvio.app.core.ui.nuvioSafeBottomPadding
 import com.nuvio.app.core.ui.withDuplicateSafeLazyKeys
 import com.nuvio.app.features.home.MetaPreview
@@ -225,6 +226,7 @@ fun CatalogScreen(
             }
         }
 
+        val selectHold = rememberHoldToSelectState()
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -237,6 +239,20 @@ fun CatalogScreen(
                                 mouseActivity.onMouseMoved(event.changes.first().position)
                             }
                             .onPreviewKeyEvent { event ->
+                                val selectKey = event.navigationKey()
+                                if (
+                                    (selectKey == Key.Enter || selectKey == Key.NumPadEnter) &&
+                                    uiState.items.isNotEmpty()
+                                ) {
+                                    val item = uiState.items.getOrNull(focusedItemIndex)
+                                    return@onPreviewKeyEvent selectHold.handle(
+                                        event = event,
+                                        onSelect = { item?.let { onPosterClick?.invoke(it) } },
+                                        onHold = item?.let { focused ->
+                                            onPosterLongClick?.let { longPress -> { longPress(focused) } }
+                                        },
+                                    )
+                                }
                                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                                 if (uiState.items.isEmpty()) return@onPreviewKeyEvent false
                                 val lastIndex = uiState.items.size - 1
@@ -263,10 +279,6 @@ fun CatalogScreen(
                                     Key.DirectionUp -> {
                                         mouseActivity.onKeyboardNavigation()
                                         focusedItemIndex = (focusedItemIndex - columns).coerceAtLeast(0)
-                                        true
-                                    }
-                                    Key.Enter, Key.NumPadEnter -> {
-                                        uiState.items.getOrNull(focusedItemIndex)?.let { onPosterClick?.invoke(it) }
                                         true
                                     }
                                     else -> false

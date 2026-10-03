@@ -3,6 +3,7 @@ package com.nuvio.app.features.settings
 import com.nuvio.app.core.ui.AccentGradientDirection
 import com.nuvio.app.core.ui.AppTheme
 import com.nuvio.app.core.ui.NativeTabBridge
+import com.nuvio.app.core.ui.HoldToSelect
 import com.nuvio.app.core.ui.WasdNavigation
 import com.nuvio.app.core.ui.ThemeColorPalette
 import com.nuvio.app.core.ui.ThemeColors
@@ -55,6 +56,9 @@ object ThemeSettingsRepository {
     private val _wasdNavigationEnabled = MutableStateFlow(false)
     val wasdNavigationEnabled: StateFlow<Boolean> = _wasdNavigationEnabled.asStateFlow()
 
+    private val _holdToSelectEnabled = MutableStateFlow(true)
+    val holdToSelectEnabled: StateFlow<Boolean> = _holdToSelectEnabled.asStateFlow()
+
     private val _desktopNavigationLayout = MutableStateFlow(DesktopNavigationLayout.Default)
     val desktopNavigationLayout: StateFlow<DesktopNavigationLayout> = _desktopNavigationLayout.asStateFlow()
 
@@ -104,6 +108,8 @@ object ThemeSettingsRepository {
         _desktopSettingsFullWidth.value = false
         _wasdNavigationEnabled.value = false
         WasdNavigation.enabled = false
+        _holdToSelectEnabled.value = true
+        HoldToSelect.enabled = true
         _desktopNavigationLayout.value = DesktopNavigationLayout.Default
         _desktopTopBarAlwaysVisible.value = false
         _desktopDiscoverTabVisible.value = true
@@ -161,6 +167,9 @@ object ThemeSettingsRepository {
         val wasdEnabled = ThemeSettingsStorage.loadWasdNavigationEnabled() ?: false
         _wasdNavigationEnabled.value = wasdEnabled
         WasdNavigation.enabled = wasdEnabled
+        val holdToSelectEnabled = ThemeSettingsStorage.loadHoldToSelectEnabled() ?: true
+        _holdToSelectEnabled.value = holdToSelectEnabled
+        HoldToSelect.enabled = holdToSelectEnabled
         _desktopNavigationLayout.value = DesktopNavigationLayout.fromName(
             ThemeSettingsStorage.loadDesktopNavigationLayout(),
         )
@@ -289,6 +298,14 @@ object ThemeSettingsRepository {
         _wasdNavigationEnabled.value = enabled
         WasdNavigation.enabled = enabled
         ThemeSettingsStorage.saveWasdNavigationEnabled(enabled)
+    }
+
+    fun setHoldToSelectEnabled(enabled: Boolean) {
+        ensureLoaded()
+        if (_holdToSelectEnabled.value == enabled) return
+        _holdToSelectEnabled.value = enabled
+        HoldToSelect.enabled = enabled
+        ThemeSettingsStorage.saveHoldToSelectEnabled(enabled)
     }
 
     fun setDesktopNavigationLayout(layout: DesktopNavigationLayout) {

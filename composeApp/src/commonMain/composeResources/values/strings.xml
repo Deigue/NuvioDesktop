@@ -3439,6 +3439,8 @@
     <string name="player_subtitle_font">Font</string>
     <string name="settings_shortcuts_arrows">Arrows</string>
     <string name="settings_shortcuts_intro">Shortcuts work while the app is focused. Player shortcuts apply during playback; text fields (like Search) always keep their keys. Click a player shortcut below to rebind it.</string>
+    <string name="settings_shortcuts_hold_to_select">Hold select for actions</string>
+    <string name="settings_shortcuts_hold_to_select_description">Holding Select (Enter, or A on a controller) on a poster opens the same actions as right-click. Select then opens items when the key is released rather than when it is pressed; turn this off to open them on press.</string>
     <string name="settings_shortcuts_move_focus">Move focus</string>
     <string name="settings_shortcuts_navigation">Navigation</string>
     <string name="settings_shortcuts_rebind">Rebind %1$s</string>

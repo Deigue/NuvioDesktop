@@ -48,6 +48,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import com.nuvio.app.core.ui.WasdNavigation
 import com.nuvio.app.core.ui.navigationKey
+import com.nuvio.app.core.ui.rememberHoldToSelectState
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -2236,6 +2237,8 @@ fun HomeScreen(
         onContinueWatchingClick,
         onFolderClick,
         posterClickHandler,
+        onPosterLongClick,
+        onContinueWatchingLongPress,
         // A re-deal changes what sits at each index, and tvRows is indexed by the focused column.
         rowShuffleOrders,
         rowShuffleEnabled,
@@ -2251,6 +2254,9 @@ fun HomeScreen(
                         onEnter = { index ->
                             continueWatchingRowItems.getOrNull(index)?.let { onContinueWatchingClick?.invoke(it) }
                         },
+                        onHold = onContinueWatchingLongPress?.let { longPress ->
+                            { index -> continueWatchingRowItems.getOrNull(index)?.let(longPress) }
+                        },
                     ),
                 )
             }
@@ -2262,6 +2268,9 @@ fun HomeScreen(
                         onEnter = { index ->
                             nextUpRowItems.getOrNull(index)?.let { onContinueWatchingClick?.invoke(it) }
                         },
+                        onHold = onContinueWatchingLongPress?.let { longPress ->
+                            { index -> nextUpRowItems.getOrNull(index)?.let(longPress) }
+                        },
                     ),
                 )
             }
@@ -2272,6 +2281,9 @@ fun HomeScreen(
                         metaItems = if (continueWatchingHeroFollowActive) upcomingHeroPreviews else null,
                         onEnter = { index ->
                             upcomingRowItems.getOrNull(index)?.let { onContinueWatchingClick?.invoke(it) }
+                        },
+                        onHold = onContinueWatchingLongPress?.let { longPress ->
+                            { index -> upcomingRowItems.getOrNull(index)?.let(longPress) }
                         },
                     ),
                 )
@@ -2333,6 +2345,9 @@ fun HomeScreen(
                                 onEnter = { index ->
                                     entries.getOrNull(index)?.let { posterClickHandler?.invoke(it) }
                                 },
+                                onHold = onPosterLongClick?.let { longPress ->
+                                    { index -> entries.getOrNull(index)?.let(longPress) }
+                                },
                                 onLoadMore = if (usesInfiniteScroll) {
                                     { HomeRepository.loadMoreCatalogRow(section.key) }
                                 } else {
@@ -2374,6 +2389,9 @@ fun HomeScreen(
                             onEnter = { index ->
                                 entries.getOrNull(index)?.let { posterClickHandler?.invoke(it) }
                             },
+                            onHold = onPosterLongClick?.let { longPress ->
+                                { index -> entries.getOrNull(index)?.let(longPress) }
+                            },
                             onLoadMore = when {
                                 !usesInfiniteScroll || !section.hasMore -> null
                                 // The Discover browser row pages through SearchRepository, not
@@ -2398,6 +2416,7 @@ fun HomeScreen(
     }
 
     val tvSectionCount = (if (heroFocusable) 1 else 0) + tvRows.size
+    val homeSelectHold = rememberHoldToSelectState()
     LaunchedEffect(tvRows.size) {
         setImmersiveRowIndex(getImmersiveRowIndex().coerceIn(0, (tvRows.size - 1).coerceAtLeast(0)))
     }
@@ -3337,6 +3356,33 @@ fun HomeScreen(
                             },
                         )
                         .onPreviewKeyEvent { event ->
+                            val selectKey = event.navigationKey()
+                            if (selectKey == Key.Enter || selectKey == Key.NumPadEnter) {
+                                // Resolved on the press: the release must act on the item that
+                                // was focused when the key went down.
+                                val sectionIndex = tvFocus.sectionIndex
+                                val itemIndex = tvFocus.itemIndex
+                                val heroSelected = heroFocusable && sectionIndex == 0
+                                val row = if (heroSelected) {
+                                    null
+                                } else {
+                                    tvRows.getOrNull(tvRowIndexForSection(sectionIndex))
+                                }
+                                return@onPreviewKeyEvent homeSelectHold.handle(
+                                    event = event,
+                                    onSelect = {
+                                        if (heroSelected) {
+                                            effectiveHeroItems.getOrNull(itemIndex)
+                                                ?.let { posterClickHandler?.invoke(it) }
+                                        } else {
+                                            row?.onEnter?.invoke(itemIndex)
+                                        }
+                                    },
+                                    // The hero has no card of its own to open actions beside,
+                                    // so select there stays a plain press.
+                                    onHold = row?.onHold?.let { hold -> { hold(itemIndex) } },
+                                )
+                            }
                             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                             if (appShortcutMatches(AppShortcutAction.ToggleTrailer, event)) {
                                 return@onPreviewKeyEvent handleHomeTvKey(HomeTvKey.ToggleTrailer)
@@ -3383,16 +3429,6 @@ fun HomeScreen(
                                 Key.DirectionLeft -> {
                                     mouseActivity.onKeyboardNavigation()
                                     tvFocus.moveItem(-1, tvItemCountForSection(tvFocus.sectionIndex))
-                                    true
-                                }
-                                Key.Enter, Key.NumPadEnter -> {
-                                    if (heroFocusable && tvFocus.sectionIndex == 0) {
-                                        effectiveHeroItems.getOrNull(tvFocus.itemIndex)?.let { posterClickHandler?.invoke(it) }
-                                    } else {
-                                        tvRows.getOrNull(tvRowIndexForSection(tvFocus.sectionIndex))
-                                            ?.onEnter
-                                            ?.invoke(tvFocus.itemIndex)
-                                    }
                                     true
                                 }
                                 Key.LeftBracket -> {
