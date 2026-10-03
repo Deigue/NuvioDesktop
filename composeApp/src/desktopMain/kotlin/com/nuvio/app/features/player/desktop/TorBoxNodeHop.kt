@@ -70,9 +70,7 @@ internal object TorBoxNodeHop {
         .followRedirects(HttpClient.Redirect.NEVER)
         .build()
 
-    internal data class Node(val family: Family, val number: Int, val region: String) {
-        val host: String get() = family.host(number, region)
-    }
+    internal data class Node(val family: Family, val number: Int, val region: String)
 
     internal fun hostOf(url: String): String =
         runCatching { URI(url).host.orEmpty() }.getOrDefault("").lowercase(Locale.ROOT)
