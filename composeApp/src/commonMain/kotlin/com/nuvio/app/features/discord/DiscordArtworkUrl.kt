@@ -22,6 +22,64 @@ internal fun isExternallyFetchableArtworkUrl(url: String?): Boolean {
     return !host.isPrivateArtworkHost()
 }
 
+/**
+ * Discord rejects the whole activity (RPC error 4000) when `assets.large_image` is longer than
+ * this, so an over-long URL is not merely un-rendered — it costs the entire presence update.
+ */
+internal const val DISCORD_ASSET_URL_LIMIT = 300
+
+/** Whether Discord will accept this string as an asset key / external image URL at all. */
+internal fun fitsDiscordAssetLimit(url: String?): Boolean =
+    url != null && url.length <= DISCORD_ASSET_URL_LIMIT
+
+/**
+ * Squares a portrait poster without cropping it, via the images.weserv.nl resizing proxy.
+ *
+ * No `default=` fallback on purpose: the proxy serves that as a bare redirect to the raw fallback,
+ * un-letterboxed and indistinguishable from the primary having worked. The caller walks the
+ * candidates itself instead.
+ *
+ * The source URL is escaped only as far as it has to be to survive as one query value. Full
+ * form-encoding turns every `/`, `:`, `?` and `=` into three characters, which pushed ordinary
+ * poster-service URLs past [DISCORD_ASSET_URL_LIMIT] and got the presence rejected.
+ */
+internal fun fittedDiscordImageUrl(sourceUrl: String): String = buildString {
+    append("https://images.weserv.nl/?url=")
+    append(encodeArtworkQueryValue(sourceUrl))
+    append("&w=512&h=512&fit=contain&bg=transparent")
+}
+
+/**
+ * Percent-encodes [value] for use as a single query parameter value, leaving every character that
+ * RFC 3986 permits literally in a query untouched except the ones that would split or reinterpret
+ * it: `&` (parameter separator), `#` (fragment), `+` (form-decoded as a space) and `%` itself, so
+ * escapes already present in the source survive the proxy's decode intact.
+ */
+internal fun encodeArtworkQueryValue(value: String): String = buildString {
+    value.encodeToByteArray().forEach { byte ->
+        val code = byte.toInt() and 0xFF
+        val char = code.toChar()
+        if (code < 0x80 && char in ARTWORK_QUERY_LITERAL_CHARS) {
+            append(char)
+        } else {
+            append('%')
+            append(HEX_DIGITS[code shr 4])
+            append(HEX_DIGITS[code and 0x0F])
+        }
+    }
+}
+
+private const val HEX_DIGITS = "0123456789ABCDEF"
+
+private val ARTWORK_QUERY_LITERAL_CHARS: Set<Char> = buildSet {
+    addAll('A'..'Z')
+    addAll('a'..'z')
+    addAll('0'..'9')
+    addAll("-._~".toList())
+    // RFC 3986 sub-delims minus '&' and '+', plus the ':' '@' '/' '?' a query may carry literally.
+    addAll("!$'()*,;=:@/?".toList())
+}
+
 /** The host of an absolute http(s) URL, lowercased, with any userinfo and port removed. */
 private fun artworkUrlHost(url: String): String? {
     val authority = url.substringAfter("://", missingDelimiterValue = "")

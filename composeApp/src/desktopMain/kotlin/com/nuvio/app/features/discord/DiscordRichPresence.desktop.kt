@@ -23,7 +23,6 @@ import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
-import java.net.URLEncoder
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -165,22 +164,36 @@ internal actual object DiscordRichPresencePlatform {
      *   proxy 404  → the origin cannot be fetched at all — step to the next candidate;
      *   no answer  → the proxy is down; the raw URL is still better than the logo.
      * Landscape art (`Cover`) is sent raw as before.
+     *
+     * Discord refuses the whole activity when `large_image` exceeds [DISCORD_ASSET_URL_LIMIT]
+     * characters, so over-long candidates never reach it: a raw URL that is too long is dropped,
+     * and a poster whose *proxied* URL is too long is sent raw (cropped beats the logo).
      */
     private fun DiscordRichPresenceActivity.withResolvedArtwork(): DiscordRichPresenceActivity {
-        if (imageFit != DiscordRichPresenceImageFit.Contain) return this
         val candidates = listOfNotNull(imageUrl, fallbackImageUrl)
             .map { it.trim() }
             .filter { it.startsWith("https://") || it.startsWith("http://") }
+            .filter { fitsDiscordAssetLimit(it) }
             .distinct()
+        if (imageFit != DiscordRichPresenceImageFit.Contain) {
+            return copy(imageUrl = candidates.getOrNull(0), fallbackImageUrl = candidates.getOrNull(1))
+        }
         candidates.forEachIndexed { index, candidate ->
             val remaining = candidates.drop(index + 1).firstOrNull()
             val proxied = fittedDiscordImageUrl(candidate)
+            val proxiedFits = fitsDiscordAssetLimit(proxied)
             val probe = artworkProbeCache[proxied] ?: probeArtworkProxy(proxied).also { result ->
                 artworkProbeCache[proxied] = result
-                println("[nuvio-discord] artwork ${artworkHost(candidate)}: ${result.name.lowercase()}")
+                println(
+                    "[nuvio-discord] artwork ${artworkHost(candidate)}: ${result.name.lowercase()}" +
+                        if (proxiedFits) "" else " (proxied URL exceeds $DISCORD_ASSET_URL_LIMIT chars; sending raw)",
+                )
             }
             when (probe) {
-                ArtworkProbe.Proxied -> return copy(imageUrl = proxied, fallbackImageUrl = remaining)
+                ArtworkProbe.Proxied -> return copy(
+                    imageUrl = if (proxiedFits) proxied else candidate,
+                    fallbackImageUrl = remaining,
+                )
                 ArtworkProbe.ProxyRefused,
                 ArtworkProbe.ProxyUnavailable,
                 -> return copy(imageUrl = candidate, fallbackImageUrl = remaining)
@@ -489,6 +502,8 @@ private fun discordPresenceAssets(
         val externalImage = imageUrl
             ?.trim()
             ?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+            // Last line of defence: an over-long URL makes Discord reject the entire activity.
+            ?.takeIf { fitsDiscordAssetLimit(it) }
         put("large_image", externalImage ?: DISCORD_LARGE_IMAGE_KEY)
         if (includeLargeText) {
             put("large_text", truncateDiscordText(if (externalImage != null) title else "Nuvio"))
@@ -519,17 +534,6 @@ private fun DiscordRichPresenceActivity.toPayloadKey(): String =
         activityStyle.name,
         activityName.name,
     ).joinToString("|")
-
-/**
- * Squares a portrait poster without cropping it. No `default=` fallback on purpose: the proxy
- * serves that as a bare redirect to the raw fallback, un-letterboxed and indistinguishable from
- * the primary having worked. `withResolvedArtwork` walks the candidates itself instead.
- */
-private fun fittedDiscordImageUrl(sourceUrl: String): String = buildString {
-    append("https://images.weserv.nl/?url=")
-    append(URLEncoder.encode(sourceUrl, StandardCharsets.UTF_8))
-    append("&w=512&h=512&fit=contain&bg=transparent")
-}
 
 private fun truncateDiscordText(value: String): String =
     value.take(DISCORD_TEXT_LIMIT).ifBlank { "Nuvio" }
