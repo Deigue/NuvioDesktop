@@ -259,6 +259,8 @@ internal class PlayerScreenRuntime(
     var playerMetaVideos by mutableStateOf<List<MetaVideo>>(emptyList())
     var playerChapters by mutableStateOf<List<PlayerChapter>>(emptyList())
     var skipIntervals by mutableStateOf<List<SkipInterval>>(emptyList())
+    var seekrTrack by mutableStateOf<SeekrTrack?>(null)
+    var seekrLookupPending by mutableStateOf(false)
     var communitySkipIntervals by mutableStateOf<List<SkipInterval>>(emptyList())
     var chapterSkipIntervals by mutableStateOf<List<SkipInterval>>(emptyList())
     var activeSkipInterval by mutableStateOf<SkipInterval?>(null)

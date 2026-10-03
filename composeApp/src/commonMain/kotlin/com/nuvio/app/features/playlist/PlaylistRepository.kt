@@ -98,7 +98,7 @@ object PlaylistRepository {
         update(playlistId) { playlist ->
             if (shuffled == playlist.shuffled) return@update playlist
             if (shuffled) {
-                val (order, resume) = PlaylistQueue.shuffle(playlist.entries, playlist.resumeIndex)
+                val (order, resume) = PlaylistQueue.shuffle(playlist.entries)
                 playlist.copy(
                     entries = order,
                     resumeIndex = resume,

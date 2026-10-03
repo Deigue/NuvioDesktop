@@ -88,7 +88,7 @@ actual object SubtitleCacheProvider {
             val target = File(directory, name.take(120))
             target.writeBytes(downloaded.bytes)
             // Desktop players take plain absolute paths; a file: URI is not understood here.
-            subtitle.copy(url = target.absolutePath)
+            subtitle.copy(url = target.absolutePath, sourceUrl = subtitle.url)
         }.getOrNull()
 }
 

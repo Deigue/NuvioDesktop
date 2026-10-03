@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Resizable Sources panel** - drag the in-player Sources panel's inner edge to set its width (up to three quarters of the player); it remembers your width, and double-clicking the edge puts it back to the default.
+- **SIMKL AUTH V2** - connecting to SIMKL now uses its new sign-in (OAuth 2.0 device flow): Nuvio opens simkl.com with the code already filled in, and sessions renew themselves in the background. SIMKL is retiring the old sign-in around April 2027, and its Client IDs can't be upgraded. Existing connections keep working until then. To move across, register a new app at simkl.com/settings/developer, paste its Client ID into SIMKL settings, and press Reconnect. Your watch history stays where it is.
+
 ## 1.15.0 - 2026-09-27
 
 ### Added

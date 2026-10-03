@@ -1,7 +1,7 @@
 package com.nuvio.app.features.simkl
 
 import co.touchlab.kermit.Logger
-import com.nuvio.app.features.addons.httpRequestRaw
+import com.nuvio.app.features.tracking.WatchedHistoryReset
 import com.nuvio.app.features.watched.WatchedItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -32,7 +32,7 @@ internal object SimklWatchedRepository {
     }
 
     suspend fun watchedItems(profileId: Int): List<WatchedItem> {
-        val headers = SimklAuthRepository.authorizedHeaders() ?: return emptyList()
+        if (!SimklAuthRepository.hasUsableToken()) return emptyList()
         // This is the most expensive read in the app — the full history, ~14k rows on a real
         // account, plus an episode-catalog backfill pass over every season-less show. It used to
         // run once per launch, so its cost never mattered; it is now on a five-minute poll, where
@@ -54,7 +54,7 @@ internal object SimklWatchedRepository {
         val url = SimklAuthRepository.appendParams(
             "$BASE_URL/sync/all-items/all?extended=full&episode_watched_at=yes",
         )
-        val response = httpRequestRaw(method = "GET", url = url, headers = headers, body = "")
+        val response = simklRequest(method = "GET", url = url, body = "")
         if (response.status !in 200..299) {
             error("SIMKL watched-history fetch failed: HTTP ${response.status}")
         }
@@ -69,8 +69,16 @@ internal object SimklWatchedRepository {
         // history as current and suppress the retry.
         cachedStamp = stamp
         cachedStampProfileId = profileId
+        pendingResets = payload.toHistoryResets()
         return items
     }
+
+    // Set by each full read, taken by the importer; see consumeHistoryResets.
+    private var pendingResets: List<WatchedHistoryReset> = emptyList()
+
+    /** The show resets seen by the last full read, once. See [SimklAllItemsResponse.toHistoryResets]. */
+    fun consumeHistoryResets(): List<WatchedHistoryReset> =
+        pendingResets.also { pendingResets = emptyList() }
 
     /**
      * Recovers the watch state of shows SIMKL reports as a bare count.
@@ -134,6 +142,39 @@ internal fun simklWatchedHistoryActivitiesStamp(activities: SimklActivities?): S
 }
 
 private val watchedImportLog = Logger.withTag("SimklWatchedImport")
+
+/**
+ * Every non-anime show SIMKL states an explicit episode list for, as the episodes it still has and
+ * when the entry (re)entered the account's lists.
+ *
+ * The import is additive, so a show the user reset on SIMKL — removed and re-added, which restarts
+ * `added_to_watchlist_at` and clears the history — kept every old tick locally, and a fully watched
+ * show that SIMKL now calls "1 of 236" still read as finished here. Each entry becomes a candidate;
+ * the importer decides what, if anything, is stale (see `pruneResetWatchedItems`).
+ *
+ * Anime is left out on purpose: its episode coordinates are remapped between SIMKL's per-entry
+ * numbering and the franchise one, so "not in SIMKL's list" does not reliably mean "not watched".
+ * Season-less entries (bare counts backfilled from the catalog) and rewatch rows say nothing about
+ * which episodes are in the main history, so they are skipped too.
+ */
+internal fun SimklAllItemsResponse.toHistoryResets(): List<WatchedHistoryReset> = shows.mapNotNull { entry ->
+    if (entry.isRewatch || entry.seasons.isEmpty()) return@mapNotNull null
+    val show = entry.showMedia ?: return@mapNotNull null
+    if (show.ids.isKnownAnime()) return@mapNotNull null
+    val id = show.ids.toBestContentId() ?: return@mapNotNull null
+    val resetAt = entry.addedToWatchlistAt?.let(::parseSimklTimestamp) ?: return@mapNotNull null
+    val remote = buildSet {
+        entry.seasons.forEach { season ->
+            val seasonNumber = season.number ?: return@forEach
+            season.episodes.forEach { episode ->
+                if (episode.watchedAt == null) return@forEach
+                val number = episode.number ?: return@forEach
+                add(seasonNumber to number)
+            }
+        }
+    }
+    WatchedHistoryReset(type = "series", id = id, resetAtEpochMs = resetAt, remoteEpisodes = remote)
+}
 
 internal fun SimklAllItemsResponse.toWatchedItems(): List<WatchedItem> = buildList {
     movies.forEach { entry ->

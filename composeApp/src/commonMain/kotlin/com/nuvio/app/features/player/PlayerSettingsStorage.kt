@@ -187,6 +187,8 @@ internal expect object PlayerSettingsStorage {
     fun loadAnimeSkipClientId(): String?
     fun saveAnimeSkipClientId(clientId: String)
 
+    fun loadSeekrApiKey(): String?
+    fun saveSeekrApiKey(apiKey: String)
     fun loadIntroDbApiKey(): String?
     fun saveIntroDbApiKey(apiKey: String)
     fun loadSkipDbApiKey(): String?

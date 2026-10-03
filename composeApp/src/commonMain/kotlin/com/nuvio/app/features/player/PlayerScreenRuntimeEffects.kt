@@ -70,6 +70,7 @@ import kotlinx.serialization.json.put
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.random.Random
 import nuvio.composeapp.generated.resources.*
@@ -1188,6 +1189,46 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
         }
     }
 
+    val seekrEligible = seekrPreviewsEligible(
+        mode = playerSettingsUiState.desktopSeekThumbnailMode,
+        bufferPreset = playerSettingsUiState.desktopBufferPreset,
+        sourceUrl = activeSourceUrl,
+        isTorrent = activeTorrentInfoHash != null,
+        apiKey = playerSettingsUiState.seekrApiKey,
+    )
+    LaunchedEffect(
+        activeVideoId,
+        activeSeasonNumber,
+        activeEpisodeNumber,
+        parentMetaId,
+        activeSourceUrl,
+        seekrEligible,
+        playerSettingsUiState.seekrApiKey,
+    ) {
+        seekrTrack = null
+        seekrLookupPending = seekrEligible
+        if (!seekrEligible) return@LaunchedEffect
+        try {
+            val target = resolveSkipLookupTarget(
+                videoId = activeVideoId,
+                parentMetaId = parentMetaId,
+                contentType = contentType ?: parentMetaType,
+                season = activeSeasonNumber,
+                episode = activeEpisodeNumber,
+            ) ?: return@LaunchedEffect
+            // Seekr matches the cut by runtime, so the lookup has to wait for the player's.
+            val durationMs = withTimeoutOrNull(SKIP_LOOKUP_DURATION_TIMEOUT_MS) {
+                snapshotFlow { playbackSnapshot.durationMs }.first { it > 0L }
+            } ?: return@LaunchedEffect
+            val result = SeekrPreviews.lookup(playerSettingsUiState.seekrApiKey, target, durationMs)
+            SeekrLog.i { "lookup ${target::class.simpleName} duration=${durationMs}ms -> ${result::class.simpleName}" }
+            seekrTrack = (result as? SeekrLookupResult.Found)?.track
+        } finally {
+            // A cancelled run leaves the flag to its successor, which has already set its own.
+            if (isActive) seekrLookupPending = false
+        }
+    }
+
     LaunchedEffect(activeVideoId, activeSeasonNumber, activeEpisodeNumber, parentMetaId, parentMetaType) {
         skipIntervals = emptyList()
         playerChapters = emptyList()
@@ -1807,6 +1848,7 @@ internal fun isTrustworthyPlaybackEnd(
 private const val PLAYLIST_PROGRESS_SAMPLE_MS = 2_000L
 
 internal val BingeAdvanceLog = Logger.withTag("BingeAdvance")
+private val SeekrLog = Logger.withTag("Seekr")
 
 private fun resolveAutoPlayEpisode(
     videos: List<MetaVideo>,

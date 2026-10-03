@@ -1,8 +1,8 @@
 package com.nuvio.app.features.metadata
 
 import co.touchlab.kermit.Logger
-import com.nuvio.app.features.addons.httpRequestRaw
 import com.nuvio.app.features.simkl.SimklAuthRepository
+import com.nuvio.app.features.simkl.simklRequest
 import com.nuvio.app.features.simkl.SimklMediaIds
 import com.nuvio.app.features.simkl.SimklScrobbleRepository
 import com.nuvio.app.features.tmdb.TmdbService
@@ -323,12 +323,7 @@ internal object MediaIdResolver {
         for (endpoint in endpoints) {
             val url = SimklAuthRepository.appendParams("$SIMKL_BASE_URL/$endpoint")
             val response = runCatching {
-                httpRequestRaw(
-                    method = "GET",
-                    url = url,
-                    headers = emptyMap(),
-                    body = "",
-                )
+                simklRequest(method = "GET", url = url, authenticated = false)
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 log.d { "SIMKL ID lookup failed for $endpoint: ${error.message}" }

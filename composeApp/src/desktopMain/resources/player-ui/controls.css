@@ -26,6 +26,10 @@
   /* User scale capped by the effective CSS viewport (which already reflects OS desktop scaling).
    * Panels and popup menus use this so 125% UI scale cannot push them off a short display. */
   --panel-scale: 1;
+  /* The Sources side sheet: the HUD's own auto-scale, without --panel-scale's 0.72 floor. The sheet
+   * sits beside the picture for as long as the user compares streams, so it has to keep the authored
+   * share of the frame; at the floor it drew ~1.44x larger on a 1080p (960x540 CSS) viewport. */
+  --source-panel-scale: 1;
   /* Transient feedback such as playback speed and volume is centred and can safely scale as one
    * unit. JS derives this from the live viewport and the user's player UI scale. */
   --feedback-scale: 1;
@@ -2187,6 +2191,16 @@ button:disabled {
   background: rgba(255,255,255,.045);
 }
 .seek-thumbnail img:not([src]) { visibility: hidden; }
+.seek-thumbnail-sprite { display: none; }
+/* Seekr: the tile is drawn onto a canvas in the frame slot; the native-frame img steps aside. */
+.seek-thumbnail.seekr img { display: none; }
+.seek-thumbnail.seekr .seek-thumbnail-sprite {
+  display: block;
+  width: calc(var(--user-scale) * 224px);
+  height: calc(var(--user-scale) * 126px);
+  border-radius: 6px;
+  background: rgba(255,255,255,.045);
+}
 /* Previews disabled: one compact card, chapter title over the time, no frame slot. The card
    sizes to the title (up to a sane cap) instead of the title being clipped to the card. */
 .seek-thumbnail.no-preview {
@@ -2607,6 +2621,47 @@ button:disabled {
   overflow-x: auto;
   padding: 0 20px 14px;
   flex: 0 0 auto;
+}
+
+/* Sources panel Sort menu: the streams screen's Sort chip, dropped under its header button. */
+.source-sort-anchor {
+  position: relative;
+}
+
+.panel-button.sort-active {
+  border-color: var(--theme-accent-strong);
+  color: rgba(255, 255, 255, .92);
+}
+
+.source-sort-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 210px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  background: rgba(20, 20, 24, .97);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .5);
+}
+
+.source-sort-menu[hidden] {
+  display: none;
+}
+
+.source-sort-menu .filter-chip {
+  width: 100%;
+  text-align: left;
+}
+
+.source-sort-divider {
+  height: 1px;
+  margin: 3px 2px;
+  background: rgba(255, 255, 255, .1);
 }
 
 .subtitle-tabs {
@@ -4017,6 +4072,7 @@ svg {
   border-radius: 18px;
 }
 #sourceModal .track-panel.wide { width: min(92vw, 760px); }
+#sourceModal .track-panel { zoom: var(--source-panel-scale); }
 
 /* Sources is a full-height side sheet, not a centred modal: it stays open across a stream swap so
  * the new stream can be checked and swapped again, which only works if the picture stays visible
@@ -4058,6 +4114,38 @@ svg {
 }
 .player.source-notch-left #sourceModal.modal-visible .track-panel.wide { transform: translateX(0); }
 .player.source-notch-left #sourceModal.modal-closing .track-panel.wide { transform: translateX(-28px); }
+/* Drag-to-resize grip on the sheet's inner edge (controls.js updateSourcePanelWidth). Inside the
+ * panel because .track-panel clips its overflow. */
+.source-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 6;
+  width: 8px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.source-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 3px;
+  height: 44px;
+  border-radius: 2px;
+  background: rgba(255,255,255,.22);
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.source-resize-handle:hover::after,
+.player.source-panel-resizing .source-resize-handle::after { opacity: 1; }
+.player.source-notch-left .source-resize-handle { left: auto; right: 0; }
+.player.source-notch-left .source-resize-handle::after { left: auto; right: 2px; }
+/* While dragging: keep the resize cursor everywhere and stop text selection in the rows. */
+.player.source-panel-resizing,
+.player.source-panel-resizing * { cursor: ew-resize !important; user-select: none !important; }
 /* The buffering spinner is allowed through while the sheet is open (a swapped stream has to show
  * that it is loading), so it is centred on the uncovered picture rather than the whole player.
  * --source-panel-width is the sheet's on-screen width, set from JS with the panel zoom applied. */
@@ -4181,6 +4269,13 @@ svg {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* The Sources sheet is read for a while beside the picture (often from a distance), so its rows
+ * run a step larger than the shared track/episode row type. SourcePanelWidth in controls.js is
+ * sized for these. */
+.source-row .stream-name { font-size: 16px; }
+.source-row .stream-subtitle,
+.source-row .stream-addon { font-size: 14px; }
+.source-row .stream-addon-inline { font-size: 13px; }
 .stream-badges {
   display: flex;
   flex: 0 0 auto;

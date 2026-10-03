@@ -11,6 +11,12 @@ fun resumeProgressForSeries(
     progressRecords: List<WatchingProgressRecord>,
 ): WatchingProgressRecord? = progressRecords
     .filter { record -> record.content == content && !record.isCompleted }
+    // A row with no episode for the bare show id resumes nothing: Play would search streams for
+    // "any episode". It can only come from an older build or a remote store; see
+    // isEpisodelessSeriesEntry.
+    .filterNot { record ->
+        record.seasonNumber == null && record.episodeNumber == null && record.videoId == content.id
+    }
     .maxByOrNull { record -> record.lastUpdatedEpochMs }
 
 fun continueWatchingProgressEntries(

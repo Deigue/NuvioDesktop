@@ -300,9 +300,13 @@ enum class DesktopSeekThumbnailMode(val label: String, val description: String) 
         "Local",
         "Previews only for files on this PC and servers on your home network. Debrid and other internet streams, and torrents, get none.",
     ),
+    LocalAndSeekr(
+        "Local + Seekr",
+        "Local previews for files on this PC and your home network. Debrid streams and torrents use Seekr's ready-made thumbnails when it has the title and show none otherwise, so the stream's host is never asked. Needs a Seekr key under Integrations.",
+    ),
     Streaming(
         "Streaming",
-        "Previews for every source. Each hovered position is another request to the stream's host, which can get you rate-limited by debrid providers.",
+        "Previews for every source. With a Seekr key, streams use Seekr's thumbnails first. Otherwise each hovered position is another request to the stream's host, which can get you rate-limited by debrid providers.",
     ),
 }
 

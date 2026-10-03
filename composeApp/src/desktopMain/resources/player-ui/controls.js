@@ -17,6 +17,7 @@ const chapterMarkers = document.getElementById("chapterMarkers");
 const chapterTooltip = document.getElementById("chapterTooltip");
 const seekThumbnail = document.getElementById("seekThumbnail");
 const seekThumbnailImage = document.getElementById("seekThumbnailImage");
+const seekThumbnailSprite = document.getElementById("seekThumbnailSprite");
 const seekThumbnailChapter = document.getElementById("seekThumbnailChapter");
 const seekThumbnailTime = document.getElementById("seekThumbnailTime");
 const positionLabel = document.getElementById("position");
@@ -205,8 +206,11 @@ const shadowColorSwatches = document.getElementById("shadowColorSwatches");
 const subtitleStyleReset = document.getElementById("subtitleStyleReset");
 const sourceModal = document.getElementById("sourceModal");
 const sourcePanel = sourceModal ? sourceModal.querySelector(".track-panel") : null;
+const sourcePanelResizeHandle = document.getElementById("sourcePanelResizeHandle");
 const sourcePanelTitle = document.getElementById("sourcePanelTitle");
 const sourceReloadButton = document.getElementById("sourceReloadButton");
+const sourceSortButton = document.getElementById("sourceSortButton");
+const sourceSortMenu = document.getElementById("sourceSortMenu");
 const sourceCloseButton = document.getElementById("sourceCloseButton");
 const sourceFilterList = document.getElementById("sourceFilterList");
 const sourceList = document.getElementById("sourceList");
@@ -293,6 +297,8 @@ let state = {
   desktopAnimeModeLabel: "Off",
   desktopAnimeSvpEnabled: false,
   seekThumbnailsEnabled: true,
+  seekrVttUrl: "",
+  seekrScale: 1,
   seekStepSeconds: 10,
   tapToUnlockLabel: "Tap to unlock",
   playbackErrorTitle: "Playback error",
@@ -511,6 +517,15 @@ let selectedEpisodeSeason = null;
 let episodeStreamFilterId = "";
 let keyboardPanelMode = "";
 let keyboardSourceIndex = 0;
+// True while the Sources list sits at its top. Providers answer one at a time and every answer
+// re-sorts the list; a list the user has not scrolled keeps showing its (new) top instead of
+// keeping a stale offset. Once the user scrolls, their position is left alone.
+let sourceListPinnedTop = true;
+const setSourceSortMenuOpen = open => {
+  if (!sourceSortMenu || !sourceSortButton) return;
+  sourceSortMenu.hidden = !open;
+  sourceSortButton.setAttribute("aria-expanded", open ? "true" : "false");
+};
 let keyboardEpisodeIndex = 0;
 let keyboardEpisodeStreamIndex = 0;
 let keyboardEpisodeShowingStreams = false;
@@ -604,6 +619,11 @@ function applyControlIconScale(percent) {
   invalidateActionRowOverflow();
 }
 
+// Windows display scale of the monitor the player is on (DPI / 96), pushed by the native bridge
+// with each playerUpdate. The page itself cannot see it: the bridge's 192/dpi zoom normalizes it
+// away, so devicePixelRatio is the same 2x on every display.
+let hostDisplayScale = 1;
+
 function updateViewportUiScale() {
   const userScale = 1;
   // Native zoom owns DPI normalization and the user's preference. This second factor is strictly
@@ -613,11 +633,19 @@ function updateViewportUiScale() {
   const viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
   const proportionalScale = Math.min(viewportWidth / 1920, viewportHeight / 1080, 1);
   // Below this, further shrinking would make targets unreadable. Compactness tiers remove controls
-  // instead while preserving play/pause and the timeline.
-  const autoScale = Math.max(0.5, proportionalScale);
+  // instead while preserving play/pause and the timeline. The floor is the full-screen 1080p size
+  // in Windows DIPs, not raw pixels: because the zoom normalizes DPI away, a fixed 0.5 let a
+  // windowed player on a scaled display (4K at 150-200%) shrink its text to half or less of normal
+  // Windows text. PiP and the hero trailer are deliberately tiny surfaces and keep the raw floor.
+  const minScale = state.pictureInPictureActive || isHeroTrailerSurface
+    ? 0.5
+    : Math.min(1, 0.5 * hostDisplayScale);
+  const autoScale = Math.max(minScale, proportionalScale);
   const combined = userScale * autoScale;
 
   const panelScale = Math.max(0.72, Math.min(1, autoScale));
+  // The Sources sheet follows the HUD exactly (see --source-panel-scale in controls.css).
+  const sourcePanelScale = Math.min(1, autoScale);
 
   const feedbackViewportScale = Math.max(0.65, Math.min(1, autoScale));
   const feedbackScale = feedbackViewportScale * userScale;
@@ -634,7 +662,7 @@ function updateViewportUiScale() {
     : layoutWidth < 1500 ? "medium"
     : "full";
 
-  const signature = `${combined}|${panelScale}|${feedbackScale}|${tier}`;
+  const signature = `${combined}|${panelScale}|${sourcePanelScale}|${feedbackScale}|${tier}`;
   if (signature === appliedScaleSignature) return;
   appliedScaleSignature = signature;
   appliedCombinedUserScale = combined;
@@ -642,6 +670,7 @@ function updateViewportUiScale() {
   const rootStyle = document.documentElement.style;
   rootStyle.setProperty("--user-scale", String(combined));
   rootStyle.setProperty("--panel-scale", String(panelScale));
+  rootStyle.setProperty("--source-panel-scale", String(sourcePanelScale));
   rootStyle.setProperty("--feedback-scale", String(feedbackScale));
   rootStyle.setProperty("--feedback-hidden-scale", String(feedbackScale * 0.85));
   root.classList.toggle("hud-medium", tier !== "full");
@@ -1006,6 +1035,96 @@ const seekThumbnailCache = new Map();
 let seekThumbnailRequestTimer = 0;
 let pendingSeekThumbnailPosition = -1;
 
+// Seekr sprites: Kotlin does the keyed lookup and hands over only the signed WebVTT URL, which
+// (like the sheets it lists) needs no key. Cues map source time to a tile on a sprite sheet.
+let seekrTrack = null;
+let seekrTrackUrl = "";
+const seekrSheets = new Map();
+const SEEKR_SHEET_CACHE = 4;
+let seekrPendingCue = null;
+
+const parseVttTimeMs = text => {
+  const parts = String(text).trim().split(":").map(Number);
+  if (parts.some(part => !Number.isFinite(part))) return NaN;
+  return Math.round(parts.reduce((total, part) => total * 60 + part, 0) * 1000);
+};
+
+const parseSeekrVtt = text => {
+  const cues = [];
+  for (const block of String(text).replace(/\r/g, "").split(/\n\n+/)) {
+    const lines = block.split("\n").map(line => line.trim()).filter(Boolean);
+    const timing = lines.findIndex(line => line.includes("-->"));
+    if (timing < 0 || !lines[timing + 1]) continue;
+    const [startText, endText] = lines[timing].split("-->");
+    const match = /^(.*)#xywh=(\d+),(\d+),(\d+),(\d+)$/.exec(lines[timing + 1]);
+    const start = parseVttTimeMs(startText);
+    const end = parseVttTimeMs(endText);
+    if (!match || !Number.isFinite(start) || !Number.isFinite(end)) continue;
+    cues.push({ start, end, src: match[1], x: +match[2], y: +match[3], w: +match[4], h: +match[5] });
+  }
+  return cues.sort((a, b) => a.start - b.start);
+};
+
+const syncSeekrTrack = () => {
+  const url = String(state.seekrVttUrl || "");
+  if (url === seekrTrackUrl) return;
+  seekrTrackUrl = url;
+  seekrTrack = null;
+  seekrSheets.clear();
+  if (!url) return;
+  fetch(url).then(response => (response.ok ? response.text() : Promise.reject(response.status))).then(text => {
+    if (seekrTrackUrl !== url) return;
+    const cues = parseSeekrVtt(text);
+    seekrTrack = cues.length ? cues : null;
+  }).catch(() => {
+    // Leave previews off for this playback rather than show an empty frame.
+  });
+};
+
+const seekrCueAt = clientPositionMs => {
+  if (!seekrTrack) return null;
+  const scale = Number(state.seekrScale) > 0 ? Number(state.seekrScale) : 1;
+  const sourceMs = clientPositionMs / scale;
+  let low = 0;
+  let high = seekrTrack.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const cue = seekrTrack[mid];
+    if (sourceMs < cue.start) high = mid - 1;
+    else if (sourceMs >= cue.end) low = mid + 1;
+    else return cue;
+  }
+  return null;
+};
+
+const drawSeekrCue = cue => {
+  seekrPendingCue = cue;
+  const context = seekThumbnailSprite.getContext("2d");
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(seekThumbnailSprite.clientWidth * ratio));
+  const height = Math.max(1, Math.round(seekThumbnailSprite.clientHeight * ratio));
+  if (seekThumbnailSprite.width !== width) seekThumbnailSprite.width = width;
+  if (seekThumbnailSprite.height !== height) seekThumbnailSprite.height = height;
+  let sheet = seekrSheets.get(cue.src);
+  if (!sheet) {
+    sheet = new Image();
+    sheet.decoding = "async";
+    sheet.addEventListener("load", () => {
+      if (seekrPendingCue && seekrPendingCue.src === cue.src) drawSeekrCue(seekrPendingCue);
+    });
+    sheet.src = cue.src;
+    seekrSheets.set(cue.src, sheet);
+    while (seekrSheets.size > SEEKR_SHEET_CACHE) {
+      seekrSheets.delete(seekrSheets.keys().next().value);
+    }
+  }
+  if (!sheet.complete || !sheet.naturalWidth) {
+    context.clearRect(0, 0, width, height);
+    return;
+  }
+  context.drawImage(sheet, cue.x, cue.y, cue.w, cue.h, 0, 0, width, height);
+};
+
 const hideSeekThumbnail = () => {
   window.clearTimeout(seekThumbnailRequestTimer);
   seekThumbnailRequestTimer = 0;
@@ -1016,13 +1135,16 @@ const hideSeekThumbnail = () => {
 const showSeekThumbnailAt = event => {
   // With previews off the card still shows the hovered time and chapter — those cost nothing.
   // Only the frame itself needs the second stream and its range request.
-  const previewsEnabled = !!state.seekThumbnailsEnabled;
-  seekThumbnail.classList.toggle("no-preview", !previewsEnabled);
   const durationMs = Math.max(0, Number(state.durationMs) || 0);
   const rect = seek.getBoundingClientRect();
   if (durationMs <= 0 || rect.width <= 0) return hideSeekThumbnail();
   const progress = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
   const exactPositionMs = Math.round(durationMs * progress);
+  // Seekr sprites cost the stream's host nothing, so they draw at once with no settle delay.
+  const seekrCue = seekrCueAt(exactPositionMs);
+  const previewsEnabled = !!seekrCue || !!state.seekThumbnailsEnabled;
+  seekThumbnail.classList.toggle("no-preview", !previewsEnabled);
+  seekThumbnail.classList.toggle("seekr", !!seekrCue);
   const thumbnailPositionMs = Math.round(exactPositionMs / 5000) * 5000;
   const localX = Math.max(112, Math.min(rect.width - 112, event.clientX - rect.left));
   seekThumbnail.style.left = `${rect.left - timeline.getBoundingClientRect().left + localX}px`;
@@ -1038,6 +1160,11 @@ const showSeekThumbnailAt = event => {
   if (!previewsEnabled) {
     seekThumbnailImage.removeAttribute("src");
     seekThumbnail.hidden = false;
+    return;
+  }
+  if (seekrCue) {
+    seekThumbnail.hidden = false;
+    drawSeekrCue(seekrCue);
     return;
   }
   const cached = seekThumbnailCache.get(thumbnailPositionMs);
@@ -1506,7 +1633,13 @@ const openPlayerModal = modal => {
     keyboardPanelMode = "";
     send("keyboardPanelClosed", 0);
   }
+  const openingSources = modal === "sources" && activeModal !== "sources";
   activeModal = modal;
+  // Every opening of the Sources sheet starts at the top, whatever it was scrolled to last time.
+  if (openingSources) {
+    sourceListPinnedTop = true;
+    setSourceSortMenuOpen(false);
+  }
   // Modals draw their own scrim at the same stacking level, so the grade panel would sit dimmed
   // and unusable behind one. Close it rather than leave a dead panel on screen.
   setColorGradePanelOpen(false);
@@ -1522,6 +1655,11 @@ const openPlayerModal = modal => {
   modalElements.forEach(modalElement => {
     setModalVisibility(modalElement, modalElement === targetModal);
   });
+  // Set again once visible: a scrollTop written while the sheet was still hidden is dropped.
+  if (openingSources) {
+    sourceList.scrollTop = 0;
+    requestSourceVirtualRender();
+  }
   renderChrome();
 };
 
@@ -3150,7 +3288,7 @@ const SourceRowOverscanPx = 720;
 // in the panel's own unzoomed coordinate space — so measured row heights must be divided back into
 // that space or they drift by the scale factor and rows overlap (scaled down) / gap (scaled up).
 const currentSourcePanelScale = () => {
-  const raw = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--panel-scale"));
+  const raw = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--source-panel-scale"));
   return Number.isFinite(raw) && raw > 0 ? raw : 1;
 };
 
@@ -3358,41 +3496,149 @@ const requestSourceVirtualRender = () => {
   sourceVirtualRenderRaf = window.requestAnimationFrame(renderSourceVirtualRows);
 };
 
-const updateSourcePanelWidth = items => {
+// The sheet's default width in the panel's own (unzoomed) space. Fixed rather than fitted to the
+// rows: it used to grow with the widest label/subtitle, so an addon that prints the full release
+// filename (AIOStreams, Torrentio-style formatters) opened the sheet at its half-player cap. Long
+// lines wrap inside the row instead. Sized for the 16/14px source-row type in controls.css.
+// The user can drag the sheet's inner edge to any width in [SourcePanelMinWidth, max share of the
+// player]; that choice is kept per HUD profile in localStorage and double-clicking the edge resets it.
+const SourcePanelWidth = 600;
+const SourcePanelMinWidth = 360;
+const SourcePanelMaxViewportShare = .75;
+const SourcePanelWidthStorageKey = "nuvioSourcePanelWidth";
+
+const readStoredSourcePanelWidth = () => {
+  try {
+    const raw = Number(window.localStorage.getItem(SourcePanelWidthStorageKey));
+    return Number.isFinite(raw) && raw > 0 ? raw : null;
+  } catch (_) {
+    return null;
+  }
+};
+
+let sourcePanelPreferredWidth = readStoredSourcePanelWidth();
+
+const storeSourcePanelWidth = width => {
+  try {
+    if (width == null) window.localStorage.removeItem(SourcePanelWidthStorageKey);
+    else window.localStorage.setItem(SourcePanelWidthStorageKey, String(Math.round(width)));
+  } catch (_) {
+    // Storage unavailable: the width still applies for this session.
+  }
+};
+
+const updateSourcePanelWidth = () => {
   if (!sourcePanel) return;
-  const canvas = updateSourcePanelWidth.canvas || (updateSourcePanelWidth.canvas = document.createElement("canvas"));
-  const context = canvas.getContext("2d");
-  if (!context) return;
-  const measureLines = (value, font) => {
-    context.font = font;
-    return String(value || "")
-      .split(/\r?\n/)
-      .reduce((widest, line) => Math.max(widest, context.measureText(line).width), 0);
-  };
-  const fontFamily = uiFontStack;
-  const contentWidth = items.reduce((widest, item) => {
-    const primary = Math.max(
-      measureLines(item.label || "Stream", `700 14px ${fontFamily}`),
-      Math.min(620, measureLines(item.subtitle, `400 12px ${fontFamily}`)),
-    );
-    // The addon is absolutely right-aligned inside the row and must not dictate panel width.
-    return Math.max(widest, primary + 92);
-  }, 400);
-  // A side sheet: never more than half the player, so the picture stays watchable beside it.
-  const viewportLimit = Math.max(500, Math.min(760, window.innerWidth * .5));
-  const panelWidth = Math.round(Math.min(viewportLimit, Math.max(540, contentWidth * 1.15)));
+  // The width is set inside the zoomed panel, so the viewport limits are converted into that
+  // unzoomed space. The minimum yields to the maximum on a very small player.
+  const scale = currentSourcePanelScale();
+  const maxWidth = (window.innerWidth * SourcePanelMaxViewportShare) / scale;
+  const preferred = sourcePanelPreferredWidth == null ? SourcePanelWidth : sourcePanelPreferredWidth;
+  // The default (no user width) keeps the old half-player cap; an explicit drag may go wider.
+  const limit = sourcePanelPreferredWidth == null ? (window.innerWidth * .5) / scale : maxWidth;
+  const panelWidth = Math.round(Math.min(limit, Math.max(Math.min(SourcePanelMinWidth, limit), preferred)));
   sourcePanel.style.width = `${panelWidth}px`;
   // On-screen width (the panel is CSS-zoomed) for centring the buffering spinner beside the sheet.
   document.documentElement.style.setProperty(
     "--source-panel-width",
-    `${Math.round(panelWidth * currentSourcePanelScale())}px`,
+    `${Math.round(panelWidth * scale)}px`,
   );
+};
+
+// Drag-to-resize on the sheet's inner edge (left edge when docked right, right edge when docked
+// left). Pointer coords and the modal layer's rect are both viewport pixels; the layer itself is
+// not zoomed, so the docked edge is its own left/right.
+let sourceResizePointerId = null;
+let consumeSourceResizeClick = false;
+
+const sourcePanelWidthFromPointer = event => {
+  const layer = sourceModal.getBoundingClientRect();
+  const dockedLeft = root.classList.contains("source-notch-left");
+  const screenWidth = dockedLeft ? event.clientX - layer.left : layer.right - event.clientX;
+  return screenWidth / currentSourcePanelScale();
+};
+
+const clampSourcePanelWidth = width => {
+  const maxWidth = (window.innerWidth * SourcePanelMaxViewportShare) / currentSourcePanelScale();
+  return Math.min(maxWidth, Math.max(Math.min(SourcePanelMinWidth, maxWidth), width));
+};
+
+const endSourcePanelResize = event => {
+  if (sourceResizePointerId === null || (event && event.pointerId !== sourceResizePointerId)) return;
+  sourceResizePointerId = null;
+  root.classList.remove("source-panel-resizing");
+  if (sourcePanelPreferredWidth != null) storeSourcePanelWidth(sourcePanelPreferredWidth);
+  // The click that follows pointerup may land on the backdrop if the pointer ended outside the
+  // sheet; it must not close it.
+  consumeSourceResizeClick = true;
+  window.setTimeout(() => { consumeSourceResizeClick = false; }, 0);
+};
+
+if (sourcePanelResizeHandle) {
+  sourcePanelResizeHandle.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    sourceResizePointerId = event.pointerId;
+    sourcePanelResizeHandle.setPointerCapture(event.pointerId);
+    root.classList.add("source-panel-resizing");
+    setSourceSortMenuOpen(false);
+  });
+  sourcePanelResizeHandle.addEventListener("pointermove", event => {
+    if (event.pointerId !== sourceResizePointerId) return;
+    sourcePanelPreferredWidth = clampSourcePanelWidth(sourcePanelWidthFromPointer(event));
+    updateSourcePanelWidth();
+    requestSourceVirtualRender();
+  });
+  sourcePanelResizeHandle.addEventListener("pointerup", endSourcePanelResize);
+  sourcePanelResizeHandle.addEventListener("pointercancel", endSourcePanelResize);
+  sourcePanelResizeHandle.addEventListener("lostpointercapture", endSourcePanelResize);
+  sourcePanelResizeHandle.addEventListener("click", event => event.stopPropagation());
+  sourcePanelResizeHandle.addEventListener("dblclick", event => {
+    event.stopPropagation();
+    sourcePanelPreferredWidth = null;
+    storeSourcePanelWidth(null);
+    updateSourcePanelWidth();
+    requestSourceVirtualRender();
+  });
+}
+
+const pinSourceListTop = () => {
+  sourceListPinnedTop = true;
+  sourceList.scrollTop = 0;
+};
+
+// The streams screen's Sort chip, shared setting: Kotlin applies the order to sourceItems.
+const renderSourceSortMenu = () => {
+  if (!sourceSortMenu || !sourceSortButton) return;
+  const options = normalizeItems(state.sourceSortOptions);
+  sourceSortButton.hidden = options.length === 0;
+  const selected = options.find(option => Boolean(option.isSelected));
+  const isDefault = !selected || String(selected.id) === "0";
+  sourceSortButton.textContent = state.sourceSortLabel || "Sort";
+  sourceSortButton.classList.toggle("sort-active", !isDefault || Boolean(state.sourceCachedFirst));
+
+  sourceSortMenu.textContent = "";
+  options.forEach(option => {
+    appendFilterChip(sourceSortMenu, option.label || "", Boolean(option.isSelected), () => {
+      setSourceSortMenuOpen(false);
+      pinSourceListTop();
+      send("setSourceSort", Number(option.id) || 0);
+    });
+  });
+  const divider = document.createElement("div");
+  divider.className = "source-sort-divider";
+  sourceSortMenu.appendChild(divider);
+  appendFilterChip(sourceSortMenu, "Cached first", Boolean(state.sourceCachedFirst), () => {
+    pinSourceListTop();
+    send("setSourceCachedFirst", state.sourceCachedFirst ? 0 : 1);
+  });
 };
 
 const renderSourceModal = () => {
   sourcePanelTitle.textContent = state.sourcesPanelTitle || "Sources";
   sourceReloadButton.textContent = state.reloadLabel || "Reload";
   sourceCloseButton.textContent = state.panelCloseLabel || "Close";
+  renderSourceSortMenu();
 
   const filters = normalizeItems(state.sourceFilters);
   if (sourceFilterId && !filters.some(filter => String(filter.id || "") === sourceFilterId)) {
@@ -3400,17 +3646,22 @@ const renderSourceModal = () => {
   }
   renderFilterRow(sourceFilterList, filters, sourceFilterId, id => {
     sourceFilterId = id;
-    sourceList.scrollTop = 0;
+    pinSourceListTop();
     renderSourceModal();
   });
 
+  // Captured before the list is emptied: anything below that forces a layout (the width
+  // measurement reads computed style) clamps scrollTop to 0 against the empty list, and the
+  // resulting scroll event would also mark the list as pinned.
+  const keepPinnedTop = sourceListPinnedTop;
+  const previousScrollTop = sourceList.scrollTop;
   sourceList.textContent = "";
   sourceList.classList.remove("virtualized");
   let items = normalizeItems(state.sourceItems);
   if (sourceFilterId) {
     items = items.filter(item => String(item.filterId || "") === sourceFilterId);
   }
-  updateSourcePanelWidth(items);
+  updateSourcePanelWidth();
   if (items.length === 0) {
     sourceVirtualItems = [];
     sourceVirtualSpacer = null;
@@ -3425,7 +3676,6 @@ const renderSourceModal = () => {
   const nextKey = sourceKeyForItems(items);
   if (nextKey !== sourceVirtualKey) {
     resetSourceVirtualState(items, nextKey);
-    sourceList.scrollTop = 0;
   } else {
     sourceVirtualItems = items;
   }
@@ -3434,6 +3684,10 @@ const renderSourceModal = () => {
   sourceVirtualSpacer.className = "source-virtual-spacer";
   sourceList.appendChild(sourceVirtualSpacer);
   rebuildSourceVirtualLayout();
+  // Pinned: the top, whatever offset the list last had (a previous opening, a longer list) — that
+  // stale offset is what opened the panel part-way down. Otherwise the user's own position.
+  sourceListPinnedTop = keepPinnedTop;
+  sourceList.scrollTop = keepPinnedTop ? 0 : previousScrollTop;
   renderSourceVirtualRows();
 };
 
@@ -4266,7 +4520,11 @@ const renderChrome = () => {
   const isPlaying = Boolean(state.isPlaying);
   const showError = renderPlaybackError();
   const pictureInPictureActive = Boolean(state.pictureInPictureActive);
-  root.classList.toggle("pip-active", pictureInPictureActive);
+  // PiP takes the raw scale floor (see updateViewportUiScale); re-derive the scale on entry/exit.
+  if (root.classList.contains("pip-active") !== pictureInPictureActive) {
+    root.classList.toggle("pip-active", pictureInPictureActive);
+    updateViewportUiScale();
+  }
   root.classList.toggle("locked", Boolean(state.isLocked));
   root.classList.toggle("episode-panel-open", activeModal === "episodes");
   root.classList.toggle("source-panel-open", activeModal === "sources");
@@ -5323,6 +5581,7 @@ openingOverlay.addEventListener("click", event => {
 modalElements.forEach(modal => {
   modal.addEventListener("click", event => {
     event.stopPropagation();
+    if (modal === sourceModal && consumeSourceResizeClick) return;
     if (event.target === modal) closePlayerModal(true);
   });
 });
@@ -5484,10 +5743,24 @@ sourceCloseButton.addEventListener("click", event => {
   closePlayerModal();
 });
 sourceList.addEventListener("scroll", () => {
+  sourceListPinnedTop = sourceList.scrollTop <= 1;
   if (activeModal === "sources") {
     requestSourceVirtualRender();
   }
 }, { passive: true });
+if (sourceSortButton) {
+  sourceSortButton.addEventListener("click", event => {
+    event.stopPropagation();
+    setSourceSortMenuOpen(sourceSortMenu.hidden);
+  });
+}
+if (sourceSortMenu) {
+  // Clicks inside the menu must not reach the panel's close-menu handler below.
+  sourceSortMenu.addEventListener("click", event => event.stopPropagation());
+}
+if (sourcePanel) {
+  sourcePanel.addEventListener("click", () => setSourceSortMenuOpen(false));
+}
 episodesCloseButton.addEventListener("click", event => {
   event.stopPropagation();
   closePlayerModal();
@@ -5909,6 +6182,11 @@ window.playerUpdate = update => {
   const subtitleTracks = normalizeTracks(update.subtitleTracks);
   const audioTracksChanged = trackListSignature(audioTracks) !== trackListSignature(state.audioTracks);
   const subtitleTracksChanged = trackListSignature(subtitleTracks) !== trackListSignature(state.subtitleTracks);
+  const displayScale = Number(update.displayScale);
+  if (Number.isFinite(displayScale) && displayScale > 0 && displayScale !== hostDisplayScale) {
+    hostDisplayScale = displayScale;
+    updateViewportUiScale();
+  }
   state = {
     ...state,
     durationMs,
@@ -5933,8 +6211,10 @@ window.playerControls = nextState => {
   const previousOpenSourcesToken = Number(state.openSourcesToken) || 0;
   state = { ...state, ...nextState };
   applyUiFontFamily(state.uiFontFamily);
+  syncSeekrTrack();
   if (!state.seekThumbnailsEnabled) {
-    hideSeekThumbnail();
+    // A live Seekr track keeps the card: it draws sprites with the native decoder off.
+    if (!seekrTrackUrl) hideSeekThumbnail();
     seekThumbnailCache.clear();
     seekThumbnailImage.removeAttribute("src");
   }

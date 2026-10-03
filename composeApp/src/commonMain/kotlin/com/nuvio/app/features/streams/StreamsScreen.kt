@@ -90,6 +90,7 @@ import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.text.AnnotatedString
 import com.nuvio.app.core.build.AppFeaturePolicy
 import com.nuvio.app.core.ui.NuvioBackButton
+import com.nuvio.app.core.ui.KeepListAtTopWhileItemsArrive
 import com.nuvio.app.core.ui.navigationKey
 import com.nuvio.app.core.ui.NuvioBottomSheetActionRow
 import com.nuvio.app.core.ui.NuvioBottomSheetDivider
@@ -1737,6 +1738,11 @@ internal fun StreamList(
             contentType = contentType,
         )
     }
+
+    // Providers answer in completion order and each arrival re-sorts the list, so without this a
+    // list still sitting at its top would follow the first row it showed down past everything that
+    // sorted above it, and open near the bottom.
+    KeepListAtTopWhileItemsArrive(listState, entries)
 
     val formatStreamSize = rememberStreamSizeLabelFormat()
     CompositionLocalProvider(LocalStreamSizeLabelFormat provides formatStreamSize) {

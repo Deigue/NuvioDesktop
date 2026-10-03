@@ -50,6 +50,7 @@ internal fun LazyListScope.integrationsContent(
     onTraktClick: () -> Unit,
     onSimklClick: () -> Unit,
     onYamtrackClick: () -> Unit,
+    onSeekrClick: () -> Unit,
     onLightsClick: () -> Unit,
     onDiscordClick: () -> Unit,
 ) {
@@ -158,6 +159,16 @@ internal fun LazyListScope.integrationsContent(
                     isTablet = isTablet,
                     onClick = onYamtrackClick,
                 )
+                if (isDesktop) {
+                    SettingsGroupDivider(isTablet = isTablet)
+                    SettingsNavigationRow(
+                        title = stringResource(Res.string.compose_settings_page_seekr),
+                        description = stringResource(Res.string.settings_integrations_seekr_description),
+                        icon = Icons.Rounded.Image,
+                        isTablet = isTablet,
+                        onClick = onSeekrClick,
+                    )
+                }
                 if (isDesktop) {
                     SettingsGroupDivider(isTablet = isTablet)
                     SettingsNavigationRow(

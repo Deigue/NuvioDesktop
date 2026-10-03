@@ -16,24 +16,21 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.features.cloud.CloudLibraryContentType
 import com.nuvio.app.features.cloud.cloudLibraryDisplayArtworkUrl
 import com.nuvio.app.features.watchprogress.ContinueWatchingItem
 import dev.chrisbanes.haze.HazeState
-import kotlinx.coroutines.launch
 import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.cw_action_go_to_details
 import nuvio.composeapp.generated.resources.cw_action_remove
@@ -42,7 +39,6 @@ import nuvio.composeapp.generated.resources.cw_action_start_from_beginning
 import nuvio.composeapp.generated.resources.play_choose_source
 import org.jetbrains.compose.resources.stringResource
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NuvioContinueWatchingActionSheet(
     item: ContinueWatchingItem?,
@@ -67,241 +63,112 @@ fun NuvioContinueWatchingActionSheet(
     addRowToPlaylistLabel: String = "",
     zoomAnchor: PosterZoomAnchor? = null,
     zoomHazeState: HazeState? = null,
+    /** See [NuvioPosterActionSheet]'s parameter of the same name. */
+    contextMenuPosition: IntOffset? = null,
 ) {
     if (item == null) return
+    val actions = buildList {
+        if (showDetailsOption) {
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.Default.Info,
+                    label = stringResource(Res.string.cw_action_go_to_details),
+                    onSelected = onOpenDetails,
+                ),
+            )
+        }
+        if (primaryPlayLabel != null && onPrimaryPlay != null) {
+            add(PosterZoomOverlayAction(Icons.Default.PlayArrow, primaryPlayLabel, onSelected = onPrimaryPlay, group = 1))
+        }
+        if (alternatePlayLabel != null && onAlternatePlay != null) {
+            add(PosterZoomOverlayAction(Icons.Default.PlayArrow, alternatePlayLabel, onSelected = onAlternatePlay, group = 1))
+        }
+        if (onChooseSource != null) {
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+                    label = stringResource(Res.string.play_choose_source),
+                    onSelected = onChooseSource,
+                    group = 1,
+                ),
+            )
+        }
+        if (!item.isNextUp && onStartFromBeginning != null) {
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.Default.Replay,
+                    label = stringResource(Res.string.cw_action_start_from_beginning),
+                    onSelected = onStartFromBeginning,
+                    group = 1,
+                ),
+            )
+        }
+        onAddToPlaylist?.let { addToPlaylist ->
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    label = "Add to playlist",
+                    onSelected = addToPlaylist,
+                    group = 2,
+                ),
+            )
+        }
+        onAddRowToPlaylist?.let { addRow ->
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    label = addRowToPlaylistLabel,
+                    onSelected = addRow,
+                    group = 2,
+                ),
+            )
+        }
+        add(
+            PosterZoomOverlayAction(
+                icon = Icons.Default.Refresh,
+                label = stringResource(Res.string.cw_action_resync),
+                onSelected = onResync,
+                group = 3,
+            ),
+        )
+        add(
+            PosterZoomOverlayAction(
+                icon = Icons.Default.DeleteOutline,
+                label = stringResource(Res.string.cw_action_remove),
+                isDestructive = true,
+                onSelected = onRemove,
+                group = 4,
+            ),
+        )
+    }
+
+    if (contextMenuPosition != null) {
+        NuvioContextMenu(windowPosition = contextMenuPosition, actions = actions, onDismiss = onDismiss)
+        return
+    }
     val posterCardStyle = rememberPosterCardStyleUiState()
     if (posterCardStyle.zoomActionPreviewEnabled && zoomHazeState != null) {
-        NuvioContinueWatchingZoomActionSheet(
-            item = item,
-            primaryPlayLabel = primaryPlayLabel,
-            alternatePlayLabel = alternatePlayLabel,
-            showDetailsOption = showDetailsOption,
+        // Long-press zoom preview, the same as catalog posters, so the setting applies to every
+        // shelf rather than just catalog posters.
+        NuvioPosterZoomActionOverlay(
+            imageUrl = zoomAnchor?.imageUrl
+                ?: (item.poster ?: item.imageUrl)?.let(::cloudLibraryDisplayArtworkUrl),
+            title = item.title,
+            subtitle = localizedContinueWatchingSubtitle(item),
             anchor = zoomAnchor,
+            actions = actions,
             hazeState = zoomHazeState,
-            onDismiss = onDismiss,
-            onOpenDetails = onOpenDetails,
-            onPrimaryPlay = onPrimaryPlay,
-            onStartFromBeginning = onStartFromBeginning,
-            onAlternatePlay = onAlternatePlay,
-            onChooseSource = onChooseSource,
-            onResync = onResync,
-            onRemove = onRemove,
-            onAddToPlaylist = onAddToPlaylist,
-            onAddRowToPlaylist = onAddRowToPlaylist,
-            addRowToPlaylistLabel = addRowToPlaylistLabel,
+            onDismissed = onDismiss,
         )
         return
     }
-    val tokens = MaterialTheme.nuvio
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val coroutineScope = rememberCoroutineScope()
-
-    fun dismissAfter(action: () -> Unit) {
-        action()
-        coroutineScope.launch {
-            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-        }
-    }
-
-    NuvioModalBottomSheet(
-        onDismissRequest = {
-            coroutineScope.launch {
-                dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-            }
-        },
-        sheetState = sheetState,
+    NuvioActionBottomSheet(
+        actions = actions,
+        onDismiss = onDismiss,
+        bottomPadding = MaterialTheme.nuvio.spacing.screenHorizontal,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = nuvioSafeBottomPadding(tokens.spacing.screenHorizontal)),
-        ) {
-            ContinueWatchingSheetHeader(item = item)
-            if (showDetailsOption) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.Default.Info,
-                    title = stringResource(Res.string.cw_action_go_to_details),
-                    onClick = { dismissAfter(onOpenDetails) },
-                )
-            }
-            if (primaryPlayLabel != null && onPrimaryPlay != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.Default.PlayArrow,
-                    title = primaryPlayLabel,
-                    onClick = { dismissAfter(onPrimaryPlay) },
-                )
-            }
-            if (alternatePlayLabel != null && onAlternatePlay != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.Default.PlayArrow,
-                    title = alternatePlayLabel,
-                    onClick = { dismissAfter(onAlternatePlay) },
-                )
-            }
-            if (onChooseSource != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.AutoMirrored.Filled.PlaylistPlay,
-                    title = stringResource(Res.string.play_choose_source),
-                    onClick = { dismissAfter(onChooseSource) },
-                )
-            }
-            if (!item.isNextUp && onStartFromBeginning != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.Default.Replay,
-                    title = stringResource(Res.string.cw_action_start_from_beginning),
-                    onClick = { dismissAfter(onStartFromBeginning) },
-                )
-            }
-            if (onAddToPlaylist != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                    title = "Add to playlist",
-                    onClick = { dismissAfter(onAddToPlaylist) },
-                )
-            }
-            if (onAddRowToPlaylist != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                    title = addRowToPlaylistLabel,
-                    onClick = { dismissAfter(onAddRowToPlaylist) },
-                )
-            }
-            NuvioBottomSheetDivider()
-            NuvioBottomSheetActionRow(
-                icon = Icons.Default.Refresh,
-                title = stringResource(Res.string.cw_action_resync),
-                onClick = { dismissAfter(onResync) },
-            )
-            NuvioBottomSheetDivider()
-            NuvioBottomSheetActionRow(
-                icon = Icons.Default.DeleteOutline,
-                title = stringResource(Res.string.cw_action_remove),
-                onClick = { dismissAfter(onRemove) },
-            )
-        }
+        ContinueWatchingSheetHeader(item = item)
     }
-}
-
-/**
- * Long-press zoom preview for Continue Watching cards, mirroring [NuvioPosterZoomActionSheet] so the
- * setting applies to every shelf rather than just catalog posters.
- */
-@Composable
-private fun NuvioContinueWatchingZoomActionSheet(
-    item: ContinueWatchingItem,
-    primaryPlayLabel: String?,
-    alternatePlayLabel: String?,
-    showDetailsOption: Boolean,
-    anchor: PosterZoomAnchor?,
-    hazeState: HazeState,
-    onDismiss: () -> Unit,
-    onOpenDetails: () -> Unit,
-    onPrimaryPlay: (() -> Unit)?,
-    onStartFromBeginning: (() -> Unit)?,
-    onAlternatePlay: (() -> Unit)?,
-    onChooseSource: (() -> Unit)?,
-    onResync: () -> Unit,
-    onRemove: () -> Unit,
-    onAddToPlaylist: (() -> Unit)?,
-    onAddRowToPlaylist: (() -> Unit)?,
-    addRowToPlaylistLabel: String,
-) {
-    NuvioPosterZoomActionOverlay(
-        imageUrl = anchor?.imageUrl
-            ?: (item.poster ?: item.imageUrl)?.let(::cloudLibraryDisplayArtworkUrl),
-        title = item.title,
-        subtitle = localizedContinueWatchingSubtitle(item),
-        anchor = anchor,
-        actions = buildList {
-            if (showDetailsOption) {
-                add(
-                    PosterZoomOverlayAction(
-                        icon = Icons.Default.Info,
-                        label = stringResource(Res.string.cw_action_go_to_details),
-                        onSelected = onOpenDetails,
-                    ),
-                )
-            }
-            if (primaryPlayLabel != null && onPrimaryPlay != null) {
-                add(
-                    PosterZoomOverlayAction(
-                        icon = Icons.Default.PlayArrow,
-                        label = primaryPlayLabel,
-                        onSelected = onPrimaryPlay,
-                    ),
-                )
-            }
-            if (alternatePlayLabel != null && onAlternatePlay != null) {
-                add(
-                    PosterZoomOverlayAction(
-                        icon = Icons.Default.PlayArrow,
-                        label = alternatePlayLabel,
-                        onSelected = onAlternatePlay,
-                    ),
-                )
-            }
-            if (onChooseSource != null) {
-                add(
-                    PosterZoomOverlayAction(
-                        icon = Icons.AutoMirrored.Filled.PlaylistPlay,
-                        label = stringResource(Res.string.play_choose_source),
-                        onSelected = onChooseSource,
-                    ),
-                )
-            }
-            if (!item.isNextUp && onStartFromBeginning != null) {
-                add(
-                    PosterZoomOverlayAction(
-                        icon = Icons.Default.Replay,
-                        label = stringResource(Res.string.cw_action_start_from_beginning),
-                        onSelected = onStartFromBeginning,
-                    ),
-                )
-            }
-            onAddToPlaylist?.let { addToPlaylist ->
-                add(
-                    PosterZoomOverlayAction(
-                        icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                        label = "Add to playlist",
-                        onSelected = addToPlaylist,
-                    ),
-                )
-            }
-            onAddRowToPlaylist?.let { addRow ->
-                add(
-                    PosterZoomOverlayAction(
-                        icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                        label = addRowToPlaylistLabel,
-                        onSelected = addRow,
-                    ),
-                )
-            }
-            add(
-                PosterZoomOverlayAction(
-                    icon = Icons.Default.Refresh,
-                    label = stringResource(Res.string.cw_action_resync),
-                    onSelected = onResync,
-                ),
-            )
-            add(
-                PosterZoomOverlayAction(
-                    icon = Icons.Default.DeleteOutline,
-                    label = stringResource(Res.string.cw_action_remove),
-                    isDestructive = true,
-                    onSelected = onRemove,
-                ),
-            )
-        },
-        hazeState = hazeState,
-        onDismissed = onDismiss,
-    )
 }
 
 @Composable

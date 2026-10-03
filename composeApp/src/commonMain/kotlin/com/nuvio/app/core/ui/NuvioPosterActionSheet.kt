@@ -24,16 +24,13 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Replay
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,10 +39,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.core.format.formatReleaseDateForDisplay
 import com.nuvio.app.features.home.MetaPreview
-import kotlinx.coroutines.launch
 import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.episodes_cd_watched
 import nuvio.composeapp.generated.resources.poster_cd_in_watchlist
@@ -57,83 +54,6 @@ import nuvio.composeapp.generated.resources.poster_go_to_local_library
 import org.jetbrains.compose.resources.stringResource
 import dev.chrisbanes.haze.HazeState
 
-@Composable
-fun NuvioPosterZoomActionSheet(
-    item: MetaPreview?,
-    isSaved: Boolean,
-    isWatched: Boolean,
-    anchor: PosterZoomAnchor?,
-    hazeState: HazeState,
-    onDismiss: () -> Unit,
-    onToggleLibrary: () -> Unit,
-    onToggleWatched: () -> Unit,
-    onStartRewatch: (() -> Unit)? = null,
-    rewatchLabel: String = "",
-    onOpenInLocalLibrary: (() -> Unit)? = null,
-    onOpenLibraryPicker: (() -> Unit)? = null,
-    onAddToPlaylist: (() -> Unit)? = null,
-) {
-    if (item == null) return
-    NuvioPosterZoomActionOverlay(
-        imageUrl = anchor?.imageUrl ?: item.poster,
-        // Without an anchor (keyboard/TV invocation) `item.poster` is the unresolved first choice,
-        // so it needs the same fallback the card would have used.
-        fallbackImageUrl = anchor?.fallbackImageUrl ?: item.posterFallback,
-        title = item.name,
-        subtitle = item.releaseInfo?.takeIf { it.isNotBlank() }?.let(::formatReleaseDateForDisplay)
-            ?: item.type.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() },
-        isWatched = isWatched,
-        anchor = anchor,
-        actions = buildList {
-            add(
-                PosterZoomOverlayAction(
-                    icon = if (isSaved) Icons.Default.Check else Icons.Default.Add,
-                    label = stringResource(if (isSaved) Res.string.hero_remove_from_library else Res.string.hero_add_to_library),
-                    onSelected = onToggleLibrary,
-                    onSecondarySelected = onOpenLibraryPicker,
-                ),
-            )
-            onStartRewatch?.let { startRewatch ->
-                add(
-                    PosterZoomOverlayAction(
-                        icon = Icons.Default.Replay,
-                        label = rewatchLabel,
-                        onSelected = startRewatch,
-                    ),
-                )
-            }
-            add(
-                PosterZoomOverlayAction(
-                    icon = if (isWatched) Icons.Default.CheckCircle else Icons.Default.CheckCircleOutline,
-                    label = stringResource(if (isWatched) Res.string.hero_mark_unwatched else Res.string.hero_mark_watched),
-                    onSelected = onToggleWatched,
-                ),
-            )
-            onAddToPlaylist?.let { addToPlaylist ->
-                add(
-                    PosterZoomOverlayAction(
-                        icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                        label = "Add to playlist",
-                        onSelected = addToPlaylist,
-                    ),
-                )
-            }
-            onOpenInLocalLibrary?.let { openLocal ->
-                add(
-                    PosterZoomOverlayAction(
-                        icon = Icons.Default.FolderOpen,
-                        label = stringResource(Res.string.poster_go_to_local_library),
-                        onSelected = openLocal,
-                    ),
-                )
-            }
-        },
-        hazeState = hazeState,
-        onDismissed = onDismiss,
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NuvioPosterActionSheet(
     item: MetaPreview?,
@@ -158,139 +78,88 @@ fun NuvioPosterActionSheet(
     onAddToPlaylist: (() -> Unit)? = null,
     zoomAnchor: PosterZoomAnchor? = null,
     zoomHazeState: HazeState? = null,
+    /**
+     * Where the right-click that opened this landed, from [ContextMenuInvocation]. Set, the actions
+     * open as a desktop context menu at the cursor whatever the zoom-preview setting says.
+     */
+    contextMenuPosition: IntOffset? = null,
 ) {
     if (item == null) return
+    val actions = buildList {
+        add(
+            PosterZoomOverlayAction(
+                icon = if (isSaved) Icons.Default.Check else Icons.Default.Add,
+                label = stringResource(if (isSaved) Res.string.hero_remove_from_library else Res.string.hero_add_to_library),
+                onSelected = onToggleLibrary,
+                onSecondarySelected = onOpenLibraryPicker,
+            ),
+        )
+        add(
+            PosterZoomOverlayAction(
+                icon = if (isWatched) Icons.Default.CheckCircle else Icons.Default.CheckCircleOutline,
+                label = stringResource(if (isWatched) Res.string.hero_mark_unwatched else Res.string.hero_mark_watched),
+                onSelected = onToggleWatched,
+            ),
+        )
+        onStartRewatch?.let { startRewatch ->
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.Default.Replay,
+                    label = rewatchLabel,
+                    onSelected = startRewatch,
+                ),
+            )
+        }
+        onAddToPlaylist?.let { addToPlaylist ->
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    label = "Add to playlist",
+                    onSelected = addToPlaylist,
+                    group = 1,
+                ),
+            )
+        }
+        onOpenInLocalLibrary?.let { openLocal ->
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.Default.FolderOpen,
+                    label = stringResource(Res.string.poster_go_to_local_library),
+                    onSelected = openLocal,
+                    group = 2,
+                ),
+            )
+        }
+    }
+
+    if (contextMenuPosition != null) {
+        NuvioContextMenu(windowPosition = contextMenuPosition, actions = actions, onDismiss = onDismiss)
+        return
+    }
     val posterCardStyle = rememberPosterCardStyleUiState()
     if (posterCardStyle.zoomActionPreviewEnabled && zoomHazeState != null) {
-        NuvioPosterZoomActionSheet(
-            item = item,
-            isSaved = isSaved,
+        NuvioPosterZoomActionOverlay(
+            imageUrl = zoomAnchor?.imageUrl ?: item.poster,
+            // Without an anchor (keyboard/TV invocation) `item.poster` is the unresolved first
+            // choice, so it needs the same fallback the card would have used.
+            fallbackImageUrl = zoomAnchor?.fallbackImageUrl ?: item.posterFallback,
+            title = item.name,
+            subtitle = item.releaseInfo?.takeIf { it.isNotBlank() }?.let(::formatReleaseDateForDisplay)
+                ?: item.type.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() },
             isWatched = isWatched,
             anchor = zoomAnchor,
+            actions = actions,
             hazeState = zoomHazeState,
-            onDismiss = onDismiss,
-            onToggleLibrary = onToggleLibrary,
-            onToggleWatched = onToggleWatched,
-            onStartRewatch = onStartRewatch,
-            rewatchLabel = rewatchLabel,
-            onOpenInLocalLibrary = onOpenInLocalLibrary,
-            onOpenLibraryPicker = onOpenLibraryPicker,
-            onAddToPlaylist = onAddToPlaylist,
+            onDismissed = onDismiss,
         )
         return
     }
-    val tokens = MaterialTheme.nuvio
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val coroutineScope = rememberCoroutineScope()
-
-    NuvioModalBottomSheet(
-        onDismissRequest = {
-            coroutineScope.launch {
-                dismissNuvioBottomSheet(
-                    sheetState = sheetState,
-                    onDismiss = onDismiss,
-                )
-            }
-        },
-        sheetState = sheetState,
+    NuvioActionBottomSheet(
+        actions = actions,
+        onDismiss = onDismiss,
+        bottomPadding = MaterialTheme.nuvio.spacing.screenHorizontal,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = nuvioSafeBottomPadding(tokens.spacing.screenHorizontal)),
-        ) {
-            PosterSheetHeader(item = item)
-            NuvioBottomSheetDivider()
-            NuvioBottomSheetActionRow(
-                icon = if (isSaved) Icons.Default.Check else Icons.Default.Add,
-                title = if (isSaved) {
-                    stringResource(Res.string.hero_remove_from_library)
-                } else {
-                    stringResource(Res.string.hero_add_to_library)
-                },
-                onClick = {
-                    onToggleLibrary()
-                    coroutineScope.launch {
-                        dismissNuvioBottomSheet(
-                            sheetState = sheetState,
-                            onDismiss = onDismiss,
-                        )
-                    }
-                },
-                onSecondaryClick = onOpenLibraryPicker?.let { openPicker ->
-                    {
-                        openPicker()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(
-                                sheetState = sheetState,
-                                onDismiss = onDismiss,
-                            )
-                        }
-                        Unit
-                    }
-                },
-            )
-            NuvioBottomSheetDivider()
-            NuvioBottomSheetActionRow(
-                icon = if (isWatched) Icons.Default.CheckCircle else Icons.Default.CheckCircleOutline,
-                title = if (isWatched) {
-                    stringResource(Res.string.hero_mark_unwatched)
-                } else {
-                    stringResource(Res.string.hero_mark_watched)
-                },
-                onClick = {
-                    onToggleWatched()
-                    coroutineScope.launch {
-                        dismissNuvioBottomSheet(
-                            sheetState = sheetState,
-                            onDismiss = onDismiss,
-                        )
-                    }
-                },
-            )
-            onStartRewatch?.let { startRewatch ->
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.Default.Replay,
-                    title = rewatchLabel,
-                    onClick = {
-                        startRewatch()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
-            onAddToPlaylist?.let { addToPlaylist ->
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                    title = "Add to playlist",
-                    onClick = {
-                        addToPlaylist()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
-            onOpenInLocalLibrary?.let { openLocalLibrary ->
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.Default.FolderOpen,
-                    title = stringResource(Res.string.poster_go_to_local_library),
-                    onClick = {
-                        openLocalLibrary()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(
-                                sheetState = sheetState,
-                                onDismiss = onDismiss,
-                            )
-                        }
-                    },
-                )
-            }
-        }
+        PosterSheetHeader(item = item)
     }
 }
 

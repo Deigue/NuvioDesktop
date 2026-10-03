@@ -155,6 +155,31 @@ private val liveEventContentTypes = setOf("sport", "sports", "event", "events", 
 internal fun WatchProgressEntry.isLiveEventEntry(): Boolean =
     contentType.isLiveEventContentType() || parentMetaType.isLiveEventContentType()
 
+/**
+ * A series playback with no episode: the bare show id, no season, no episode. Only reachable when
+ * Play launched a show without resolving an episode, and harmful to keep — as the newest resumable
+ * row for the show it became the Resume target, so every later Play searched streams for "any
+ * episode" and wrote another one.
+ */
+internal fun isEpisodelessSeriesProgress(
+    parentMetaType: String,
+    parentMetaId: String,
+    videoId: String,
+    seasonNumber: Int?,
+    episodeNumber: Int?,
+): Boolean = parentMetaType.equals("series", ignoreCase = true) &&
+    seasonNumber == null &&
+    episodeNumber == null &&
+    videoId.trim() == parentMetaId.trim()
+
+internal fun WatchProgressEntry.isEpisodelessSeriesEntry(): Boolean = isEpisodelessSeriesProgress(
+    parentMetaType = parentMetaType,
+    parentMetaId = parentMetaId,
+    videoId = videoId,
+    seasonNumber = seasonNumber,
+    episodeNumber = episodeNumber,
+)
+
 private val nativeAnimeContentIdPrefixes = listOf(
     "kitsu:", "mal:", "myanimelist:", "al:", "anilist:", "anidb:",
 )

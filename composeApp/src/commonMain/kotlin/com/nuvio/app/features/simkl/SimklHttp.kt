@@ -1,0 +1,135 @@
+package com.nuvio.app.features.simkl
+
+import co.touchlab.kermit.Logger
+import com.nuvio.app.features.addons.RawHttpResponse
+import com.nuvio.app.features.addons.httpRequestRaw
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+private val log = Logger.withTag("SimklHttp")
+
+/** SIMKL allows 1 POST/sec per token; a sustained overage gets the client_id throttled. */
+private const val MIN_WRITE_SPACING_MS = 1_000L
+
+/** Retry policy from SIMKL's API rules: double the wait, cap at 60s, give up after 5 attempts. */
+private const val MAX_ATTEMPTS = 5
+private const val MAX_BACKOFF_MS = 60_000L
+
+/** `400 {"error":"RATE_LIMIT"}` is a ~20s per-user write lock, not a quota: retry shortly. */
+private const val WRITE_LOCK_RETRY_MS = 2_000L
+private const val WRITE_LOCK_MAX_RETRIES = 3
+
+private val writeMutex = Mutex()
+private var lastWriteAtMs = 0L
+
+/**
+ * Every SIMKL API call goes through here, so SIMKL's rules live in one place:
+ *
+ * - **Auth.** [authenticated] calls carry the user's token (refreshed ahead of expiry). A 401
+ *   triggers one refresh-and-retry; a call with no usable token returns a synthetic 401 without
+ *   touching the network. Public catalog calls must pass `authenticated = false` — an
+ *   Authorization header stops Cloudflare serving them from the edge.
+ * - **Writes are serialised and spaced** at most one per second, which also keeps a scrobble
+ *   stop/start pair in order.
+ * - **Transient failures back off**: `429 rate_limit` and 500/502/503 retry with doubling waits.
+ *   A daily-quota 429 (`user_limit_exceeded` / `app_limit_exceeded`) is returned as-is — it does
+ *   not clear for hours, and retrying only spends more.
+ *
+ * Network exceptions propagate exactly as [httpRequestRaw]'s do. [url] must already carry the
+ * required query parameters ([SimklAuthRepository.appendParams]).
+ */
+internal suspend fun simklRequest(
+    method: String,
+    url: String,
+    body: String = "",
+    authenticated: Boolean = true,
+    followRedirects: Boolean = true,
+    allowLargeResponse: Boolean = false,
+): RawHttpResponse {
+    val isWrite = !method.equals("GET", ignoreCase = true)
+    return if (isWrite) {
+        writeMutex.withLock {
+            val wait = lastWriteAtMs + MIN_WRITE_SPACING_MS - System.currentTimeMillis()
+            if (wait > 0) delay(wait)
+            try {
+                sendWithRetries(method, url, body, authenticated, followRedirects, allowLargeResponse, isWrite)
+            } finally {
+                lastWriteAtMs = System.currentTimeMillis()
+            }
+        }
+    } else {
+        sendWithRetries(method, url, body, authenticated, followRedirects, allowLargeResponse, isWrite)
+    }
+}
+
+private suspend fun sendWithRetries(
+    method: String,
+    url: String,
+    body: String,
+    authenticated: Boolean,
+    followRedirects: Boolean,
+    allowLargeResponse: Boolean,
+    isWrite: Boolean,
+): RawHttpResponse {
+    var backoffMs = 1_000L
+    var attempt = 0
+    var writeLockRetries = 0
+    var refreshed = false
+    while (true) {
+        attempt++
+        val headers = if (authenticated) {
+            SimklAuthRepository.authorizedHeaders() ?: return unauthorizedResponse(url)
+        } else {
+            SimklAuthRepository.publicHeaders()
+        }
+        val response = httpRequestRaw(
+            method = method,
+            url = url,
+            headers = headers,
+            body = body,
+            followRedirects = followRedirects,
+            allowLargeResponse = allowLargeResponse,
+        )
+        when {
+            response.status == 401 && authenticated && !refreshed -> {
+                refreshed = true
+                val tokenUsed = headers["Authorization"]?.removePrefix("Bearer ")
+                if (SimklAuthRepository.recoverFromUnauthorized(tokenUsed)) continue
+                return response
+            }
+            response.status == 400 && isWrite && response.body.contains("\"RATE_LIMIT\"") &&
+                writeLockRetries < WRITE_LOCK_MAX_RETRIES -> {
+                writeLockRetries++
+                delay(WRITE_LOCK_RETRY_MS)
+                continue
+            }
+            response.status == 429 && isDailyQuota(response.body) -> {
+                log.w { "SIMKL daily quota exhausted (${response.headers["retry-after"] ?: "?"}s to reset): ${redact(url)}" }
+                return response
+            }
+            response.status in RETRYABLE_STATUSES && attempt < MAX_ATTEMPTS -> {
+                log.d { "SIMKL ${response.status} on ${redact(url)}, retrying in ${backoffMs}ms" }
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+                continue
+            }
+            else -> return response
+        }
+    }
+}
+
+private val RETRYABLE_STATUSES = setOf(429, 500, 502, 503)
+
+private fun isDailyQuota(body: String): Boolean =
+    body.contains("user_limit_exceeded") || body.contains("app_limit_exceeded")
+
+private fun unauthorizedResponse(url: String) = RawHttpResponse(
+    status = 401,
+    statusText = "SIMKL not connected",
+    url = url,
+    body = "",
+    headers = emptyMap(),
+)
+
+private fun redact(url: String): String = url.substringBefore('?')

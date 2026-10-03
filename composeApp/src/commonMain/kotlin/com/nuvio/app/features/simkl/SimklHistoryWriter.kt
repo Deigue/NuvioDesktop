@@ -1,6 +1,5 @@
 package com.nuvio.app.features.simkl
 
-import com.nuvio.app.features.addons.httpRequestRaw
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.tracking.TrackingHistoryItem
 import com.nuvio.app.features.tracking.TrackingHistoryWriter
@@ -44,16 +43,14 @@ internal object SimklHistoryWriter : TrackingHistoryWriter {
         if (profileId != ProfileRepository.activeProfileId) {
             return TrackingMutationResult(media.size, notFoundCount = media.size)
         }
-        val headers = SimklAuthRepository.authorizedHeaders()
-            ?: error("SIMKL is not connected")
+        if (!SimklAuthRepository.hasUsableToken()) error("SIMKL is not connected")
         val resolved = media.mapNotNull { reference -> reference.toHistoryEntry() }
         if (resolved.isEmpty()) {
             return TrackingMutationResult(media.size, notFoundCount = media.size)
         }
-        val response = httpRequestRaw(
+        val response = simklRequest(
             method = "POST",
             url = SimklAuthRepository.appendParams("$BASE_URL$endpoint"),
-            headers = headers,
             body = json.encodeToString(resolved.toRequest()),
         )
         if (response.status !in 200..299) {

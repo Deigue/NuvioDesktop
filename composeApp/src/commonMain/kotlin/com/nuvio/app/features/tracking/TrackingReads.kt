@@ -115,7 +115,29 @@ interface TrackingWatchedProvider : WatchedSyncAdapter {
      * is the answer the user is asking us to stop trusting.
      */
     fun invalidateChangeDetection() = Unit
+
+    /**
+     * Shows whose watched history the provider has, per the last full [pull], reset since the local
+     * store last saw them. Handed over once: a second call returns nothing until the next full read.
+     *
+     * Default: none. The import is otherwise purely additive, so without this a show the user reset
+     * on the service keeps every old tick here indefinitely.
+     */
+    fun consumeHistoryResets(): List<WatchedHistoryReset> = emptyList()
 }
+
+/**
+ * What a provider now holds for one show whose history it has restarted: the episodes it still
+ * reports, and when the restart happened. Local ticks for that show older than [resetAtEpochMs] that
+ * the provider no longer has are stale — see `pruneResetWatchedItems`.
+ */
+data class WatchedHistoryReset(
+    val type: String,
+    val id: String,
+    val resetAtEpochMs: Long,
+    /** (season, episode) pairs the provider still reports as watched. */
+    val remoteEpisodes: Set<Pair<Int, Int>>,
+)
 
 data class TrackingProgressSnapshot(
     val entries: List<WatchProgressEntry> = emptyList(),

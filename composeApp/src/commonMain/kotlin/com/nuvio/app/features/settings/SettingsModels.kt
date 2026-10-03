@@ -44,6 +44,7 @@ import nuvio.composeapp.generated.resources.compose_settings_page_trakt
 import nuvio.composeapp.generated.resources.compose_settings_page_simkl
 import nuvio.composeapp.generated.resources.compose_settings_page_yamtrack
 import nuvio.composeapp.generated.resources.compose_settings_page_lights
+import nuvio.composeapp.generated.resources.compose_settings_page_seekr
 import nuvio.composeapp.generated.resources.compose_settings_page_discord_presence
 import nuvio.composeapp.generated.resources.compose_settings_page_screensaver
 import nuvio.composeapp.generated.resources.settings_account
@@ -231,6 +232,11 @@ internal enum class SettingsPage(
     ),
     YamtrackAuthentication(
         titleRes = Res.string.compose_settings_page_yamtrack,
+        category = SettingsCategory.General,
+        parentPage = Integrations,
+    ),
+    Seekr(
+        titleRes = Res.string.compose_settings_page_seekr,
         category = SettingsCategory.General,
         parentPage = Integrations,
     ),

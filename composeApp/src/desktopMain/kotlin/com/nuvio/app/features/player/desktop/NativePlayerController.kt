@@ -2063,6 +2063,10 @@ private fun PlayerControlsState.toControlsJson(
         append(',')
         appendJsonField("seekThumbnailsEnabled", seekThumbnailsEnabled)
         append(',')
+        appendJsonField("seekrVttUrl", seekrVttUrl)
+        append(',')
+        appendJsonField("seekrScale", seekrScale)
+        append(',')
         appendJsonField("seekStepSeconds", seekStepSeconds)
         append(',')
         appendJsonField("tapToUnlockLabel", tapToUnlockLabel)
@@ -2368,6 +2372,12 @@ private fun PlayerControlsState.toControlsJson(
         appendJsonArrayField("sourceFilters", sourceFilters) { appendFilterItemJson(it) }
         append(',')
         appendJsonArrayField("sourceItems", sourceItems) { appendSourceItemJson(it) }
+        append(',')
+        appendJsonArrayField("sourceSortOptions", sourceSortOptions) { appendFilterItemJson(it) }
+        append(',')
+        appendJsonField("sourceSortLabel", sourceSortLabel)
+        append(',')
+        appendJsonField("sourceCachedFirst", sourceCachedFirst)
         append(',')
         appendJsonArrayField("episodeItems", episodeItems) { appendEpisodeItemJson(it) }
         append(',')

@@ -47,6 +47,8 @@ import com.nuvio.app.features.playlist.displayTitle
 import com.nuvio.app.features.streams.AddonStreamGroup
 import com.nuvio.app.features.streams.StreamItem
 import com.nuvio.app.features.streams.StreamBadgeSettingsRepository
+import com.nuvio.app.features.streams.StreamListSort
+import com.nuvio.app.features.streams.StreamListSortOrder
 import com.nuvio.app.features.streams.StreamScore
 import com.nuvio.app.features.streams.StreamScoreContext
 import com.nuvio.app.features.streams.StreamScoreContexts
@@ -185,7 +187,19 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         allLabel = allFilterLabel,
         selectedFilter = null,
     )
-    val sourceItems = buildPlayerControlSourceItems()
+    val sourceItems = buildPlayerControlSourceItems(
+        sortOrder = streamBadgeSettings.listSortOrder,
+        cachedFirst = streamBadgeSettings.listCachedFirst,
+    )
+    val sourceSortOptions = remember(streamBadgeSettings.listSortOrder) {
+        StreamListSortOrder.entries.map { order ->
+            PlayerControlFilterItem(
+                id = order.ordinal.toString(),
+                label = order.label,
+                isSelected = order == streamBadgeSettings.listSortOrder,
+            )
+        }
+    }
     val episodeItems = buildPlayerControlEpisodeItems()
     // Same fallback chain the details screen's episode cards use, so an episode whose still is
     // missing or unreachable shows the show's artwork instead of an empty card.
@@ -385,12 +399,16 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         desktopAnimeSvpEnabled = playerSettingsUiState.desktopAnimeSvpEnabled,
         playbackInfoPanelEnabled = playerSettingsUiState.desktopPlaybackInfoPanelEnabled,
         activeSubtitleLabel = activePlaybackSubtitleLabel(),
-        seekThumbnailsEnabled = seekThumbnailsAllowed(
+        // The native decoder stands down while Seekr has (or is still fetching) this playback's
+        // sprites, and takes over again only if Seekr has nothing for it.
+        seekThumbnailsEnabled = seekrTrack == null && !seekrLookupPending && seekThumbnailsAllowed(
             mode = playerSettingsUiState.desktopSeekThumbnailMode,
             bufferPreset = playerSettingsUiState.desktopBufferPreset,
             sourceUrl = activeSourceUrl,
             isTorrent = activeTorrentInfoHash != null,
         ),
+        seekrVttUrl = seekrTrack?.vttUrl.orEmpty(),
+        seekrScale = seekrTrack?.scale ?: 1.0,
         seekStepSeconds = playerSettingsUiState.seekStepSeconds,
         tapToUnlockLabel = stringResource(Res.string.compose_player_tap_to_unlock),
         playbackErrorTitle = stringResource(Res.string.compose_player_playback_error),
@@ -537,6 +555,13 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         sourceBadgePlacement = streamBadgeSettings.badgePlacement.name.lowercase(),
         sourceFilters = sourceFilters,
         sourceItems = sourceItems,
+        sourceSortOptions = sourceSortOptions,
+        sourceSortLabel = if (streamBadgeSettings.listSortOrder == StreamListSortOrder.DEFAULT) {
+            "Sort"
+        } else {
+            streamBadgeSettings.listSortOrder.label
+        },
+        sourceCachedFirst = streamBadgeSettings.listCachedFirst,
         episodeItems = episodeItems,
         episodeFallbackThumbnail = episodeFallbackThumbnail,
         episodeSeasons = episodeSeasons,
@@ -1128,6 +1153,14 @@ private fun PlayerScreenRuntime.handlePlayerControlsEvent(type: String, value: D
         }
         "reloadSources" -> {
             prepareSourcesForPlayerControls(forceRefresh = true)
+        }
+        // The streams screen's Sort chip setting, so the panel and the picker always agree.
+        "setSourceSort" -> {
+            StreamListSortOrder.entries.getOrNull(value.toInt())
+                ?.let(StreamBadgeSettingsRepository::setListSortOrder)
+        }
+        "setSourceCachedFirst" -> {
+            StreamBadgeSettingsRepository.setListCachedFirst(value > 0.5)
         }
         "sourcesPanelClosed" -> {
             pendingSourcesEpisode = null
@@ -1750,7 +1783,10 @@ private fun playerControlSourceItem(
  * and then stayed that way until playback ended.
  */
 @Composable
-private fun PlayerScreenRuntime.buildPlayerControlSourceItems(): List<PlayerControlSourceItem> {
+private fun PlayerScreenRuntime.buildPlayerControlSourceItems(
+    sortOrder: StreamListSortOrder,
+    cachedFirst: Boolean,
+): List<PlayerControlSourceItem> {
     val canResolveDebrid = DebridSettingsRepository.uiState.value.canResolvePlayableLinks
     val scoreProfile = StreamScoreRepository.profile
     val groups = sourceStreamsState.groups
@@ -1770,6 +1806,8 @@ private fun PlayerScreenRuntime.buildPlayerControlSourceItems(): List<PlayerCont
         isEpisode,
         metaId,
         metaType,
+        sortOrder,
+        cachedFirst,
     ) {
         val scoreContext = StreamScoreContexts.forPlayback(
             isEpisode = isEpisode,
@@ -1783,11 +1821,18 @@ private fun PlayerScreenRuntime.buildPlayerControlSourceItems(): List<PlayerCont
         // The desktop sources panel is the HTML overlay, so it cannot reuse the Compose picker's
         // sorting — apply the same score ordering here. The index stays the repository's original
         // one because selection events are dispatched by it.
-        val ordered = if (!scoreProfile.enabled || !scoreProfile.sortStreamList) {
+        val scoreOrdered = if (!scoreProfile.enabled || !scoreProfile.sortStreamList) {
             indexedStreams
         } else {
             indexedStreams.sortedByDescending { (index, _) -> scores[index]?.total ?: 0 }
         }
+        // Then the Sort chip's order on top, exactly as the streams screen layers it over scoring.
+        val ordered = StreamListSort.sortFlat(
+            entries = scoreOrdered,
+            order = sortOrder,
+            cachedFirst = cachedFirst,
+            streamOf = { it.value.second },
+        )
         val current = findCurrentPlayerControlStream(
             entries = ordered,
             identityKey = identityKey,

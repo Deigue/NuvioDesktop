@@ -27,6 +27,7 @@ import com.nuvio.app.features.search.SearchHistoryRepository
 import com.nuvio.app.features.settings.SettingsCategoryNamesRepository
 import com.nuvio.app.features.settings.SettingsCategoryOrderRepository
 import com.nuvio.app.features.settings.SettingsFavoritesRepository
+import com.nuvio.app.features.settings.SettingsCollapsedSectionsRepository
 import com.nuvio.app.features.settings.SettingsHiddenCategoriesRepository
 import com.nuvio.app.features.settings.ThemeSettingsRepository
 import com.nuvio.app.features.streams.StreamBadgeSettingsRepository
@@ -132,6 +133,7 @@ object ProfileRepository {
         SettingsCategoryNamesRepository.onProfileChanged()
         SettingsFavoritesRepository.onProfileChanged()
         SettingsHiddenCategoriesRepository.onProfileChanged()
+        SettingsCollapsedSectionsRepository.onProfileChanged()
         ThemeSettingsRepository.onProfileChanged()
         return _state.value.profiles.isNotEmpty()
     }
@@ -158,6 +160,7 @@ object ProfileRepository {
         SettingsCategoryNamesRepository.onProfileChanged()
         SettingsFavoritesRepository.onProfileChanged()
         SettingsHiddenCategoriesRepository.onProfileChanged()
+        SettingsCollapsedSectionsRepository.onProfileChanged()
     }
 
     fun clearInMemory() {
@@ -230,6 +233,7 @@ object ProfileRepository {
         SettingsCategoryNamesRepository.onProfileChanged()
         SettingsFavoritesRepository.onProfileChanged()
         SettingsHiddenCategoriesRepository.onProfileChanged()
+        SettingsCollapsedSectionsRepository.onProfileChanged()
         PosterCardStyleRepository.onProfileChanged()
         LibraryDisplaySettingsRepository.onProfileChanged()
         PlayerSettingsRepository.onProfileChanged()

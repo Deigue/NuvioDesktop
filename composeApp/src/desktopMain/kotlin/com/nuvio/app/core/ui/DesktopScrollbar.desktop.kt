@@ -21,8 +21,8 @@ import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 @Composable internal actual fun NuvioDesktopVerticalScrollbar(state: LazyGridState, modifier: Modifier) {
     if (scrollbarsAllowed()) VerticalScrollbar(adapter = rememberScrollbarAdapter(state), modifier = modifier, style = nuvioScrollbarStyle())
 }
-@Composable internal actual fun NuvioDesktopVerticalScrollbar(state: ScrollState, modifier: Modifier) {
-    if (scrollbarsAllowed()) VerticalScrollbar(adapter = rememberScrollbarAdapter(state), modifier = modifier, style = nuvioScrollbarStyle())
+@Composable internal actual fun NuvioDesktopVerticalScrollbar(state: ScrollState, modifier: Modifier, showInTvMode: Boolean) {
+    if (showInTvMode || scrollbarsAllowed()) VerticalScrollbar(adapter = rememberScrollbarAdapter(state), modifier = modifier, style = nuvioScrollbarStyle())
 }
 
 @Composable private fun scrollbarsAllowed(): Boolean {

@@ -561,7 +561,7 @@ object WatchProgressRepository {
         }
         // Rows stored before live events were excluded; cleaned out of the file too, so this is a
         // one-time cost per profile rather than a log line every launch.
-        if (dropLiveEventEntries()) persist()
+        if (dropUnstorableEntries()) persist()
         publish()
         resolveRemoteMetadata(useStartupGrace = true)
     }
@@ -777,7 +777,7 @@ object WatchProgressRepository {
             ).toMutableMap()
         }
         // The server may still hold rows pushed before live events were excluded.
-        dropLiveEventEntries()
+        dropUnstorableEntries()
         if (resetDeltaState) {
             deltaCursorEventId = 0L
             deltaInitialized = false
@@ -1453,6 +1453,17 @@ object WatchProgressRepository {
         if (session.contentType.isLiveEventContentType() || session.parentMetaType.isLiveEventContentType()) {
             return
         }
+        if (
+            isEpisodelessSeriesProgress(
+                parentMetaType = session.parentMetaType,
+                parentMetaId = session.parentMetaId,
+                videoId = session.videoId,
+                seasonNumber = session.seasonNumber,
+                episodeNumber = session.episodeNumber,
+            )
+        ) {
+            return
+        }
 
         val useMdbListProgress = shouldUseMdbListProgress()
         val useSimklProgress = shouldUseSimklProgress()
@@ -1625,17 +1636,19 @@ object WatchProgressRepository {
     }
 
     /**
-     * Removes every live-event row from the local map; true when there was one. Live events are
-     * never written any more (see [isLiveEventContentType]), but a store or a sync server that
-     * predates that rule can still hand them back.
+     * Removes every live-event and episode-less series row from the local map; true when there was
+     * one. Neither is written any more (see [isLiveEventContentType], [isEpisodelessSeriesEntry]),
+     * but a store or a sync server that predates those rules can still hand them back.
      */
-    private fun dropLiveEventEntries(): Boolean {
-        val live = synchronized(entriesLock) {
-            entriesByVideoId.values.filter { it.isLiveEventEntry() }.map { it.videoId }
+    private fun dropUnstorableEntries(): Boolean {
+        val dropped = synchronized(entriesLock) {
+            entriesByVideoId.values
+                .filter { it.isLiveEventEntry() || it.isEpisodelessSeriesEntry() }
+                .map { it.videoId }
                 .also { ids -> ids.forEach(entriesByVideoId::remove) }
         }
-        if (live.isEmpty()) return false
-        log.d { "Dropped ${live.size} live-event watch progress entries: $live" }
+        if (dropped.isEmpty()) return false
+        log.i { "Dropped ${dropped.size} live-event / episode-less series watch progress entries: $dropped" }
         return true
     }
 

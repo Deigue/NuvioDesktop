@@ -234,6 +234,61 @@ class SeriesPlaybackResolverTest {
         assertEquals("s2e2", nextEpisode.id)
     }
 
+    @Test
+    fun seriesRestartAction_follows_most_recent_watch_when_the_show_reads_as_finished() {
+        // A rewatch: the finale was watched long ago, S1E1 just now. The primary action (furthest
+        // episode) has nothing after the finale; Play must still start an episode, not the show.
+        val meta = threeEpisodeShow()
+        val watched = listOf(
+            WatchedItem(id = "show", type = "series", name = "", season = 1, episode = 3, markedAtEpochMs = 100L),
+            WatchedItem(id = "show", type = "series", name = "", season = 1, episode = 1, markedAtEpochMs = 200L),
+        )
+
+        assertEquals(null, meta.seriesPrimaryAction(entries = emptyList(), watchedItems = watched, todayIsoDate = "2026-03-30"))
+        val action = meta.seriesRestartAction(entries = emptyList(), watchedItems = watched, todayIsoDate = "2026-03-30")
+
+        assertNotNull(action)
+        assertEquals("show:1:2", action.videoId)
+        assertEquals(1, action.seasonNumber)
+        assertEquals(2, action.episodeNumber)
+    }
+
+    @Test
+    fun seriesRestartAction_starts_from_the_first_episode_after_the_most_recent_finale() {
+        val meta = threeEpisodeShow()
+        val watched = listOf(
+            WatchedItem(id = "show", type = "series", name = "", season = 1, episode = 3, markedAtEpochMs = 100L),
+        )
+
+        val action = meta.seriesRestartAction(entries = emptyList(), watchedItems = watched, todayIsoDate = "2026-03-30")
+
+        assertNotNull(action)
+        assertEquals("show:1:1", action.videoId)
+        assertEquals(1, action.episodeNumber)
+    }
+
+    @Test
+    fun seriesRestartAction_is_null_when_nothing_has_aired() {
+        val action = threeEpisodeShow().seriesRestartAction(
+            entries = emptyList(),
+            watchedItems = emptyList(),
+            todayIsoDate = "2026-01-01",
+        )
+
+        assertEquals(null, action)
+    }
+
+    private fun threeEpisodeShow() = MetaDetails(
+        id = "show",
+        type = "series",
+        name = "Show",
+        videos = listOf(
+            MetaVideo(id = "ep1", title = "Episode 1", season = 1, episode = 1, released = "2026-03-01"),
+            MetaVideo(id = "ep2", title = "Episode 2", season = 1, episode = 2, released = "2026-03-08"),
+            MetaVideo(id = "ep3", title = "Episode 3", season = 1, episode = 3, released = "2026-03-15"),
+        ),
+    )
+
     private fun progressEntry(videoId: String, episode: Int, updatedAt: Long) = WatchProgressEntry(
         contentType = "series",
         parentMetaId = "show",

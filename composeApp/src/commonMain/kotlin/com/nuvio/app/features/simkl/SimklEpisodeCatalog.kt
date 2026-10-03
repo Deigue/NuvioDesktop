@@ -1,7 +1,6 @@
 package com.nuvio.app.features.simkl
 
 import co.touchlab.kermit.Logger
-import com.nuvio.app.features.addons.httpGetText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -50,7 +49,10 @@ internal object SimklEpisodeCatalog {
         cacheMutex.withLock { cache[simklId] }?.let { return it }
         val url = SimklAuthRepository.appendParams("$BASE_URL/tv/episodes/$simklId")
         val episodes = try {
-            json.decodeFromString<List<SimklCatalogEpisode>>(httpGetText(url))
+            // Edge-cached catalog data: no Authorization header, but SIMKL still wants the User-Agent.
+            val response = simklRequest(method = "GET", url = url, authenticated = false)
+            check(response.status in 200..299) { "HTTP ${response.status}" }
+            json.decodeFromString<List<SimklCatalogEpisode>>(response.body)
         } catch (failure: CancellationException) {
             throw failure
         } catch (failure: Throwable) {

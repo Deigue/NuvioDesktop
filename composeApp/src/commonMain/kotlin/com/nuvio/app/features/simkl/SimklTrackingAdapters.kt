@@ -21,6 +21,7 @@ import com.nuvio.app.features.tracking.TrackingScrobbler
 import com.nuvio.app.features.tracking.TrackingSeekScrobblePolicy
 import com.nuvio.app.features.tracking.TrackingWatchedProvider
 import com.nuvio.app.features.watched.WatchedItem
+import com.nuvio.app.features.watched.WatchedRepository
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 
@@ -70,6 +71,8 @@ internal object SimklWatchedAdapter : TrackingWatchedProvider {
     }
 
     override fun invalidateChangeDetection() = SimklWatchedRepository.invalidate()
+
+    override fun consumeHistoryResets() = SimklWatchedRepository.consumeHistoryResets()
 
     // Manual mutations use SimklHistoryWriter. These are deliberately no-ops here so a local
     // playback completion cannot be written twice through both the scrobbler and watched sync.
@@ -182,6 +185,21 @@ internal object SimklLibraryAdapter : TrackingLibraryProvider {
     ): TrackingMembershipResolution? {
         if (profileId != ProfileRepository.activeProfileId) return null
         val desired = desiredMembership[PLAN_TO_WATCH_KEY] == true
+        // SIMKL has no "remove from Plan to Watch" that spares history: the removal is
+        // /sync/history/remove for the whole title, which also erases every watched episode and
+        // any rewatch. That is not what a bookmark toggle means, so it is refused for anything
+        // with watch history unless the caller has had the user confirm exactly that.
+        if (
+            !desired &&
+            !destructiveRemovalConfirmed &&
+            contains(item.id, item.type) &&
+            WatchedRepository.hasAnyWatched(item.id, item.type)
+        ) {
+            error(
+                "${item.name.ifBlank { "This title" }} has watch history on SIMKL. Removing it from Plan to " +
+                    "Watch here would erase that history, so Nuvio won't do it — remove it on simkl.com instead.",
+            )
+        }
         if (desired != contains(item.id, item.type)) {
             SimklLibraryRepository.setPlanToWatch(item, desired)
         }

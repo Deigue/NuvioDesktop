@@ -7,6 +7,9 @@ import com.nuvio.app.features.lights.LightsPlaybackSource
 import java.awt.Desktop
 import java.io.File
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.swing.JFileChooser
@@ -38,6 +41,8 @@ private class DesktopPlayerDefinition(
     val buildArgs: (ExternalPlayerPlaybackRequest) -> List<String>,
     /** Rejects an install that exists but cannot play network streams, so discovery moves on. */
     val isUsableInstall: (File) -> Boolean = { true },
+    /** How the source goes on the command line; most players take it as a bare last argument. */
+    val sourceArgs: (String) -> List<String> = { listOf(it) },
 )
 
 internal actual object ExternalPlayerPlatform {
@@ -185,6 +190,29 @@ internal actual object ExternalPlayerPlatform {
                 }
             },
         ),
+        // Microsoft Store (MSIX) app: there is no install folder to find, only the execution
+        // alias it registers under WindowsApps (also on PATH). Switches are from the author's
+        // Kodi/Stremio integration guides: the source must go through --path=, subtitles through
+        // --subs-path=, and there is no start-time, title or header switch.
+        DesktopPlayerDefinition(
+            id = "energy",
+            displayName = "Energy Media Player",
+            candidatePaths = listOf(
+                "%LOCALAPPDATA%\\Microsoft\\WindowsApps\\EnergyPlayer.exe",
+                "%LOCALAPPDATA%\\Microsoft\\WindowsApps\\EnergyPlayerWin.exe",
+                "%LOCALAPPDATA%\\Microsoft\\WindowsApps\\EnergyPlayerForWindows.exe",
+            ),
+            executableNames = listOf("EnergyPlayer.exe", "EnergyPlayerWin.exe", "EnergyPlayerForWindows.exe"),
+            buildArgs = { request ->
+                // Only one subtitle switch is documented, so forward the best-ranked track. The
+                // app is sandboxed and cannot read Nuvio's subtitle cache (a cached path left it
+                // stuck loading), so it gets the original addon URL, as Stremio's integration does.
+                request.subtitles.orEmpty().firstOrNull()
+                    ?.let { listOf("--subs-path=${it.sourceUrl ?: it.url}") }
+                    .orEmpty()
+            },
+            sourceArgs = { source -> listOf("--path=$source") },
+        ),
     )
 
     /** Resolved only when a specific player is needed; startup no longer scans every player. */
@@ -198,7 +226,7 @@ internal actual object ExternalPlayerPlatform {
         val customPath = customPlayerStore
             .getString(customPlayerPathKey(def.id))
             ?.let(::File)
-            ?.takeIf(File::isFile)
+            ?.takeIf(File::isLaunchableFile)
             ?.absolutePath
         val associatedPath = defaultMediaAssociation
             ?.takeIf { association -> def.matchesExecutable(association.executablePath) }
@@ -303,7 +331,8 @@ internal actual object ExternalPlayerPlatform {
                     add(association.executablePath)
                     if (knownDefinition != null) addAll(knownDefinition.buildArgs(request))
                     addEndOfOptions(association.executablePath)
-                    add(request.sourceUrl)
+                    if (knownDefinition != null) addAll(knownDefinition.sourceArgs(request.sourceUrl))
+                    else add(request.sourceUrl)
                 }
                 if (
                     launchDetached(
@@ -329,7 +358,7 @@ internal actual object ExternalPlayerPlatform {
             add(exePath)
             addAll(def.buildArgs(request))
             addEndOfOptions(exePath)
-            add(request.sourceUrl)
+            addAll(def.sourceArgs(request.sourceUrl))
         }
         return if (
             launchDetached(
@@ -419,7 +448,7 @@ internal actual object ExternalPlayerPlatform {
         }
         return candidates
             .map(::File)
-            .firstOrNull { it.isFile && def.isUsableInstall(it) }
+            .firstOrNull { it.isLaunchableFile() && def.isUsableInstall(it) }
             ?.absolutePath
     }
 
@@ -439,7 +468,7 @@ internal actual object ExternalPlayerPlatform {
         return pathEnv.split(File.pathSeparatorChar)
             .asSequence()
             .map { File(it.trim(), exe) }
-            .firstOrNull { it.isFile }
+            .firstOrNull { it.isLaunchableFile() }
             ?.absolutePath
     }
 
@@ -461,7 +490,7 @@ internal actual object ExternalPlayerPlatform {
                 }
             }
             if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
-                val selected = chooser.selectedFile?.takeIf(File::isFile)
+                val selected = chooser.selectedFile?.takeIf(File::isLaunchableFile)
                 val valid = selected != null && (
                     !isWindows || def.executableNames.any { it.equals(selected.name, ignoreCase = true) }
                 )
@@ -618,6 +647,16 @@ private data class WindowsMediaAssociation(
 )
 
 private val REGISTRY_STRING_VALUE = Regex("""(?i)\sREG_(?:EXPAND_)?SZ\s+(.+)$""")
+
+/**
+ * A regular file, or a Store app's execution alias (the 0-byte reparse points in WindowsApps).
+ * java.io.File reports an alias as missing, so it is accepted when NIO, without following the
+ * reparse point, sees a non-directory there. CreateProcess launches an alias like any other exe.
+ */
+private fun File.isLaunchableFile(): Boolean =
+    isFile || runCatching {
+        Files.readAttributes(toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isOther
+    }.getOrDefault(false)
 
 /** Returns only the source origin so diagnostic logs never contain path/query credentials. */
 internal fun externalPlayerSourceSummary(rawUri: String): String {

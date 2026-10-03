@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Notifications
@@ -196,6 +197,7 @@ private fun settingsSearchEntries(
     val simklPage = resolve(Res.string.compose_settings_page_simkl)
     val yamtrackPage = resolve(Res.string.compose_settings_page_yamtrack)
     val lightsPage = resolve(Res.string.compose_settings_page_lights)
+    val seekrPage = resolve(Res.string.compose_settings_page_seekr)
     val screensaverPage = resolve(Res.string.compose_settings_page_screensaver)
 
     val entries = mutableListOf<SettingsSearchEntry>()
@@ -715,19 +717,12 @@ private fun settingsSearchEntries(
         PlaybackSearchRow("tvdb-attribution", resolve(Res.string.settings_licenses_attributions_tvdb_title), resolve(Res.string.settings_licenses_attributions_tvdb_body)),
         PlaybackSearchRow("simkl-attribution", resolve(Res.string.settings_licenses_attributions_simkl_title), resolve(Res.string.settings_licenses_attributions_simkl_body)),
         PlaybackSearchRow("imdb-datasets", resolve(Res.string.settings_licenses_attributions_imdb_title), resolve(Res.string.settings_licenses_attributions_imdb_body)),
-        PlaybackSearchRow(
-            if (isIos) "mpvkit-license" else "exoplayer-license",
-            if (isIos) {
-                resolve(Res.string.settings_licenses_attributions_mpvkit_title)
-            } else {
-                resolve(Res.string.settings_licenses_attributions_exoplayer_title)
-            },
-            if (isIos) {
-                resolve(Res.string.settings_licenses_attributions_mpvkit_license)
-            } else {
-                resolve(Res.string.settings_licenses_attributions_exoplayer_license)
-            },
-        ),
+        PlaybackSearchRow("skipdb-attribution", resolve(Res.string.settings_licenses_attributions_skipdb_title), resolve(Res.string.settings_licenses_attributions_skipdb_body)),
+        PlaybackSearchRow("kitsu-attribution", resolve(Res.string.settings_licenses_attributions_kitsu_title), resolve(Res.string.settings_licenses_attributions_kitsu_body)),
+        PlaybackSearchRow("anime-mapping-attribution", resolve(Res.string.settings_licenses_attributions_anime_mapping_title), resolve(Res.string.settings_licenses_attributions_anime_mapping_body)),
+        PlaybackSearchRow("mpv-license", resolve(Res.string.settings_licenses_attributions_mpv_title), resolve(Res.string.settings_licenses_attributions_mpv_license)),
+        PlaybackSearchRow("ffmpeg-license", resolve(Res.string.settings_licenses_attributions_ffmpeg_title), resolve(Res.string.settings_licenses_attributions_ffmpeg_license)),
+        PlaybackSearchRow("runtime-libraries-license", resolve(Res.string.settings_licenses_attributions_runtime_libraries_title), resolve(Res.string.settings_licenses_attributions_runtime_libraries_license)),
     ).forEach { row ->
         addRow(
             page = SettingsPage.LicensesAttributions,
@@ -2037,6 +2032,25 @@ private fun settingsSearchEntries(
             )
         }
 
+        addPage(
+            page = SettingsPage.Seekr,
+            key = "seekr",
+            title = seekrPage,
+            description = resolve(Res.string.settings_integrations_seekr_description),
+            category = generalCategory,
+            icon = Icons.Rounded.Image,
+        )
+        addRow(
+            page = SettingsPage.Seekr,
+            key = "seekr-key",
+            title = resolve(Res.string.settings_seekr_api_key),
+            description = resolve(Res.string.settings_seekr_api_key_description),
+            pageLabel = seekrPage,
+            section = resolve(Res.string.settings_seekr_section_title),
+            category = generalCategory,
+            icon = Icons.Rounded.Image,
+        )
+
         val lightsSection = resolve(Res.string.settings_lights_section_title)
         val goveeSection = resolve(Res.string.settings_lights_section_govee)
         val webhooksSection = resolve(Res.string.settings_lights_section_webhooks)
@@ -2088,6 +2102,7 @@ private fun settingsSearchEntries(
         if (!isDesktop) {
             add(SettingsPage.KeyboardShortcuts)
             add(SettingsPage.Screensaver)
+            add(SettingsPage.Seekr)
             add(SettingsPage.Lights)
             add(SettingsPage.DiscordPresence)
         }

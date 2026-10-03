@@ -3,6 +3,7 @@ package com.nuvio.app.features.settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +45,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -692,6 +696,25 @@ internal fun SettingsSection(
         }
         val titleAccentMask = if (titleHighlighted) Modifier.accentGradientMask() else Modifier
         val cards = LocalSettingsSectionCards.current
+        // Click the heading to collapse the section down to its heading; persisted per profile
+        // under the same anchor id favourites use. Needs a page context for a stable id.
+        val collapsible = page != null
+        val collapsedAnchors by SettingsCollapsedSectionsRepository.collapsed.collectAsStateWithLifecycle()
+        val collapsed = collapsible && anchor in collapsedAnchors
+        // A search result for a row in a collapsed section falls back to this heading. Open the
+        // section for this visit (without persisting it) so the row mounts and takes the jump
+        // itself; otherwise the user lands on a closed heading and has to hunt for the row.
+        var revealed by remember(anchor) { mutableStateOf(false) }
+        val requested by SettingsScrollAnchor.requested.collectAsStateWithLifecycle()
+        val sectionAnchor = SettingsScrollAnchor.section(title)
+        LaunchedEffect(requested, collapsed) {
+            if (collapsed && requested?.fallbackAnchor == sectionAnchor) revealed = true
+        }
+        val expanded = !collapsed || revealed
+        val chevronRotation by animateFloatAsState(
+            targetValue = if (expanded) 0f else -90f,
+            animationSpec = tween(durationMillis = 160),
+        )
         SettingsSectionContainer(cards = cards) {
             // Card layout: the heading is a band across the top of the card, a step lighter than
             // the rows so it reads as the card's header rather than a first row.
@@ -708,6 +731,25 @@ internal fun SettingsSection(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .then(
+                        if (collapsible) {
+                            // Header actions are their own clickables and consume their presses
+                            // first, so only clicks on the band itself toggle.
+                            Modifier.clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) {
+                                if (expanded) {
+                                    revealed = false
+                                    SettingsCollapsedSectionsRepository.setCollapsed(anchor, true)
+                                } else {
+                                    SettingsCollapsedSectionsRepository.setCollapsed(anchor, false)
+                                }
+                            }
+                        } else {
+                            Modifier
+                        },
+                    )
                     .then(headerModifier),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
@@ -747,10 +789,24 @@ internal fun SettingsSection(
                 Row(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
-                    content = actions,
-                )
+                ) {
+                    actions()
+                    if (collapsible) {
+                        Icon(
+                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = tokens.colors.textMuted,
+                            modifier = Modifier
+                                .padding(start = NuvioTokens.Space.s4)
+                                .size(tokens.icons.md)
+                                .rotate(chevronRotation),
+                        )
+                    }
+                }
             }
-            content()
+            AnimatedVisibility(visible = expanded) {
+                Column(content = content)
+            }
         }
         return
     }

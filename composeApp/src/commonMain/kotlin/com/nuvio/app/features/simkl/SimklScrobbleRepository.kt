@@ -2,7 +2,6 @@ package com.nuvio.app.features.simkl
 
 import co.touchlab.kermit.Logger
 import com.nuvio.app.core.build.AppVersionPolicy
-import com.nuvio.app.features.addons.httpRequestRaw
 import com.nuvio.app.features.metadata.MediaIdResolver
 import com.nuvio.app.features.metadata.toSimklIds
 import com.nuvio.app.features.tracking.TrackingCoordinateFamily
@@ -124,8 +123,7 @@ internal object SimklScrobbleRepository {
     }
 
     private suspend fun send(action: String, item: SimklScrobbleItem, progressPercent: Float): TrackingScrobbleResult {
-        if (!SimklAuthRepository.isAuthenticated.value) return TrackingScrobbleResult.Declined
-        val headers = SimklAuthRepository.authorizedHeaders() ?: return TrackingScrobbleResult.Declined
+        if (!SimklAuthRepository.hasUsableToken()) return TrackingScrobbleResult.Declined
         val progress = progressPercent.coerceIn(0f, 100f)
         val itemKey = item.itemKey
         if (shouldSkip(action, itemKey, progress)) return TrackingScrobbleResult.Declined
@@ -138,7 +136,7 @@ internal object SimklScrobbleRepository {
         val attempts = if (action == "stop") maxStopRetries + 1 else 1
         for (attempt in 1..attempts) {
             val response = runCatching {
-                httpRequestRaw(method = "POST", url = url, headers = headers, body = body)
+                simklRequest(method = "POST", url = url, body = body)
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 log.w(error) { "SIMKL scrobble $action transport failure (attempt $attempt/$attempts)" }
@@ -336,11 +334,10 @@ internal object SimklScrobbleRepository {
         }
         val url = SimklAuthRepository.appendParams("$BASE_URL/redirect?$query")
         return runCatching {
-            httpRequestRaw(
+            simklRequest(
                 method = "GET",
                 url = url,
-                headers = emptyMap(),
-                body = "",
+                authenticated = false,
                 followRedirects = false,
             )
         }.getOrNull()
@@ -356,12 +353,7 @@ internal object SimklScrobbleRepository {
     private suspend fun fetchAnimeIds(simklId: Int): SimklIds? {
         val url = SimklAuthRepository.appendParams("$BASE_URL/anime/$simklId")
         return runCatching {
-            val response = httpRequestRaw(
-                method = "GET",
-                url = url,
-                headers = emptyMap(),
-                body = "",
-            )
+            val response = simklRequest(method = "GET", url = url, authenticated = false)
             if (response.status !in 200..299) return@runCatching null
             json.decodeFromString(SimklAnimeDetails.serializer(), response.body).ids.toSimklIds()
         }.getOrNull()

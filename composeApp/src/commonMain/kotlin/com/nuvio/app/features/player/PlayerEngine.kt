@@ -142,6 +142,9 @@ data class PlayerControlsState(
      */
     val activeSubtitleLabel: String = "",
     val seekThumbnailsEnabled: Boolean = true,
+    /** Signed Seekr WebVTT for this playback, or blank; when set the HUD draws sprites instead. */
+    val seekrVttUrl: String = "",
+    val seekrScale: Double = 1.0,
     /** Drives the HUD's seek button/command-palette labels so they name the real jump distance. */
     val seekStepSeconds: Int = 10,
     val tapToUnlockLabel: String = "Tap to unlock",
@@ -293,6 +296,11 @@ data class PlayerControlsState(
     val sourceBadgePlacement: String = "bottom",
     val sourceFilters: List<PlayerControlFilterItem> = emptyList(),
     val sourceItems: List<PlayerControlSourceItem> = emptyList(),
+    // The streams screen's Sort chip, shared: one setting orders both lists. [sourceSortOptions]
+    // ids are StreamListSortOrder ordinals; the panel sends one back as "setSourceSort".
+    val sourceSortOptions: List<PlayerControlFilterItem> = emptyList(),
+    val sourceSortLabel: String = "",
+    val sourceCachedFirst: Boolean = false,
     val episodeItems: List<PlayerControlEpisodeItem> = emptyList(),
     // Stand-in artwork for episode cards whose own still is missing (unaired episodes) or whose
     // still fails to load. The details screen already falls back to the show's backdrop this way;

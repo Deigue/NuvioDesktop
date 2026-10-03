@@ -20,8 +20,31 @@ internal fun seekThumbnailsAllowed(
     return when (mode) {
         DesktopSeekThumbnailMode.Off -> false
         DesktopSeekThumbnailMode.Streaming -> true
-        DesktopSeekThumbnailMode.Local -> !isTorrent && isUserControlledSource(sourceUrl)
+        // Local + Seekr's streams are Seekr's alone: the native decoder never opens them.
+        DesktopSeekThumbnailMode.Local,
+        DesktopSeekThumbnailMode.LocalAndSeekr -> !isTorrent && isUserControlledSource(sourceUrl)
     }
+}
+
+/**
+ * Whether to ask Seekr for this source's previews: in [DesktopSeekThumbnailMode.LocalAndSeekr] and
+ * [DesktopSeekThumbnailMode.Streaming] (where the native decoder is the fallback). Sprites come from
+ * Seekr's CDN, never the stream's host, so they are safe for debrid links and torrents alike. A
+ * source the user controls keeps the native decoder: its frames are exact and free. Metered still
+ * wins, since a film's sheets are several megabytes.
+ */
+internal fun seekrPreviewsEligible(
+    mode: DesktopSeekThumbnailMode,
+    bufferPreset: DesktopBufferPreset,
+    sourceUrl: String,
+    isTorrent: Boolean,
+    apiKey: String,
+): Boolean {
+    if (apiKey.isBlank()) return false
+    if (mode != DesktopSeekThumbnailMode.LocalAndSeekr && mode != DesktopSeekThumbnailMode.Streaming) return false
+    if (bufferPreset == DesktopBufferPreset.Metered) return false
+    // The torrent engine serves from 127.0.0.1, which would otherwise pass as user-controlled.
+    return isTorrent || !isUserControlledSource(sourceUrl)
 }
 
 internal fun isUserControlledSource(sourceUrl: String): Boolean {

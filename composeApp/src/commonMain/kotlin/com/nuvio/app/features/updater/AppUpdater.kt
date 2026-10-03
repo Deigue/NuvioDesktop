@@ -760,7 +760,7 @@ fun AppUpdaterHost(
             modifier = modifier
                 // Padding first so it still shrinks on a small window, then the cap, then fill -
                 // resolving to min(760dp, available) rather than the whole screen.
-                .padding(horizontal = 24.dp)
+                .padding(horizontal = 24.dp, vertical = 24.dp)
                 .widthIn(max = 760.dp)
                 .fillMaxWidth(),
         ) {
@@ -821,9 +821,14 @@ fun AppUpdaterHost(
 
                 UpdaterHairline()
 
+                // Takes only the height left after the header and action strip, and scrolls within
+                // it: unbounded, a short window pushed the action strip - and the Update button -
+                // off the bottom of the dialog.
                 Column(
                     modifier = Modifier
+                        .weight(1f, fill = false)
                         .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
                         .padding(horizontal = 24.dp, vertical = 18.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
@@ -903,8 +908,10 @@ fun AppUpdaterHost(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    UpdaterFooterLinks(modifier = Modifier.padding(start = 6.dp))
-                    Spacer(Modifier.weight(1f))
+                    // Weighted rather than followed by a weighted Spacer: a Row measures weighted
+                    // children last, so on a narrow window the links shrink and the buttons keep
+                    // their width instead of the last one (Update) being squeezed to nothing.
+                    UpdaterFooterLinks(modifier = Modifier.weight(1f).padding(start = 6.dp))
                     if (state.isUpdateAvailable && !state.isDownloading && !state.showUnknownSourcesDialog) {
                         TextButton(onClick = controller::ignoreThisVersion) {
                             Text(stringResource(Res.string.action_ignore))
@@ -1104,6 +1111,8 @@ private fun UpdaterFooterLinks(modifier: Modifier = Modifier) {
             color = tokens.colors.textMuted,
             fontWeight = FontWeight.Medium,
             textDecoration = TextDecoration.Underline,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.clickable { runCatching { uriHandler.openUri(NuvioHtpcRepoUrl) } },
         )
         Text(
@@ -1112,6 +1121,8 @@ private fun UpdaterFooterLinks(modifier: Modifier = Modifier) {
             color = tokens.colors.textMuted,
             fontWeight = FontWeight.Medium,
             textDecoration = TextDecoration.Underline,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.clickable { platformOpenLogsDirectory() },
         )
     }

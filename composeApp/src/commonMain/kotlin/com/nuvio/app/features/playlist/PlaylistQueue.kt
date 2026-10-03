@@ -71,17 +71,11 @@ internal object PlaylistQueue {
         if (removedIndex in 0 until newSize) removedIndex else 0
 
     /**
-     * Shuffles [list] music-player style. A playlist part-way through keeps the entry Play would
-     * resume at, moved to the front, and shuffles the rest after it; one not yet started is shuffled
-     * whole. Returns the new order and the resume index (always the front).
+     * Shuffles [list] whole, so the first entry is a fresh pick every time rather than always the
+     * one Play would have resumed at. Returns the new order and the resume index (always the front).
      */
-    fun <T> shuffle(list: List<T>, resumeIndex: Int, random: Random = Random.Default): Pair<List<T>, Int> {
-        if (list.size < 2) return list to 0
-        if (resumeIndex !in 1 until list.size) return list.shuffled(random) to 0
-        val pinned = list[resumeIndex]
-        val rest = list.filterIndexed { i, _ -> i != resumeIndex }.shuffled(random)
-        return (listOf(pinned) + rest) to 0
-    }
+    fun <T> shuffle(list: List<T>, random: Random = Random.Default): Pair<List<T>, Int> =
+        list.shuffled(random) to 0
 
     /**
      * Puts [list] back in [originalOrder] (keys from [keyOf]). Anything not in the original order —

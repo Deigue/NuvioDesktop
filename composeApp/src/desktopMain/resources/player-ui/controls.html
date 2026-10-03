@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="controls.css?v=20260923-vignette-1">
+  <link rel="stylesheet" href="controls.css?v=20261002-source-resize-1">
 </head>
 <body>
   <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
@@ -348,6 +348,7 @@
             <div class="chapter-markers" id="chapterMarkers" aria-hidden="true"></div>
             <div class="seek-thumbnail" id="seekThumbnail" hidden>
               <img id="seekThumbnailImage" alt="">
+              <canvas class="seek-thumbnail-sprite" id="seekThumbnailSprite"></canvas>
               <span class="seek-thumbnail-chapter" id="seekThumbnailChapter" hidden></span>
               <span class="seek-thumbnail-time" id="seekThumbnailTime">00:00</span>
             </div>
@@ -549,9 +550,14 @@
       </section>
       <section class="modal-layer" id="sourceModal" aria-label="Sources" hidden>
         <div class="track-panel wide">
+          <div class="source-resize-handle" id="sourcePanelResizeHandle" role="separator" aria-orientation="vertical" aria-label="Resize sources panel" title="Drag to resize. Double-click to reset."></div>
           <div class="track-header-row">
             <div class="track-title" id="sourcePanelTitle">Sources</div>
             <div class="panel-actions">
+              <div class="source-sort-anchor">
+                <button class="panel-button" id="sourceSortButton" type="button" aria-haspopup="menu" aria-expanded="false">Sort</button>
+                <div class="source-sort-menu" id="sourceSortMenu" role="menu" hidden></div>
+              </div>
               <button class="panel-button" id="sourceReloadButton" type="button">Reload</button>
               <button class="panel-button" id="sourceCloseButton" type="button">Close</button>
             </div>
@@ -688,6 +694,6 @@
     <div class="pip-resize-handle pip-resize-nw" data-pip-resize="8"></div>
   </div>
 
-  <script src="controls.js?v=20260928-hold-speed-1"></script>
+  <script src="controls.js?v=20261002-source-resize-1"></script>
 </body>
 </html>

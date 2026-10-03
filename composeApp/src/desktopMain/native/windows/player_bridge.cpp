@@ -4139,6 +4139,9 @@ private:
                << ",loading:" << (loading ? "true" : "false")
                << ",audioTracks:" << audioTracks
                << ",subtitleTracks:" << subtitleTracks
+               // The 192/dpi zoom hides the OS display scale from the page; the HUD needs it to
+               // keep a windowed player's text from shrinking below normal Windows text size.
+               << ",displayScale:" << (lastLayoutDpi > 0 ? lastLayoutDpi / 96.0 : 1.0)
                << "})";
         std::wstring wideScript = toWide(script.str());
         webView->ExecuteScript(wideScript.c_str(), nullptr);

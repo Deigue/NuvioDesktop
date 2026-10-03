@@ -49,6 +49,35 @@ class StreamListSortTest {
     }
 
     @Test
+    fun `flat sort reorders wrapped entries and keeps their payload`() {
+        // The player's sources panel sorts rows that carry their own index; the index must travel
+        // with its stream, since selecting a row dispatches by it.
+        val entries = listOf(
+            7 to stream("A", "small", size = gb),
+            3 to stream("B", "unknown"),
+            5 to stream("B", "big", size = 9 * gb),
+        )
+
+        val sorted = StreamListSort.sortFlat(
+            entries = entries,
+            order = StreamListSortOrder.SIZE_DESC,
+            cachedFirst = false,
+            streamOf = { it.second },
+        )
+
+        assertEquals(listOf(5, 7, 3), sorted.map { it.first })
+    }
+
+    @Test
+    fun `flat sort under the default order is the same list`() {
+        val entries = listOf(1 to stream("A", "a"), 2 to stream("A", "b"))
+        assertSame(
+            entries,
+            StreamListSort.sortFlat(entries, StreamListSortOrder.DEFAULT, cachedFirst = false, streamOf = { it.second }),
+        )
+    }
+
+    @Test
     fun `smallest first still keeps unknown sizes last`() {
         val sorted = StreamListSort.apply(
             listOf(group("A", stream("A", "unknown"), stream("A", "big", size = 9 * gb), stream("A", "small", size = gb))),

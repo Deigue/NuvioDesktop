@@ -1,7 +1,6 @@
 package com.nuvio.app.features.simkl
 
 import co.touchlab.kermit.Logger
-import com.nuvio.app.features.addons.httpRequestRaw
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.trakt.TraktCalendarEntry
 import com.nuvio.app.features.trakt.TraktCalendarUiState
@@ -134,7 +133,7 @@ internal object SimklCalendarRepository {
         // screen while this one decides whether they are still current.
         _uiState.value = _uiState.value.copy(isLoading = true, isAuthenticated = true, errorMessage = null)
 
-        val headers = SimklAuthRepository.authorizedHeaders() ?: run {
+        if (!SimklAuthRepository.hasUsableToken()) run {
             _uiState.value = TraktCalendarUiState(isAuthenticated = false, hasLoaded = true)
             return
         }
@@ -162,7 +161,7 @@ internal object SimklCalendarRepository {
         }
 
         // Step 1: fetch the user's library to get shows to include in the calendar.
-        val shows = fetchWatchingShows(headers)
+        val shows = fetchWatchingShows()
         if (shows == null) {
             if (haveEntries) {
                 log.d { "SIMKL calendar: library fetch failed, keeping cached data" }
@@ -197,12 +196,12 @@ internal object SimklCalendarRepository {
         val allEntries: List<TraktCalendarEntry> = coroutineScope {
             val showJobs = shows.map { show ->
                 async {
-                    semaphore.withPermit { fetchShowEntries(show, headers) }
+                    semaphore.withPermit { fetchShowEntries(show) }
                 }
             }
             val movieJobs = movieWatchlistIds.map { simklId ->
                 async {
-                    semaphore.withPermit { fetchMovieReleaseEntry(simklId, headers) }
+                    semaphore.withPermit { fetchMovieReleaseEntry(simklId) }
                 }
             }
             (showJobs + movieJobs).awaitAll().flatten()
@@ -308,10 +307,10 @@ internal object SimklCalendarRepository {
     }
 
     /** Null when SIMKL could not be reached or answered with an error — distinct from an empty library. */
-    private suspend fun fetchWatchingShows(headers: Map<String, String>): List<ShowCalendarInfo>? {
+    private suspend fun fetchWatchingShows(): List<ShowCalendarInfo>? {
         val url = SimklAuthRepository.appendParams("$API_URL/sync/all-items/all")
         val resp = runCatching {
-            httpRequestRaw(method = "GET", url = url, headers = headers, body = "")
+            simklRequest(method = "GET", url = url)
         }.getOrNull() ?: return null
         if (resp.status !in 200..299) return null
 
@@ -326,7 +325,7 @@ internal object SimklCalendarRepository {
             loadedMovieMonths.clear()
             (parsed.movies).forEach { entry ->
                 val status = entry.status
-                if (status == "completed" || status == "dropped") return@forEach
+                if (status == "completed" || isSimklDroppedStatus(status)) return@forEach
                 val movie = entry.movie ?: return@forEach
                 val simklId = movie.ids.simkl ?: return@forEach
                 movieWatchlistIds.add(simklId)
@@ -344,7 +343,7 @@ internal object SimklCalendarRepository {
             buildList {
                 (parsed.shows).forEach { entry ->
                     val status = entry.status
-                    if (status == "completed" || status == "dropped") return@forEach
+                    if (status == "completed" || isSimklDroppedStatus(status)) return@forEach
                     val show = entry.show ?: return@forEach
                     val simklId = show.ids.simkl ?: return@forEach
                     val contentId = show.ids.toBestContentId() ?: return@forEach
@@ -359,7 +358,7 @@ internal object SimklCalendarRepository {
                 }
                 (parsed.anime).forEach { entry ->
                     val status = entry.status
-                    if (status == "completed" || status == "dropped") return@forEach
+                    if (status == "completed" || isSimklDroppedStatus(status)) return@forEach
                     val anime = entry.anime ?: return@forEach
                     val simklId = anime.ids.simkl ?: return@forEach
                     // Anime-aware, like every other SIMKL surface: a calendar row keyed by a
@@ -381,12 +380,12 @@ internal object SimklCalendarRepository {
 
     private suspend fun fetchShowEntries(
         show: ShowCalendarInfo,
-        headers: Map<String, String>,
     ): List<TraktCalendarEntry> {
         val type = if (show.isAnime) "anime" else "tv"
         val url = SimklAuthRepository.appendParams("$API_URL/$type/episodes/${show.simklId}")
         val resp = runCatching {
-            httpRequestRaw(method = "GET", url = url, headers = headers, body = "")
+            // Public, edge-cached catalog data: no Authorization, or Cloudflare bypasses its cache.
+            simklRequest(method = "GET", url = url, authenticated = false)
         }.getOrNull() ?: return emptyList()
         if (resp.status !in 200..299) return emptyList()
 
@@ -429,11 +428,10 @@ internal object SimklCalendarRepository {
      */
     private suspend fun fetchMovieReleaseEntry(
         simklId: Int,
-        headers: Map<String, String>,
     ): List<TraktCalendarEntry> {
         val url = SimklAuthRepository.appendParams("$API_URL/movies/$simklId")
         val resp = runCatching {
-            httpRequestRaw(method = "GET", url = url, headers = headers, body = "")
+            simklRequest(method = "GET", url = url, authenticated = false)
         }.getOrNull() ?: return emptyList()
         if (resp.status !in 200..299) return emptyList()
 

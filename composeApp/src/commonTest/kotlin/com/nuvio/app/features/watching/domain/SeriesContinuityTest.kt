@@ -13,6 +13,22 @@ class SeriesContinuityTest {
     )
 
     @Test
+    fun resumeProgressForSeries_ignores_a_row_with_no_episode_for_the_bare_show_id() {
+        val episodeRow = WatchingProgressRecord(
+            content = show, videoId = "show:1:2", seasonNumber = 1, episodeNumber = 2,
+            lastUpdatedEpochMs = 100L, lastPositionMs = 1_000L,
+        )
+        val bareShowRow = WatchingProgressRecord(
+            content = show, videoId = "show", seasonNumber = null, episodeNumber = null,
+            lastUpdatedEpochMs = 200L, lastPositionMs = 1_000L,
+        )
+
+        val resume = resumeProgressForSeries(content = show, progressRecords = listOf(episodeRow, bareShowRow))
+
+        assertEquals("show:1:2", resume?.videoId)
+    }
+
+    @Test
     fun decideSeriesPrimaryAction_prefers_up_next_when_completed_is_newer_than_resume() {
         val action = decideSeriesPrimaryAction(
             content = show,

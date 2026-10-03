@@ -85,6 +85,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -127,6 +128,7 @@ import com.nuvio.app.features.details.components.DetailSeriesContent
 import com.nuvio.app.features.details.components.DetailTrailersSection
 import com.nuvio.app.features.details.components.DetailTvKey
 import com.nuvio.app.features.details.components.DetailTvKeyboardBridge
+import com.nuvio.app.core.ui.ContextMenuInvocation
 import com.nuvio.app.features.details.components.EpisodeWatchedActionSheet
 import com.nuvio.app.features.playlist.PlaylistAddController
 import com.nuvio.app.features.playlist.playlistAddTargetFor
@@ -285,6 +287,8 @@ fun MetaDetailsScreen(
     var observedOfflineState by remember(type, id) { mutableStateOf(false) }
     var selectedEpisodeForActions by remember(type, id) { mutableStateOf<MetaVideo?>(null) }
     var selectedSeasonForActions by remember(type, id) { mutableStateOf<Int?>(null) }
+    // Set when a right-click opened the episode/season menu: it then appears at the cursor.
+    var actionsMenuPosition by remember(type, id) { mutableStateOf<IntOffset?>(null) }
     // The recap panel's boundary, and its open/closed state in one value: a recap is entirely
     // described by where it stops.
     var recapBoundary by remember(type, id) { mutableStateOf<RecapBoundary?>(null) }
@@ -720,6 +724,10 @@ fun MetaDetailsScreen(
                         watchedItems = watchedUiState.items,
                         todayIsoDate = todayIsoDate,
                         preferFurthestEpisode = cwPrefs.upNextFromFurthestEpisode,
+                    ) ?: meta.seriesRestartAction(
+                        entries = watchProgressUiState.entries,
+                        watchedItems = watchedUiState.items,
+                        todayIsoDate = todayIsoDate,
                     )
                 }
                 val seriesActionVideo = remember(seriesAction, meta.id, meta.videos) {
@@ -1014,7 +1022,14 @@ fun MetaDetailsScreen(
                     heroTrailerFinished = true
                     heroTrailerPlaybackSource = null
                 }
-                val onPrimaryPlayClick: () -> Unit = {
+                val onPrimaryPlayClick: () -> Unit = primaryPlay@{
+                    // A show with episodes but no episode to start (nothing released yet) must not
+                    // fall through to the bare show id below: that searches streams for "any
+                    // episode" and records progress no episode can ever match.
+                    if (hasEpisodes && seriesAction == null) {
+                        NuvioToastController.show("No released episode to play yet")
+                        return@primaryPlay
+                    }
                     if (onPlay != null) {
                         dropTrailerForPlaybackNavigation()
                     }
@@ -1154,6 +1169,10 @@ fun MetaDetailsScreen(
                                 // The configured preference already routes a normal click to the
                                 // picker, so the normal handler is the one that opens it.
                                 onPrimaryPlayClick()
+                                return@playSecondary
+                            }
+                            if (hasEpisodes && seriesAction == null) {
+                                NuvioToastController.show("No released episode to play yet")
                                 return@playSecondary
                             }
                             dropTrailerForPlaybackNavigation()
@@ -2225,8 +2244,14 @@ fun MetaDetailsScreen(
                                             episodeRatingsVisibility = metaScreenSettingsUiState.episodeRatingsVisibility,
                                             blurUnwatchedEpisodes = metaScreenSettingsUiState.blurUnwatchedEpisodes,
                                             onEpisodeClick = onEpisodePlayClick,
-                                            onEpisodeLongPress = { video -> selectedEpisodeForActions = video },
-                                            onSeasonLongPress = { season -> selectedSeasonForActions = season },
+                                            onEpisodeLongPress = { video ->
+                                                actionsMenuPosition = ContextMenuInvocation.consume()
+                                                selectedEpisodeForActions = video
+                                            },
+                                            onSeasonLongPress = { season ->
+                                                actionsMenuPosition = ContextMenuInvocation.consume()
+                                                selectedSeasonForActions = season
+                                            },
                                             externalSelectedSeason = selectedSeasonForTv,
                                             onSeasonSelected = { season -> selectedSeasonForTv = season },
                                             focusedSeasonIndex = tvFocusInfo.focusedSeasonIndex,
@@ -2363,8 +2388,14 @@ fun MetaDetailsScreen(
                                 watchedKeys = watchedUiState.watchedKeys,
                                 blurUnwatchedEpisodes = metaScreenSettingsUiState.blurUnwatchedEpisodes,
                                 onEpisodeClick = onEpisodePlayClick,
-                                onEpisodeLongPress = { video -> selectedEpisodeForActions = video },
-                                onSeasonLongPress = { season -> selectedSeasonForActions = season },
+                                onEpisodeLongPress = { video ->
+                                    actionsMenuPosition = ContextMenuInvocation.consume()
+                                    selectedEpisodeForActions = video
+                                },
+                                onSeasonLongPress = { season ->
+                                    actionsMenuPosition = ContextMenuInvocation.consume()
+                                    selectedSeasonForActions = season
+                                },
                                 onOpenMeta = onOpenMeta,
                                 onCastClick = onCastClick,
                                 onCompanyClick = onCompanyClick,
@@ -2535,7 +2566,11 @@ fun MetaDetailsScreen(
                                 canMarkPreviousEpisodes = previousEpisodes.isNotEmpty(),
                                 arePreviousEpisodesWatched = arePreviousEpisodesWatched,
                                 isSeasonWatched = isSeasonWatched,
-                                onDismiss = { selectedEpisodeForActions = null },
+                                onDismiss = {
+                                    selectedEpisodeForActions = null
+                                    actionsMenuPosition = null
+                                },
+                                contextMenuPosition = actionsMenuPosition,
                                 onRecap = if (canRecapBeforeEpisode) {
                                     {
                                         recapBoundary = RecapBoundary(
@@ -2644,7 +2679,11 @@ fun MetaDetailsScreen(
                                 seasonLabel = seasonLabel,
                                 isSeasonWatched = isSeasonWatched,
                                 canMarkPreviousSeasons = canMarkPreviousSeasons,
-                                onDismiss = { selectedSeasonForActions = null },
+                                onDismiss = {
+                                    selectedSeasonForActions = null
+                                    actionsMenuPosition = null
+                                },
+                                contextMenuPosition = actionsMenuPosition,
                                 onRecap = if (canRecap) {
                                     { recapBoundary = RecapBoundary(season = selectedSeason) }
                                 } else {

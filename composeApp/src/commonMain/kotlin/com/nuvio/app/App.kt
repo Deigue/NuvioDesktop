@@ -114,6 +114,7 @@ import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavHostController
+import androidx.navigation.NavOptionsBuilder
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -150,6 +151,7 @@ import com.nuvio.app.core.ui.DesktopNavigationGestureBridge
 import com.nuvio.app.core.ui.DesktopBackRequestSource
 import androidx.compose.runtime.rememberUpdatedState
 import com.nuvio.app.core.ui.PosterZoomOverlayCoordinator
+import com.nuvio.app.core.ui.ContextMenuInvocation
 import com.nuvio.app.core.ui.unclaimedSecondaryClick
 import com.nuvio.app.core.ui.PlatformBackHandler
 import com.nuvio.app.core.ui.platformExitApp
@@ -825,7 +827,9 @@ private suspend fun warmProfileDeferredRepositories() {
                 SimklSettingsRepository.isRewatchTrackingEnabled() &&
                 SimklAuthRepository.uiState.value.canUseRewatches
             ) {
-                SimklRewatchRepository.refreshNow()
+                // Full, once per launch: the only read that notices a rewatch deleted on SIMKL.
+                // Backgrounded because it is the whole all-items payload, not a delta.
+                SimklRewatchRepository.refreshAsync(full = true)
             }
         }
         startupWarmStep("tvdb settings load", rethrow = false) { com.nuvio.app.features.tvdb.TvdbSettingsRepository.ensureLoaded() }
@@ -1260,6 +1264,21 @@ private fun NavController.navigateIfResumed(route: Any) {
     }
 }
 
+/**
+ * Opens the player unless the player is already the current screen. Everything that starts playback
+ * goes through here: a held Enter (or a controller's A, which repeats) fires a source pick many
+ * times inside one transition, and each one used to push its own player — so Exit popped one copy
+ * and revealed the next, reloading the same file every time.
+ */
+private fun NavController.navigateToPlayer(
+    launch: PlayerLaunch,
+    builder: NavOptionsBuilder.() -> Unit = {},
+): Boolean {
+    if (currentDestination?.hasRoute<PlayerRoute>() == true) return false
+    navigate(PlayerRoute(launchId = PlayerLaunchStore.put(launch)), builder)
+    return true
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalSharedTransitionApi::class)
 @Composable
 private fun MainAppContent(
@@ -1387,6 +1406,9 @@ private fun MainAppContent(
         val posterOverlayHazeState = rememberHazeState()
         var selectedContinueWatchingForActions by remember { mutableStateOf<ContinueWatchingItem?>(null) }
         var selectedContinueWatchingAnchor by remember { mutableStateOf<PosterZoomAnchor?>(null) }
+        // Set when a right-click opened the menu: it then appears as a context menu at the cursor.
+        var selectedPosterMenuPosition by remember { mutableStateOf<IntOffset?>(null) }
+        var selectedContinueWatchingMenuPosition by remember { mutableStateOf<IntOffset?>(null) }
         var requestedSettingsPageName by rememberSaveable { mutableStateOf<String?>(null) }
         val gameModeActive by GameModeController.active.collectAsStateWithLifecycle()
         var showLibraryListPicker by remember { mutableStateOf(false) }
@@ -1963,8 +1985,7 @@ private fun MainAppContent(
                         openExternalPlayback(playerLaunch)
                         true
                     } else {
-                        val launchId = PlayerLaunchStore.put(playerLaunch)
-                        navController.navigate(PlayerRoute(launchId = launchId))
+                        navController.navigateToPlayer(playerLaunch)
                         true
                     }
                 }
@@ -2087,8 +2108,7 @@ private fun MainAppContent(
                         coroutineScope.launch { openExternalPlayback(playerLaunch) }
                         return
                     }
-                    val launchId = PlayerLaunchStore.put(playerLaunch)
-                    navController.navigate(PlayerRoute(launchId = launchId))
+                    navController.navigateToPlayer(playerLaunch)
                     return
                 }
             }
@@ -2364,7 +2384,6 @@ private fun MainAppContent(
                 }
                 is PlaylistHandoff.SourceList -> return
             }
-            val launchId = PlayerLaunchStore.put(playerLaunch)
             // Close the outgoing player completely before opening the next — see PlayerHandoff.
             PlayerHandoff.holdShield()
             navController.popBackStack()
@@ -2372,7 +2391,7 @@ private fun MainAppContent(
                 withTimeoutOrNull(PLAYLIST_HANDOFF_DISPOSE_TIMEOUT_MS) {
                     PlayerHandoff.activeRoutes.first { it == 0 }
                 }
-                navController.navigate(PlayerRoute(launchId = launchId))
+                navController.navigateToPlayer(playerLaunch)
             }
         }
 
@@ -2553,6 +2572,7 @@ private fun MainAppContent(
         val onContinueWatchingLongPress: (ContinueWatchingItem) -> Unit = { item ->
             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
             selectedContinueWatchingAnchor = PosterZoomAnchorHolder.consume()
+            selectedContinueWatchingMenuPosition = ContextMenuInvocation.consume()
             selectedContinueWatchingForActions = item
         }
 
@@ -2595,8 +2615,7 @@ private fun MainAppContent(
                 coroutineScope.launch { openExternalPlayback(playerLaunch) }
                 return@openDownload
             }
-            val launchId = PlayerLaunchStore.put(playerLaunch)
-            navController.navigate(PlayerRoute(launchId = launchId))
+            navController.navigateToPlayer(playerLaunch)
         }
 
         // In adaptive-hero / TV mode the resume prompt is owned by the home hero. When the user
@@ -2886,6 +2905,7 @@ private fun MainAppContent(
                                             }
                                             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                                             selectedPosterAnchor = PosterZoomAnchorHolder.consume()
+                                            selectedPosterMenuPosition = ContextMenuInvocation.consume()
                                             selectedPosterActionTarget = PosterActionTarget(preview = meta)
                                         },
                                         onLibraryPosterClick = { item ->
@@ -2901,6 +2921,7 @@ private fun MainAppContent(
                                         onLibraryPosterLongClick = { item, section ->
                                             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                                             selectedPosterAnchor = PosterZoomAnchorHolder.consume()
+                                            selectedPosterMenuPosition = ContextMenuInvocation.consume()
                                             selectedPosterActionTarget = PosterActionTarget(
                                                 preview = item.toMetaPreview(),
                                                 libraryItem = item,
@@ -3080,8 +3101,7 @@ private fun MainAppContent(
                             if (playerSettingsUiState.externalPlayerEnabled) {
                                 coroutineScope.launch { openExternalPlayback(trailerLaunch) }
                             } else {
-                                val launchId = PlayerLaunchStore.put(trailerLaunch)
-                                navController.navigate(PlayerRoute(launchId = launchId))
+                                navController.navigateToPlayer(trailerLaunch)
                             }
                         },
                         onOpenMeta = { preview ->
@@ -3448,9 +3468,8 @@ private fun MainAppContent(
                             autoPlayMode = launch.autoPlayMode,
                         )
 
-                        val launchId = PlayerLaunchStore.put(playerLaunch)
                         StreamsRepository.cancelLoading()
-                        navController.navigate(PlayerRoute(launchId = launchId)) {
+                        navController.navigateToPlayer(playerLaunch) {
                             if (replaceStreamRoute) {
                                 popUpTo<StreamRoute> { inclusive = true }
                             }
@@ -3579,8 +3598,7 @@ private fun MainAppContent(
                             }
                             StreamsRepository.clear()
                             reuseNavigated = true
-                            val launchId = PlayerLaunchStore.put(playerLaunch)
-                            navController.navigate(PlayerRoute(launchId = launchId)) {
+                            navController.navigateToPlayer(playerLaunch) {
                                 popUpTo<StreamRoute> { inclusive = true }
                             }
                         }
@@ -3727,8 +3745,7 @@ private fun MainAppContent(
                         }
                         StreamsRepository.consumeAutoPlay()
                         StreamsRepository.cancelLoading()
-                        val launchId = PlayerLaunchStore.put(playerLaunch)
-                        navController.navigate(PlayerRoute(launchId = launchId)) {
+                        navController.navigateToPlayer(playerLaunch) {
                             popUpTo<StreamRoute> { inclusive = true }
                         }
                     }
@@ -3866,11 +3883,8 @@ private fun MainAppContent(
                             return
                         }
 
-                        val launchId = PlayerLaunchStore.put(playerLaunch)
                         StreamsRepository.cancelLoading()
-                        navController.navigate(
-                            PlayerRoute(launchId = launchId)
-                        )
+                        navController.navigateToPlayer(playerLaunch)
                     }
 
                     // Hide overlay when reuse navigated to external player (prevents reload from showing it again)
@@ -4155,6 +4169,7 @@ private fun MainAppContent(
                         onPosterLongClick = { meta ->
                             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                             selectedPosterAnchor = PosterZoomAnchorHolder.consume()
+                            selectedPosterMenuPosition = ContextMenuInvocation.consume()
                             selectedPosterActionTarget = if (target is CatalogTarget.Library) {
                                 PosterActionTarget(
                                     preview = meta,
@@ -4292,6 +4307,7 @@ private fun MainAppContent(
                         onPosterLongClick = { meta ->
                             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                             selectedPosterAnchor = PosterZoomAnchorHolder.consume()
+                            selectedPosterMenuPosition = ContextMenuInvocation.consume()
                             selectedPosterActionTarget = PosterActionTarget(preview = meta)
                         },
                     )
@@ -4335,6 +4351,7 @@ private fun MainAppContent(
                 onDismiss = {
                     selectedPosterActionTarget = null
                     selectedPosterAnchor = null
+                    selectedPosterMenuPosition = null
                 },
                 // Only offered for titles that actually have a local copy — the page it opens is
                 // the local library list, which would be meaningless for a streaming-only title.
@@ -4454,6 +4471,7 @@ private fun MainAppContent(
                 },
                 zoomAnchor = selectedPosterAnchor,
                 zoomHazeState = posterOverlayHazeState,
+                contextMenuPosition = selectedPosterMenuPosition,
             )
 
             val selectedContinueWatching = selectedContinueWatchingForActions
@@ -4537,6 +4555,7 @@ private fun MainAppContent(
                 onDismiss = {
                     selectedContinueWatchingForActions = null
                     selectedContinueWatchingAnchor = null
+                    selectedContinueWatchingMenuPosition = null
                 },
                 onOpenDetails = {
                     selectedContinueWatchingForActions?.let { item ->
@@ -4579,6 +4598,7 @@ private fun MainAppContent(
                 },
                 zoomAnchor = selectedContinueWatchingAnchor,
                 zoomHazeState = posterOverlayHazeState,
+                contextMenuPosition = selectedContinueWatchingMenuPosition,
             )
 
             TraktListPickerDialog(

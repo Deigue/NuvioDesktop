@@ -2,6 +2,7 @@ package com.nuvio.app.core.ui
 
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -11,9 +12,12 @@ import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.rightClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 /**
  * The details Play button stacks `combinedClickable` with [secondaryClick] so a right-click reaches
@@ -73,5 +77,31 @@ class SecondaryClickTest {
 
         assertEquals(1, clicks.primary, "left-click should run the primary click")
         assertEquals(0, clicks.secondary, "left-click must not run the secondary action")
+    }
+
+    @Test
+    fun `right click hands the cursor's window position to the menu it opens`() = runComposeUiTest {
+        var opened: IntOffset? = null
+        setContent {
+            Box(
+                modifier = Modifier
+                    .offset(40.dp, 30.dp)
+                    .testTag("target")
+                    .size(100.dp)
+                    .secondaryClick { opened = ContextMenuInvocation.consume() },
+            )
+        }
+
+        val node = onNodeWithTag("target")
+        val targetOrigin = node.fetchSemanticsNode().positionInWindow
+        node.performMouseInput { rightClick(Offset(10f, 20f)) }
+        waitForIdle()
+
+        assertEquals(
+            IntOffset((targetOrigin.x + 10f).toInt(), (targetOrigin.y + 20f).toInt()),
+            opened,
+            "the menu should open where the right-click landed, in window coordinates",
+        )
+        assertNull(ContextMenuInvocation.consume(), "a recorded right-click is handed out once")
     }
 }

@@ -41,7 +41,6 @@ import com.nuvio.app.core.ui.NuvioScreenHeader
 import com.nuvio.app.features.cloud.PremiumizeCloudLibraryPosterUrl
 import com.nuvio.app.features.cloud.TorboxCloudLibraryPosterUrl
 import com.nuvio.app.features.cloud.cloudLibraryDisplayArtworkUrl
-import com.nuvio.app.isIos
 import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
@@ -58,10 +57,12 @@ private const val SkipDbUrl = "https://skipdb.tv"
 private const val TvdbUrl = "https://thetvdb.com"
 private const val SimklUrl = "https://simkl.com"
 private const val KitsuUrl = "https://kitsu.app"
+private const val AnimeMappingUrl = "https://github.com/Fribb/anime-lists"
 private const val NuvioRepositoryUrl = "https://github.com/NuvioMedia/NuvioDesktop"
 private const val NuvioContributeUrl = "https://tapframe.space/contribute"
-private const val MpvKitUrl = "https://github.com/mpvkit/MPVKit"
-private const val ApacheLicenseUrl = "https://www.apache.org/licenses/LICENSE-2.0"
+private const val MpvUrl = "https://mpv.io"
+private const val FfmpegUrl = "https://ffmpeg.org"
+private const val Msys2PackagesUrl = "https://packages.msys2.org"
 
 private data class AttributionItem(
     val searchKey: String,
@@ -149,10 +150,16 @@ private fun LicensesAttributionsBody(
             title = stringResource(Res.string.settings_licenses_attributions_section_playback),
             isTablet = isTablet,
         ) {
-            LicenseRow(
-                item = platformLicenseItem(),
-                isTablet = isTablet,
-            )
+            val items = playbackLicenseItems()
+            items.forEachIndexed { index, item ->
+                LicenseRow(
+                    item = item,
+                    isTablet = isTablet,
+                )
+                if (index != items.lastIndex) {
+                    PlainStackDivider()
+                }
+            }
         }
     }
 }
@@ -466,6 +473,14 @@ private fun attributionItems(): List<AttributionItem> = listOf(
         link = KitsuUrl,
     ),
     AttributionItem(
+        searchKey = "anime-mapping-attribution",
+        titleRes = Res.string.settings_licenses_attributions_anime_mapping_title,
+        bodyRes = Res.string.settings_licenses_attributions_anime_mapping_body,
+        logo = null,
+        logoText = "ODbL",
+        link = AnimeMappingUrl,
+    ),
+    AttributionItem(
         searchKey = "imdb-datasets",
         titleRes = Res.string.settings_licenses_attributions_imdb_title,
         bodyRes = Res.string.settings_licenses_attributions_imdb_body,
@@ -492,21 +507,28 @@ private fun appLicenseItem(): LicenseItem =
         link = NuvioRepositoryUrl,
     )
 
-private fun platformLicenseItem(): LicenseItem =
-    if (isIos) {
-        LicenseItem(
-            searchKey = "mpvkit-license",
-            titleRes = Res.string.settings_licenses_attributions_mpvkit_title,
-            bodyRes = Res.string.settings_licenses_attributions_mpvkit_body,
-            licenseRes = Res.string.settings_licenses_attributions_mpvkit_license,
-            link = MpvKitUrl,
-        )
-    } else {
-        LicenseItem(
-            searchKey = "exoplayer-license",
-            titleRes = Res.string.settings_licenses_attributions_exoplayer_title,
-            bodyRes = Res.string.settings_licenses_attributions_exoplayer_body,
-            licenseRes = Res.string.settings_licenses_attributions_exoplayer_license,
-            link = ApacheLicenseUrl,
-        )
-    }
+// The Windows player ships libmpv, FFmpeg and their dependencies from MSYS2, replacing the
+// upstream MPVKit (iOS) / ExoPlayer (Android) entries that don't apply to this build.
+private fun playbackLicenseItems(): List<LicenseItem> = listOf(
+    LicenseItem(
+        searchKey = "mpv-license",
+        titleRes = Res.string.settings_licenses_attributions_mpv_title,
+        bodyRes = Res.string.settings_licenses_attributions_mpv_body,
+        licenseRes = Res.string.settings_licenses_attributions_mpv_license,
+        link = MpvUrl,
+    ),
+    LicenseItem(
+        searchKey = "ffmpeg-license",
+        titleRes = Res.string.settings_licenses_attributions_ffmpeg_title,
+        bodyRes = Res.string.settings_licenses_attributions_ffmpeg_body,
+        licenseRes = Res.string.settings_licenses_attributions_ffmpeg_license,
+        link = FfmpegUrl,
+    ),
+    LicenseItem(
+        searchKey = "runtime-libraries-license",
+        titleRes = Res.string.settings_licenses_attributions_runtime_libraries_title,
+        bodyRes = Res.string.settings_licenses_attributions_runtime_libraries_body,
+        licenseRes = Res.string.settings_licenses_attributions_runtime_libraries_license,
+        link = Msys2PackagesUrl,
+    ),
+)

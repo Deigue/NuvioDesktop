@@ -98,6 +98,8 @@ internal actual object PlayerSettingsStorage {
     private const val animeSkipEnabledKey = "animeskip_enabled"
     private const val animeSkipClientIdKey = "animeskip_client_id"
     private const val introDbApiKeyKey = "introdb_api_key"
+    // Deliberately not in the sync payload: Seekr's terms forbid sharing a key, so it stays on this PC.
+    private const val seekrApiKeyKey = "seekr_api_key"
     private const val skipDbApiKeyKey = "skipdb_api_key"
     private const val introSubmitEnabledKey = "intro_submit_enabled"
     private const val streamAutoPlayNextEpisodeEnabledKey = "stream_auto_play_next_episode_enabled"
@@ -441,6 +443,8 @@ internal actual object PlayerSettingsStorage {
     actual fun saveAnimeSkipEnabled(enabled: Boolean) = saveBoolean(animeSkipEnabledKey, enabled)
     actual fun loadAnimeSkipClientId(): String? = loadString(animeSkipClientIdKey)
     actual fun saveAnimeSkipClientId(clientId: String) = saveString(animeSkipClientIdKey, clientId)
+    actual fun loadSeekrApiKey(): String? = loadString(seekrApiKeyKey)
+    actual fun saveSeekrApiKey(apiKey: String) = saveString(seekrApiKeyKey, apiKey)
     actual fun loadIntroDbApiKey(): String? = loadString(introDbApiKeyKey)
     actual fun saveIntroDbApiKey(apiKey: String) = saveString(introDbApiKeyKey, apiKey)
     actual fun loadSkipDbApiKey(): String? = loadString(skipDbApiKeyKey)

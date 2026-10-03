@@ -9,14 +9,37 @@ import com.nuvio.app.features.metadata.hasNativeAnimePrefix
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
+/** A V2 access token is `simkl_at_` + 34 characters; a V1 token is 64 lowercase hex characters. */
+internal const val SIMKL_V2_ACCESS_TOKEN_PREFIX = "simkl_at_"
+
+/** The scope this app needs: it scrobbles, marks watched, rates and edits lists. */
+internal const val SIMKL_REQUESTED_SCOPE = "media:read media:write"
+
 @Serializable
 internal data class SimklAuthState(
     val accessToken: String? = null,
     val username: String? = null,
     val accountType: String? = null,
     val settingsActivitiesAt: String? = null,
+    /** AUTH V2 only. Non-rotating, 180-day sliding window. */
+    val refreshToken: String? = null,
+    /** AUTH V2 only. Epoch ms after which [accessToken] is dead (7 days from issue). */
+    val accessTokenExpiresAtMs: Long? = null,
+    val scope: String? = null,
+    /**
+     * The client_id that minted [accessToken]. A token only works with its own registration, so
+     * this — not whatever is in the settings field — is what every request carries while
+     * connected. Null on payloads saved before AUTH V2 support; filled in on load.
+     */
+    val clientId: String? = null,
+    /**
+     * Set when a refresh was refused (user revoked the app, or the grant lapsed). The token is
+     * kept so the account, username and cached data stay put; requests stop until reconnect.
+     */
+    val needsReconnect: Boolean = false,
 ) {
     val isAuthenticated: Boolean get() = !accessToken.isNullOrBlank()
+    val isV2: Boolean get() = accessToken?.startsWith(SIMKL_V2_ACCESS_TOKEN_PREFIX) == true
 }
 
 enum class SimklConnectionMode {
@@ -30,30 +53,45 @@ data class SimklAuthUiState(
     val isLoading: Boolean = false,
     val username: String? = null,
     val accountType: String? = null,
-    /** The 5-character PIN the user must enter at simkl.com/pin. */
+    /** The 8-character `XXXX-YYYY` code the user confirms at simkl.com/pin. */
     val pendingPin: String? = null,
+    /** simkl.com/pin with the code pre-filled — what the Open button should launch. */
+    val pendingVerificationUrl: String? = null,
+    /** Epoch ms when [pendingPin] stops being accepted. */
+    val pendingExpiresAtMs: Long? = null,
+    /** Connected with an AUTH V1 token, which SIMKL retires around April 2027. */
+    val isLegacyConnection: Boolean = false,
+    /** Connected, but SIMKL refused to refresh the token — the user has to reconnect. */
+    val needsReconnect: Boolean = false,
+    /** A V2 sign-in is running while a V1 connection stays live underneath it. */
+    val isReconnecting: Boolean = false,
     val errorMessage: String? = null,
 )
 
 val SimklAuthUiState.canUseRewatches: Boolean
     get() = accountType.equals("pro", ignoreCase = true) || accountType.equals("vip", ignoreCase = true)
 
+/** `POST /oauth2/device` (RFC 8628). */
 @Serializable
-internal data class SimklPinResponse(
-    @SerialName("user_code") val userCode: String,
+internal data class SimklDeviceCodeResponse(
     @SerialName("device_code") val deviceCode: String,
-    @SerialName("verification_uri") val verificationUri: String,
-    @SerialName("expires_in") val expiresIn: Int,
-    val interval: Int,
+    @SerialName("user_code") val userCode: String,
+    @SerialName("verification_uri") val verificationUri: String = "https://simkl.com/pin",
+    @SerialName("verification_uri_complete") val verificationUriComplete: String? = null,
+    @SerialName("expires_in") val expiresIn: Int = 900,
+    val interval: Int = 5,
 )
 
+/** `POST /oauth2/token`, for both the device_code and refresh_token grants. */
 @Serializable
-internal data class SimklPinPollResponse(
-    val result: String,
+internal data class SimklTokenResponse(
     @SerialName("access_token") val accessToken: String? = null,
-    // Present when the old code expires and the server issues a new one.
-    @SerialName("device_code") val deviceCode: String? = null,
-    val message: String? = null,
+    @SerialName("refresh_token") val refreshToken: String? = null,
+    @SerialName("expires_in") val expiresIn: Long? = null,
+    @SerialName("token_type") val tokenType: String? = null,
+    val scope: String? = null,
+    val error: String? = null,
+    @SerialName("error_description") val errorDescription: String? = null,
 )
 
 @Serializable
@@ -546,3 +584,11 @@ internal data class SimklPlaybackSession(
     /** When playback was paused, whichever spelling the payload used. */
     val pausedAtTimestamp: String? get() = pausedAt?.takeIf { it.isNotBlank() } ?: watchedAt?.takeIf { it.isNotBlank() }
 }
+
+/**
+ * Registrations with client_id ≤ 45340 receive `notinteresting` wherever newer ones receive
+ * `dropped`. A V1 app and its V2 replacement can sit on opposite sides of that line, so the same
+ * response can arrive in either form.
+ */
+internal fun isSimklDroppedStatus(status: String?): Boolean =
+    status == "dropped" || status == "notinteresting"

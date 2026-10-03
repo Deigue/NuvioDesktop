@@ -87,19 +87,9 @@ class PlaylistQueueTest {
     }
 
     @Test
-    fun `shuffle keeps the resume entry in front once part-way through`() {
+    fun `shuffle reorders the whole list and resumes at the front`() {
         val list = (0 until 20).toList()
-        val (order, resume) = PlaylistQueue.shuffle(list, resumeIndex = 7, random = Random(1))
-        assertEquals(0, resume)
-        assertEquals(7, order.first())
-        assertEquals(list.toSet(), order.toSet())
-        assertEquals(list.size, order.size)
-    }
-
-    @Test
-    fun `shuffle of an unstarted playlist shuffles everything`() {
-        val list = (0 until 20).toList()
-        val (order, resume) = PlaylistQueue.shuffle(list, resumeIndex = 0, random = Random(1))
+        val (order, resume) = PlaylistQueue.shuffle(list, random = Random(1))
         assertEquals(0, resume)
         assertEquals(list.sorted(), order.sorted())
         assertNotEquals(list, order)

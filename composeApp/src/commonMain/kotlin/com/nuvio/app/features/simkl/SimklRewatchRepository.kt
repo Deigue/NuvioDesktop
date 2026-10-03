@@ -1,7 +1,6 @@
 package com.nuvio.app.features.simkl
 
 import co.touchlab.kermit.Logger
-import com.nuvio.app.features.addons.httpRequestRaw
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.metadata.MediaIdResolver
 import com.nuvio.app.features.metadata.toSimklIds
@@ -99,17 +98,22 @@ internal object SimklRewatchRepository {
         publish()
     }
 
-    fun refreshAsync() {
-        scope.launch { refreshNow() }
+    fun refreshAsync(full: Boolean = false) {
+        scope.launch { refreshNow(full) }
     }
 
-    suspend fun refreshNow(): Boolean {
+    /**
+     * [full] re-reads every session and replaces the stored set. A delta read (`date_from`) only
+     * reports sessions that changed, never ones SIMKL deleted, so without a periodic full read a
+     * rewatch removed on the site stayed "active" here forever.
+     */
+    suspend fun refreshNow(full: Boolean = false): Boolean {
         ensureLoaded()
         if (!rewatchRequestsAllowed()) return false
         _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
         return runCatching {
-            val headers = SimklAuthRepository.authorizedHeaders() ?: error("SIMKL is not connected.")
-            val deltaFrom = lastActivitiesAt?.takeIf(String::isNotBlank)
+            if (!SimklAuthRepository.hasUsableToken()) error("SIMKL is not connected.")
+            val deltaFrom = lastActivitiesAt?.takeIf(String::isNotBlank)?.takeUnless { full }
             val activities = if (deltaFrom != null) {
                 SimklAuthRepository.fetchActivities()
                     ?: error("SIMKL activity state could not be read.")
@@ -121,14 +125,12 @@ internal object SimklRewatchRepository {
                 return@runCatching true
             }
             val dateFromQuery = deltaFrom?.let { "&date_from=$it" }.orEmpty()
-            val response = httpRequestRaw(
+            val response = simklRequest(
                 method = "GET",
                 url = SimklAuthRepository.appendParams(
                     "$SIMKL_BASE_URL/sync/all-items/all" +
                         "?allow_rewatch=yes&extended=full&episode_watched_at=yes$dateFromQuery",
                 ),
-                headers = headers,
-                body = "",
             )
             if (response.status !in 200..299) error("SIMKL rewatch sync failed (${response.status}).")
             val remote = json.decodeFromString<SimklAllItemsResponse>(response.body).toRewatchSessions()
@@ -295,11 +297,10 @@ internal object SimklRewatchRepository {
         var lastFailure: Throwable? = null
         repeat(attempts) { attempt ->
             val result = runCatching {
-                val headers = SimklAuthRepository.authorizedHeaders() ?: error("SIMKL is not connected.")
-                val response = httpRequestRaw(
+                if (!SimklAuthRepository.hasUsableToken()) error("SIMKL is not connected.")
+                val response = simklRequest(
                     method = "POST",
                     url = SimklAuthRepository.appendParams("$SIMKL_BASE_URL/sync/history?allow_rewatch=yes"),
-                    headers = headers,
                     body = json.encodeToString(body),
                 )
                 if (response.status !in 200..299) {

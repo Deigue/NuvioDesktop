@@ -2,7 +2,6 @@ package com.nuvio.app.features.simkl
 
 import co.touchlab.kermit.Logger
 import com.nuvio.app.features.addons.RawHttpResponse
-import com.nuvio.app.features.addons.httpRequestRaw
 import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.details.MetaDetailsRepository
 import com.nuvio.app.features.trakt.parseTraktIsoDateTimeToEpochMs
@@ -180,10 +179,9 @@ internal object SimklProgressRepository {
     suspend fun deleteSession(videoId: String) {
         val sessionId = sessionIdByVideoId[videoId]
             ?: error("Missing SIMKL playback session id for $videoId")
-        val headers = SimklAuthRepository.authorizedHeaders()
-            ?: error("SIMKL authentication is unavailable")
+        if (!SimklAuthRepository.hasUsableToken()) error("SIMKL authentication is unavailable")
         val url = SimklAuthRepository.appendParams("$BASE_URL/sync/playback/$sessionId")
-        val response = httpRequestRaw(method = "DELETE", url = url, headers = headers, body = "")
+        val response = simklRequest(method = "DELETE", url = url, body = "")
         requireSuccessfulSimklPlaybackDelete(response, sessionId)
         if (sessionIdByVideoId[videoId] == sessionId) {
             sessionIdByVideoId.remove(videoId)
@@ -202,7 +200,7 @@ internal object SimklProgressRepository {
     }
 
     private suspend fun fetchAll(): List<WatchProgressEntry> {
-        val headers = SimklAuthRepository.authorizedHeaders() ?: return emptyList()
+        if (!SimklAuthRepository.hasUsableToken()) return emptyList()
 
         // In-progress sessions (< 80% watched) — shown as resumable CW cards.
         //
@@ -213,7 +211,7 @@ internal object SimklProgressRepository {
         // exclude items watched *after* the pause, i.e. sessions a later finish made stale. That
         // is the rule applied below, against our own watched history.
         val playbackUrl = SimklAuthRepository.appendParams("$BASE_URL/sync/playback?hide_watched=false&limit=100")
-        val playbackResponse = httpRequestRaw(method = "GET", url = playbackUrl, headers = headers, body = "")
+        val playbackResponse = simklRequest(method = "GET", url = playbackUrl, body = "")
         if (playbackResponse.status !in 200..299) {
             error("SIMKL /sync/playback returned ${playbackResponse.status}")
         }
@@ -256,7 +254,7 @@ internal object SimklProgressRepository {
             "$BASE_URL/sync/all-items/all/watching?next_watch_info=yes",
         )
         val watchingSeeds = try {
-            val resp = httpRequestRaw(method = "GET", url = watchingUrl, headers = headers, body = "")
+            val resp = simklRequest(method = "GET", url = watchingUrl, body = "")
             if (resp.status !in 200..299) {
                 error("SIMKL /sync/all-items/all/watching returned ${resp.status}")
             }

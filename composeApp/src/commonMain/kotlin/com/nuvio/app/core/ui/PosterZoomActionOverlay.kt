@@ -124,6 +124,11 @@ class PosterZoomOverlayAction(
     val onSelected: () -> Unit,
     /** Right-click (desktop) alternative to [onSelected]; the overlay closes the same way. */
     val onSecondarySelected: (() -> Unit)? = null,
+    /**
+     * [NuvioContextMenu] draws a separator wherever this changes from one row to the next; the other
+     * presentations ignore it.
+     */
+    val group: Int = 0,
 )
 
 private enum class PosterZoomPhase {

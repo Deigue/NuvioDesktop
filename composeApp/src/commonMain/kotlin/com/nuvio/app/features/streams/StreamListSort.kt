@@ -47,19 +47,62 @@ internal object StreamListSort {
             return if (cachedFirst) groups.map { liftCached(it, traitsOf) } else groups
         }
 
+        val sorted = sortFlat(
+            entries = groups.flatMap { it.streams },
+            order = order,
+            cachedFirst = cachedFirst,
+            streamOf = { it },
+            traitsOf = traitsOf,
+            sizeOf = sizeOf,
+        )
+
+        return listOf(
+            AddonStreamGroup(
+                addonName = groups.singleOrNull()?.addonName ?: order.label,
+                addonId = SORTED_ADDON_ID,
+                streams = sorted,
+                isLoading = groups.any { it.isLoading },
+                error = null,
+            ),
+        )
+    }
+
+    /**
+     * [entries] re-ordered by [order], for a list that is already one flat run — the desktop
+     * player's HTML sources panel, whose rows carry their own index and filter id and so cannot be
+     * regrouped into [AddonStreamGroup]s. Under [StreamListSortOrder.DEFAULT], [cachedFirst] lifts
+     * cached sources over the whole list, since there are no sections to keep.
+     */
+    fun <T> sortFlat(
+        entries: List<T>,
+        order: StreamListSortOrder,
+        cachedFirst: Boolean,
+        streamOf: (T) -> StreamItem,
+        traitsOf: (StreamItem) -> StreamTraits = StreamTraitDetector::detect,
+        sizeOf: (StreamItem) -> Long? = StreamTraitDetector::listSortSizeBytes,
+    ): List<T> {
+        val comparator = comparatorFor(order, cachedFirst) ?: return entries
         // Rows with nothing playable behind them (diagnostics, notices) have no size or quality;
         // pinned after the real sources in the order the addons sent them, as the score sort does.
-        val (rankable, extras) = groups.flatMap { it.streams }.partition { it.isScorableStream }
-        val keyed = rankable.map { stream -> SortKey(stream, sizeOf(stream), lazy { traitsOf(stream) }) }
+        val (rankable, extras) = entries.partition { streamOf(it).isScorableStream }
+        val keyed = rankable.map { entry ->
+            val stream = streamOf(entry)
+            entry to SortKey(stream, sizeOf(stream), lazy { traitsOf(stream) })
+        }
+        // sortedWith is stable, so ties keep the incoming (addon/score) order.
+        return keyed.sortedWith(compareBy(comparator) { it.second }).map { it.first } + extras
+    }
 
+    /** Null when nothing would move: the default order with cached-first off. */
+    private fun comparatorFor(order: StreamListSortOrder, cachedFirst: Boolean): Comparator<SortKey>? {
         // Unknown sizes always go last, in either direction — "smallest first" putting every row
-        // without a size at the top would bury the answer. sortedWith is stable, so ties keep the
-        // incoming (addon/score) order.
+        // without a size at the top would bury the answer.
         val bySizeKnown = compareBy<SortKey> { it.size == null }
         val largestFirst = bySizeKnown.thenByDescending { it.size ?: 0L }
         val byResolution = compareByDescending<SortKey> { it.traits.value.resolution.value }
         val bySource = compareBy<SortKey> { QUALITY_RANK.getOrElse(it.traits.value.quality) { Int.MAX_VALUE } }
-        val comparator = when (order) {
+        val comparator: Comparator<SortKey>? = when (order) {
+            StreamListSortOrder.DEFAULT -> null
             StreamListSortOrder.SIZE_DESC -> largestFirst
             StreamListSortOrder.SIZE_ASC -> bySizeKnown.thenBy { it.size ?: 0L }
             StreamListSortOrder.QUALITY -> byResolution.then(bySource).then(largestFirst)
@@ -73,24 +116,10 @@ internal object StreamListSort {
                 .thenBy { channelRank(it.traits.value) }
                 .then(byResolution)
                 .then(largestFirst)
-            StreamListSortOrder.DEFAULT -> error("unreachable")
         }
-        val ordered = if (cachedFirst) {
-            compareBy<SortKey> { !it.traits.value.isDebridCached }.then(comparator)
-        } else {
-            comparator
-        }
-        val sorted = keyed.sortedWith(ordered).map { it.stream }
-
-        return listOf(
-            AddonStreamGroup(
-                addonName = groups.singleOrNull()?.addonName ?: order.label,
-                addonId = SORTED_ADDON_ID,
-                streams = sorted + extras,
-                isLoading = groups.any { it.isLoading },
-                error = null,
-            ),
-        )
+        if (!cachedFirst) return comparator
+        val cached = compareBy<SortKey> { !it.traits.value.isDebridCached }
+        return if (comparator == null) cached else cached.then(comparator)
     }
 
     /** Cached sources to the top of one section, everything else in its incoming order. */

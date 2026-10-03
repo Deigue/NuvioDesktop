@@ -1,7 +1,6 @@
 package com.nuvio.app.features.simkl
 
 import co.touchlab.kermit.Logger
-import com.nuvio.app.features.addons.httpRequestRaw
 import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.details.MetaDetailsRepository
 import com.nuvio.app.features.library.LibraryItem
@@ -128,8 +127,7 @@ internal object SimklLibraryRepository {
 
     /** Adds to Plan to Watch, or removes the item from SIMKL's library entirely. */
     suspend fun setPlanToWatch(item: LibraryItem, desired: Boolean) {
-        val headers = SimklAuthRepository.authorizedHeaders()
-            ?: error("SIMKL is not connected")
+        if (!SimklAuthRepository.hasUsableToken()) error("SIMKL is not connected")
         val resolved = MediaIdResolver.resolve(
             contentType = item.type,
             parentMetaId = item.id,
@@ -153,7 +151,7 @@ internal object SimklLibraryRepository {
         val previous = _uiState.value
         _uiState.value = previous.withMembership(item, desired, resolved.isAnime)
         val response = runCatching {
-            httpRequestRaw(method = "POST", url = url, headers = headers, body = body)
+            simklRequest(method = "POST", url = url, body = body)
         }.getOrElse { error ->
             _uiState.value = previous
             throw error
@@ -241,7 +239,7 @@ internal object SimklLibraryRepository {
     }
 
     private suspend fun fetchType(type: String): List<LibraryItem> {
-        val headers = SimklAuthRepository.authorizedHeaders() ?: return emptyList()
+        if (!SimklAuthRepository.hasUsableToken()) return emptyList()
         // Filter to plantowatch only — the user's "want to watch" list, not their full history.
         // `extended=full` for the ids: the default response states the one id SIMKL indexes the
         // entry by, and a row that knows only its IMDb id cannot fill a poster template that also
@@ -250,7 +248,7 @@ internal object SimklLibraryRepository {
         val url = SimklAuthRepository.appendParams(
             "$BASE_URL/sync/all-items/$type/plantowatch?extended=full",
         )
-        val response = httpRequestRaw(method = "GET", url = url, headers = headers, body = "")
+        val response = simklRequest(method = "GET", url = url, body = "")
         if (response.status !in 200..299) {
             error("SIMKL /sync/all-items/$type returned ${response.status}")
         }

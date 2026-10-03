@@ -8,4 +8,4 @@ import androidx.compose.ui.Modifier
 
 @Composable internal expect fun NuvioDesktopVerticalScrollbar(state: LazyListState, modifier: Modifier = Modifier)
 @Composable internal expect fun NuvioDesktopVerticalScrollbar(state: LazyGridState, modifier: Modifier = Modifier)
-@Composable internal expect fun NuvioDesktopVerticalScrollbar(state: ScrollState, modifier: Modifier = Modifier)
+@Composable internal expect fun NuvioDesktopVerticalScrollbar(state: ScrollState, modifier: Modifier = Modifier, showInTvMode: Boolean = false)

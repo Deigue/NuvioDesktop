@@ -212,6 +212,47 @@ internal fun MetaDetails.seriesPrimaryAction(
         showUnairedNextUp = showUnairedNextUp,
     )?.toLegacySeriesPrimaryAction()
 
+/**
+ * What the details page's Play starts when [seriesPrimaryAction] has nothing: the episode after the
+ * one most recently finished (by time, not by position), or else the first released episode.
+ *
+ * [seriesPrimaryAction] is null for a show it considers finished — with "Up Next from furthest
+ * episode" on, a fully watched show being rewatched has no episode after the finale — and Play used
+ * to fall back to the bare show id, which searched streams for any episode at all. Home's Up Next
+ * still treats such a show as done; only an explicit Play needs an episode.
+ */
+internal fun MetaDetails.seriesRestartAction(
+    entries: List<WatchProgressEntry>,
+    watchedItems: List<WatchedItem>,
+    todayIsoDate: String,
+): SeriesPrimaryAction? {
+    val content = WatchingContentRef(type = type, id = id)
+    val latest = latestCompletedSeriesEpisode(
+        content = content,
+        progressRecords = entries.map(WatchProgressEntry::toDomainProgressRecord),
+        watchedRecords = watchedItems.map(WatchedItem::toDomainWatchedRecord),
+        preferFurthestEpisode = false,
+    )
+    val next = latest?.let { nextReleasedEpisodeAfter(it.seasonNumber, it.episodeNumber, todayIsoDate) }
+    val video = next ?: firstReleasedPlayableEpisode(todayIsoDate) ?: return null
+    val season = video.effectiveSeasonNumber()
+    val episode = video.effectiveEpisodeNumber()
+    return SeriesPrimaryAction(
+        label = if (next != null) video.upNextLabel() else video.playLabel(),
+        videoId = buildPlaybackVideoId(
+            content = content,
+            seasonNumber = season,
+            episodeNumber = episode,
+            fallbackVideoId = video.id,
+        ),
+        seasonNumber = season,
+        episodeNumber = episode,
+        episodeTitle = video.title.takeIf { it.isNotBlank() },
+        episodeThumbnail = video.thumbnail,
+        resumePositionMs = null,
+    )
+}
+
 internal fun MetaVideo.playLabel(): String =
     playLabel(seasonNumber = effectiveSeasonNumber(), episodeNumber = effectiveEpisodeNumber())
 

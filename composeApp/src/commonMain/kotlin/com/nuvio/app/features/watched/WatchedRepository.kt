@@ -20,6 +20,7 @@ import com.nuvio.app.features.tracking.TrackingHistoryItem
 import com.nuvio.app.features.tracking.TrackingMutationResult
 import com.nuvio.app.features.tracking.TrackingProviderId
 import com.nuvio.app.features.tracking.TrackingProviderRegistry
+import com.nuvio.app.features.tracking.WatchedHistoryReset
 import com.nuvio.app.features.tracking.buildTrackingMediaReference
 import com.nuvio.app.features.tracking.resolveContinueWatchingSource
 import com.nuvio.app.features.tracking.resolveLibrarySource
@@ -283,10 +284,22 @@ object WatchedRepository {
                     "Provider history import: ${provider.providerId.storageId} returned ${imported.size} rows " +
                         "(local before merge = ${itemsByKey.size})"
                 }
+                val resets = provider.consumeHistoryResets()
                 synchronized(itemsLock) {
                     val merged = mergeWatchedItemsAdditively(itemsByKey.values, imported)
-                    if (merged.size != itemsByKey.size || merged != itemsByKey) {
-                        itemsByKey = merged.toMutableMap()
+                    val pruned = pruneResetWatchedItems(
+                        items = merged,
+                        resets = resets,
+                        nowEpochMs = WatchedClock.nowEpochMs(),
+                    )
+                    if (pruned.size != merged.size) {
+                        log.i {
+                            "Provider history import: dropped ${merged.size - pruned.size} local tick(s) " +
+                                "${provider.providerId.storageId} no longer has after a reset"
+                        }
+                    }
+                    if (pruned.size != itemsByKey.size || pruned != itemsByKey) {
+                        itemsByKey = pruned.toMutableMap()
                         changed = true
                     }
                 }
@@ -624,6 +637,14 @@ object WatchedRepository {
     ): Boolean {
         ensureLoaded()
         return synchronized(itemsLock) { itemsByKey.containsKey(watchedItemKey(type, id, season, episode)) }
+    }
+
+    /** Whether anything of this title — the title itself or any episode — is on the watched list. */
+    fun hasAnyWatched(id: String, type: String): Boolean {
+        ensureLoaded()
+        return synchronized(itemsLock) {
+            itemsByKey.values.any { item -> item.id == id && item.type.equals(type, ignoreCase = true) }
+        }
     }
 
     /**
@@ -1035,6 +1056,49 @@ internal fun mergeWatchedItemsAdditively(
         }
     }
     return merged
+}
+
+/**
+ * How recent a local tick must be to survive a provider reset regardless — a completion that has not
+ * reached the provider yet (scrobble in flight, offline) must not be taken back by the next poll.
+ */
+internal const val WATCHED_RESET_GRACE_MS = 48L * 60L * 60L * 1000L
+
+/**
+ * [items] minus the episode ticks each [WatchedHistoryReset] shows to be stale, and the show's local
+ * series marker with them.
+ *
+ * A tick goes only when all of these hold, because the store also holds the user's own ticks and a
+ * wrong prune loses history that nothing restores:
+ *  - the provider now reports fewer episodes for the show than the store has — a show whose
+ *    numbering merely differs from the provider's has as many rows on both sides and is left alone;
+ *  - the provider does not report that episode;
+ *  - the tick predates the reset and is older than [graceMs].
+ */
+internal fun pruneResetWatchedItems(
+    items: Map<String, WatchedItem>,
+    resets: List<WatchedHistoryReset>,
+    nowEpochMs: Long,
+    graceMs: Long = WATCHED_RESET_GRACE_MS,
+): Map<String, WatchedItem> {
+    if (resets.isEmpty()) return items
+    val result = items.toMutableMap()
+    resets.forEach { reset ->
+        fun belongs(item: WatchedItem) =
+            item.type.equals(reset.type, ignoreCase = true) && item.id == reset.id
+        val localEpisodes = result.filter { (_, item) -> belongs(item) && item.season != null && item.episode != null }
+        if (localEpisodes.size <= reset.remoteEpisodes.size) return@forEach
+        val stale = localEpisodes.filter { (_, item) ->
+            val markedAt = normalizeWatchedMarkedAtEpochMs(item.markedAtEpochMs)
+            (item.season!! to item.episode!!) !in reset.remoteEpisodes &&
+                markedAt < reset.resetAtEpochMs &&
+                markedAt < nowEpochMs - graceMs
+        }.keys
+        if (stale.isEmpty()) return@forEach
+        stale.forEach(result::remove)
+        result.entries.removeAll { (_, item) -> belongs(item) && item.season == null && item.episode == null }
+    }
+    return result
 }
 
 /**

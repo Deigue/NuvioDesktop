@@ -527,6 +527,8 @@ private fun NativePlayerSurface(
         // Set when Prefer Failover handed the incident back because failover had nothing to try;
         // the rest of that incident stays with reconnect instead of re-running an empty failover.
         var reconnectingForFailover = false
+        // Node hops spent on 429s before the first frame (see tryHopAtOpen).
+        var openHopsUsed = 0
         val onSurfaceError = object : (String?) -> Unit {
             override fun invoke(message: String?) {
                 if (SeekRateLimitRecovery.isRateLimited(message)) {
@@ -542,6 +544,7 @@ private fun NativePlayerSurface(
                         settings.streamFailoverEnabled,
                     ) || (reconnectingForFailover && inRecentIncident)
                     if (reconnect && tryStartReconnect(message.orEmpty())) return
+                    if (tryHopAtOpen(message.orEmpty())) return
                 }
                 val current = redirectResolutions[sourceUrl]
                 val refreshable = message != null &&
@@ -615,6 +618,63 @@ private fun NativePlayerSurface(
                 lastRateLimitResumeMs = resumeMs
                 val failedUrl = redirectResolutions[sourceUrl]?.playbackUrl ?: sourceUrl
                 recoverFromRateLimit(message, failedUrl, waitSeconds * 1000L, resumeMs, this)
+                return true
+            }
+
+            /**
+             * A TorBox node that 429s the initial open (or its resume seek) has banned our IP for
+             * over an hour, and the attach-time hop only knows about nodes banned earlier this
+             * session — so without this the first open of a banned node always failed over or
+             * exited. Reopens the same link on another node at the original start position; no
+             * wait, since a node ban does not clear on any useful timescale. Off still never
+             * reconnects. When no node answers, the error goes on to failover / exit as before.
+             */
+            fun tryHopAtOpen(message: String): Boolean {
+                if (startedAttemptId.value == playbackAttemptId) return false
+                if (openHopsUsed >= SeekRateLimitRecovery.MAX_ATTEMPTS) return false
+                if (PlayerSettingsRepository.uiState.value.desktopRateLimitRecoveryMode ==
+                    DesktopRateLimitRecoveryMode.Off
+                ) {
+                    return false
+                }
+                val failedUrl = redirectResolutions[sourceUrl]?.playbackUrl ?: sourceUrl
+                if (!TorBoxNodeHop.isTorBoxNode(failedUrl)) return false
+                openHopsUsed += 1
+                val handler = this
+                surfaceScope.launch {
+                    BingeAdvanceLog.i {
+                        "desktop TorBox hop at open attemptId=$playbackAttemptId" +
+                            " try=$openHopsUsed/${SeekRateLimitRecovery.MAX_ATTEMPTS}" +
+                            " from=${PlaybackRedirectResolver.hostOf(failedUrl)} after: $message"
+                    }
+                    val hopped = TorBoxNodeHop.findAlternative(failedUrl, playbackUserAgent)
+                    if (attachedAttemptId.value != playbackAttemptId) return@launch
+                    if (hopped == null) {
+                        BingeAdvanceLog.i {
+                            "desktop TorBox hop at open found no working node attemptId=$playbackAttemptId"
+                        }
+                        openHopsUsed = SeekRateLimitRecovery.MAX_ATTEMPTS
+                        handler(message)
+                        return@launch
+                    }
+                    BingeAdvanceLog.i {
+                        "desktop TorBox hop at open attemptId=$playbackAttemptId" +
+                            " to=${PlaybackRedirectResolver.hostOf(hopped)}"
+                    }
+                    redirectResolutions[sourceUrl] = PlaybackRedirectResolution(
+                        sourceUrl,
+                        hopped,
+                        redirectResolutions[sourceUrl]?.hops ?: 0,
+                        PlaybackRedirectResolution.Outcome.Pinned,
+                    )
+                    attachWith(
+                        playbackUrl = hopped,
+                        positionMs = initialPositionMs,
+                        progressFraction = initialProgressFraction ?: 0f,
+                        tracePlaybackStart = false,
+                        onError = handler,
+                    )
+                }
                 return true
             }
 

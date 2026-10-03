@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.app.core.ui.NuvioAlertDialog
 import com.nuvio.app.core.ui.NuvioAsyncImage
+import com.nuvio.app.core.ui.NuvioDesktopVerticalScrollbar
 import com.nuvio.app.core.ui.NuvioModalDialog
 import com.nuvio.app.core.ui.NuvioPrimaryButton
 import com.nuvio.app.core.ui.NuvioTextField
@@ -137,17 +138,22 @@ fun PlaylistDialog(
                 modifier = Modifier.padding(vertical = 12.dp),
             )
         } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 440.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                PlaylistEntryList(
-                    playlist = playlist,
-                    onPlayEntry = onPlayEntry,
-                    onOpenDetails = onOpenDetails,
-                )
+            val listScroll = rememberScrollState()
+            Box(modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(listScroll)
+                        .padding(end = 12.dp),
+                ) {
+                    PlaylistEntryList(
+                        playlist = playlist,
+                        onPlayEntry = onPlayEntry,
+                        onOpenDetails = onOpenDetails,
+                    )
+                }
+                // The playlist dialog is not part of the TV UI, so TV mode does not hide its scrollbar.
+                NuvioDesktopVerticalScrollbar(listScroll, Modifier.align(Alignment.CenterEnd), showInTvMode = true)
             }
         }
     }
@@ -393,11 +399,18 @@ private fun PlaylistEntryRow(
                 .clip(RoundedCornerShape(6.dp))
                 .background(tokens.colors.surfaceCard),
         ) {
+            // Some shows' episode stills are dead links (every Friends episode), so a failed load
+            // steps down to the show's backdrop, then its poster, rather than leaving the box blank.
+            val artwork = remember(entry.episodeThumbnail, entry.background, entry.poster) {
+                listOfNotNull(entry.episodeThumbnail, entry.background, entry.poster).filter { it.isNotBlank() }
+            }
+            var artworkIndex by remember(artwork) { mutableStateOf(0) }
             NuvioAsyncImage(
-                model = entry.episodeThumbnail ?: entry.background ?: entry.poster,
+                model = artwork.getOrNull(artworkIndex),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
+                onError = { if (artworkIndex < artwork.lastIndex) artworkIndex++ },
             )
             if (entry.randomEpisode) {
                 Icon(

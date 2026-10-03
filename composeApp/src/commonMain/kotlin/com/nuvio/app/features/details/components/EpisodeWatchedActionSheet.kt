@@ -12,28 +12,22 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAddCheckCircle
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import com.nuvio.app.core.ui.NuvioBottomSheetActionRow
-import com.nuvio.app.core.ui.NuvioBottomSheetDivider
-import com.nuvio.app.core.ui.NuvioModalBottomSheet
-import com.nuvio.app.core.ui.dismissNuvioBottomSheet
-import com.nuvio.app.core.ui.nuvioSafeBottomPadding
 import com.nuvio.app.core.i18n.localizedSeasonEpisodeCode
+import com.nuvio.app.core.ui.NuvioActionBottomSheet
+import com.nuvio.app.core.ui.NuvioContextMenu
+import com.nuvio.app.core.ui.PosterZoomOverlayAction
 import com.nuvio.app.features.details.MetaVideo
-import kotlinx.coroutines.launch
 import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EpisodeWatchedActionSheet(
     episode: MetaVideo,
@@ -62,144 +56,102 @@ fun EpisodeWatchedActionSheet(
     onAddToPlaylist: (() -> Unit)? = null,
     /** Queues the episode's whole season in a playlist. Null hides the row. */
     onAddSeasonToPlaylist: (() -> Unit)? = null,
+    /** Where the opening right-click landed; set, the actions open as a context menu there. */
+    contextMenuPosition: IntOffset? = null,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val coroutineScope = rememberCoroutineScope()
-
-    NuvioModalBottomSheet(
-        onDismissRequest = {
-            coroutineScope.launch {
-                dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-            }
-        },
-        sheetState = sheetState,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = nuvioSafeBottomPadding(16.dp)),
-        ) {
-            EpisodeActionSheetHeader(
-                episode = episode,
-                seasonLabel = seasonLabel,
-            )
-            NuvioBottomSheetDivider()
-            NuvioBottomSheetActionRow(
+    val actions = buildList {
+        add(
+            PosterZoomOverlayAction(
                 icon = Icons.Default.CheckCircle,
-                title = if (isEpisodeWatched) {
+                label = if (isEpisodeWatched) {
                     stringResource(Res.string.episode_mark_unwatched)
                 } else {
                     stringResource(Res.string.episode_mark_watched)
                 },
-                onClick = {
-                    onToggleWatched()
-                    coroutineScope.launch {
-                        dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                    }
-                },
-            )
-            if (canMarkPreviousEpisodes) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
+                onSelected = onToggleWatched,
+            ),
+        )
+        if (canMarkPreviousEpisodes) {
+            add(
+                PosterZoomOverlayAction(
                     icon = Icons.Default.DoneAll,
-                    title = if (arePreviousEpisodesWatched) {
+                    label = if (arePreviousEpisodesWatched) {
                         stringResource(Res.string.episode_mark_previous_unwatched)
                     } else {
                         stringResource(Res.string.episode_mark_previous_watched)
                     },
-                    onClick = {
-                        onTogglePreviousWatched()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
-            NuvioBottomSheetDivider()
-            NuvioBottomSheetActionRow(
+                    onSelected = onTogglePreviousWatched,
+                ),
+            )
+        }
+        add(
+            PosterZoomOverlayAction(
                 icon = Icons.Default.PlaylistAddCheckCircle,
-                title = if (isSeasonWatched) {
+                label = if (isSeasonWatched) {
                     stringResource(Res.string.episode_mark_season_unwatched, seasonLabel)
                 } else {
                     stringResource(Res.string.episode_mark_season_watched, seasonLabel)
                 },
-                onClick = {
-                    onToggleSeasonWatched()
-                    coroutineScope.launch {
-                        dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                    }
-                },
-            )
-            if (alternatePlayLabel != null && onAlternatePlay != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.Default.PlayArrow,
-                    title = alternatePlayLabel,
-                    onClick = {
-                        onAlternatePlay()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
-            if (onRecap != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.Default.HistoryEdu,
-                    title = stringResource(Res.string.recap_action),
-                    onClick = {
-                        onRecap()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
-            if (onChooseSource != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.AutoMirrored.Filled.PlaylistPlay,
-                    title = stringResource(Res.string.play_choose_source),
-                    onClick = {
-                        onChooseSource()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
-            if (onAddToPlaylist != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                    title = "Add episode to playlist",
-                    onClick = {
-                        onAddToPlaylist()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
-            if (onAddSeasonToPlaylist != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                    title = "Add $seasonLabel to playlist",
-                    onClick = {
-                        onAddSeasonToPlaylist()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
+                onSelected = onToggleSeasonWatched,
+            ),
+        )
+        if (alternatePlayLabel != null && onAlternatePlay != null) {
+            add(PosterZoomOverlayAction(Icons.Default.PlayArrow, alternatePlayLabel, onSelected = onAlternatePlay, group = 1))
         }
+        if (onChooseSource != null) {
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+                    label = stringResource(Res.string.play_choose_source),
+                    onSelected = onChooseSource,
+                    group = 1,
+                ),
+            )
+        }
+        if (onRecap != null) {
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.Default.HistoryEdu,
+                    label = stringResource(Res.string.recap_action),
+                    onSelected = onRecap,
+                    group = 1,
+                ),
+            )
+        }
+        if (onAddToPlaylist != null) {
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    label = "Add episode to playlist",
+                    onSelected = onAddToPlaylist,
+                    group = 2,
+                ),
+            )
+        }
+        if (onAddSeasonToPlaylist != null) {
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    label = "Add $seasonLabel to playlist",
+                    onSelected = onAddSeasonToPlaylist,
+                    group = 2,
+                ),
+            )
+        }
+    }
+
+    if (contextMenuPosition != null) {
+        NuvioContextMenu(windowPosition = contextMenuPosition, actions = actions, onDismiss = onDismiss)
+        return
+    }
+    NuvioActionBottomSheet(actions = actions, onDismiss = onDismiss) {
+        EpisodeActionSheetHeader(
+            episode = episode,
+            seasonLabel = seasonLabel,
+        )
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SeasonWatchedActionSheet(
     seasonLabel: String,
@@ -216,87 +168,66 @@ fun SeasonWatchedActionSheet(
     onRecap: (() -> Unit)? = null,
     /** Queues the season's released episodes in a playlist. Null hides the row. */
     onAddSeasonToPlaylist: (() -> Unit)? = null,
+    /** Where the opening right-click landed; set, the actions open as a context menu there. */
+    contextMenuPosition: IntOffset? = null,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val coroutineScope = rememberCoroutineScope()
-
-    NuvioModalBottomSheet(
-        onDismissRequest = {
-            coroutineScope.launch {
-                dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-            }
-        },
-        sheetState = sheetState,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = nuvioSafeBottomPadding(16.dp)),
-        ) {
-            Text(
-                text = seasonLabel,
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            )
-            NuvioBottomSheetDivider()
-            NuvioBottomSheetActionRow(
+    val actions = buildList {
+        add(
+            PosterZoomOverlayAction(
                 icon = Icons.Default.PlaylistAddCheckCircle,
-                title = if (isSeasonWatched) {
+                label = if (isSeasonWatched) {
                     stringResource(Res.string.episode_mark_season_unwatched, seasonLabel)
                 } else {
                     stringResource(Res.string.episode_mark_season_watched, seasonLabel)
                 },
-                onClick = {
-                    onToggleSeasonWatched()
-                    coroutineScope.launch {
-                        dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                    }
-                },
-            )
-            if (onRecap != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.Default.HistoryEdu,
-                    title = stringResource(Res.string.recap_action),
-                    onClick = {
-                        onRecap()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
-            if (canMarkPreviousSeasons) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
+                onSelected = onToggleSeasonWatched,
+            ),
+        )
+        if (canMarkPreviousSeasons) {
+            add(
+                PosterZoomOverlayAction(
                     icon = Icons.Default.DoneAll,
-                    title = stringResource(Res.string.episode_mark_previous_seasons_watched),
-                    onClick = {
-                        onMarkPreviousSeasonsWatched()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
-            if (onAddSeasonToPlaylist != null) {
-                NuvioBottomSheetDivider()
-                NuvioBottomSheetActionRow(
-                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                    title = "Add $seasonLabel to playlist",
-                    onClick = {
-                        onAddSeasonToPlaylist()
-                        coroutineScope.launch {
-                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
-                        }
-                    },
-                )
-            }
+                    label = stringResource(Res.string.episode_mark_previous_seasons_watched),
+                    onSelected = onMarkPreviousSeasonsWatched,
+                ),
+            )
         }
+        if (onRecap != null) {
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.Default.HistoryEdu,
+                    label = stringResource(Res.string.recap_action),
+                    onSelected = onRecap,
+                    group = 1,
+                ),
+            )
+        }
+        if (onAddSeasonToPlaylist != null) {
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    label = "Add $seasonLabel to playlist",
+                    onSelected = onAddSeasonToPlaylist,
+                    group = 2,
+                ),
+            )
+        }
+    }
+
+    if (contextMenuPosition != null) {
+        NuvioContextMenu(windowPosition = contextMenuPosition, actions = actions, onDismiss = onDismiss)
+        return
+    }
+    NuvioActionBottomSheet(actions = actions, onDismiss = onDismiss) {
+        Text(
+            text = seasonLabel,
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+        )
     }
 }
 

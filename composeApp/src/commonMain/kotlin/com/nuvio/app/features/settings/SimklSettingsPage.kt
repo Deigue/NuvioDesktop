@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,6 +53,7 @@ import nuvio.composeapp.generated.resources.settings_simkl_daily_visit
 import nuvio.composeapp.generated.resources.settings_simkl_daily_visit_desc
 import nuvio.composeapp.generated.resources.settings_simkl_section_daily_visit
 import org.jetbrains.compose.resources.stringResource
+import kotlinx.coroutines.delay
 import com.nuvio.app.core.ui.NuvioTextField
 import com.nuvio.app.core.ui.accentBrush
 
@@ -185,14 +187,55 @@ private fun SimklConnectionCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        when (uiState.mode) {
-            SimklConnectionMode.CONNECTED -> {
-                uiState.username?.let { name ->
-                    Text(
-                        text = stringResource(Res.string.settings_simkl_connected_as_format, name),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold).accentBrush(),
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+        val showsConnection = uiState.mode == SimklConnectionMode.CONNECTED || uiState.isReconnecting
+        if (showsConnection) {
+            uiState.username?.let { name ->
+                Text(
+                    text = stringResource(Res.string.settings_simkl_connected_as_format, name),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold).accentBrush(),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            // Literal strings: newly added resource keys do not always resolve (see build notes).
+            val reconnectReason = when {
+                uiState.needsReconnect ->
+                    "SIMKL is no longer accepting this connection. It may have been removed from your " +
+                        "SIMKL Connected Apps, or gone unused for six months. Your history and lists are " +
+                        "kept; reconnect to resume syncing."
+                uiState.isLegacyConnection ->
+                    "Connected with SIMKL's older sign-in method, which SIMKL is retiring around April 2027. " +
+                        "Paste the Client ID of a new SIMKL app above, then reconnect once. Sign-in opens " +
+                        "simkl.com in your browser, so Nuvio never sees your password, and your watch " +
+                        "history stays where it is. Everything keeps working until you do."
+                else -> null
+            }
+            reconnectReason?.let { reason ->
+                Text(
+                    text = reason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (uiState.needsReconnect) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+            uiState.errorMessage?.let { error ->
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (reconnectReason != null) {
+                    if (uiState.isLoading) {
+                        CircularProgressIndicator()
+                    } else {
+                        Button(onClick = SimklAuthRepository::onConnectRequested) {
+                            Text("Reconnect")
+                        }
+                    }
                 }
                 Button(
                     onClick = SimklAuthRepository::onDisconnectRequested,
@@ -204,29 +247,44 @@ private fun SimklConnectionCard(
                     Text(stringResource(Res.string.settings_simkl_disconnect))
                 }
             }
-            SimklConnectionMode.AWAITING_PIN, SimklConnectionMode.DISCONNECTED -> {
-                if (uiState.isLoading) {
-                    CircularProgressIndicator()
-                } else {
-                    uiState.errorMessage?.let { error ->
-                        Text(
-                            text = error,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                    Button(onClick = SimklAuthRepository::onConnectRequested) {
-                        Text(stringResource(Res.string.settings_simkl_connect))
-                    }
+        } else {
+            if (uiState.isLoading) {
+                CircularProgressIndicator()
+            } else {
+                uiState.errorMessage?.let { error ->
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Button(onClick = SimklAuthRepository::onConnectRequested) {
+                    Text(stringResource(Res.string.settings_simkl_connect))
                 }
             }
         }
     }
 
     if (showPinDialog && uiState.pendingPin != null) {
+        val uriHandler = LocalUriHandler.current
+        val verificationUrl = uiState.pendingVerificationUrl ?: "https://simkl.com/pin"
+        // A desktop app opens the pre-filled approval page itself; the code stays on screen for
+        // anyone approving from a phone instead.
+        LaunchedEffect(uiState.pendingPin) {
+            runCatching { uriHandler.openUri(verificationUrl) }
+        }
+        var remainingSeconds by remember(uiState.pendingExpiresAtMs) {
+            mutableStateOf(secondsUntil(uiState.pendingExpiresAtMs))
+        }
+        LaunchedEffect(uiState.pendingExpiresAtMs) {
+            while (remainingSeconds > 0) {
+                delay(1_000)
+                remainingSeconds = secondsUntil(uiState.pendingExpiresAtMs)
+            }
+        }
         BasicAlertDialog(onDismissRequest = {
             showPinDialog = false
-            SimklAuthRepository.onDisconnectRequested()
+            SimklAuthRepository.onConnectCancelled()
         }) {
             NuvioDialogSurface {
                 Column(
@@ -245,19 +303,28 @@ private fun SimklConnectionCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                     )
+                    // Shown exactly as issued, hyphen included.
                     Text(
                         text = uiState.pendingPin,
                         style = MaterialTheme.typography.displaySmall.accentBrush(),
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
                         letterSpacing = androidx.compose.ui.unit.TextUnit(
-                            8f,
+                            4f,
                             androidx.compose.ui.unit.TextUnitType.Sp,
                         ),
                     )
-                    val uriHandler = LocalUriHandler.current
-                    Button(onClick = { uriHandler.openUri("https://simkl.com/pin") }) {
-                        Text("Open simkl.com/pin")
+                    if (uiState.pendingExpiresAtMs != null) {
+                        val minutes = remainingSeconds / 60
+                        val seconds = (remainingSeconds % 60).toString().padStart(2, '0')
+                        Text(
+                            text = "Code expires in $minutes:$seconds",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Button(onClick = { uriHandler.openUri(verificationUrl) }) {
+                        Text("Open simkl.com")
                     }
                     Spacer(Modifier.height(4.dp))
                     CircularProgressIndicator()
@@ -265,7 +332,7 @@ private fun SimklConnectionCard(
                     Button(
                         onClick = {
                             showPinDialog = false
-                            SimklAuthRepository.onDisconnectRequested()
+                            SimklAuthRepository.onConnectCancelled()
                         },
                         colors = ButtonDefaults.outlinedButtonColors(),
                     ) {
@@ -276,3 +343,6 @@ private fun SimklConnectionCard(
         }
     }
 }
+
+private fun secondsUntil(epochMs: Long?): Long =
+    epochMs?.let { ((it - System.currentTimeMillis()) / 1000L).coerceAtLeast(0L) } ?: 0L

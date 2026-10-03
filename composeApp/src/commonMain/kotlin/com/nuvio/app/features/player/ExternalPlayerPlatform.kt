@@ -12,6 +12,8 @@ data class SubtitleInput(
     val url: String,
     val name: String,
     val lang: String,
+    /** The addon URL [url] was downloaded from, when [url] is a local cached copy. */
+    val sourceUrl: String? = null,
 )
 
 data class ExternalPlayerPlaybackRequest(

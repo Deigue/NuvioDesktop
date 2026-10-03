@@ -1,6 +1,5 @@
 package com.nuvio.app.features.simkl
 
-import com.nuvio.app.features.addons.httpRequestRaw
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.tracking.TrackingMediaKind
 import com.nuvio.app.features.tracking.TrackingMediaReference
@@ -41,12 +40,10 @@ internal object SimklRatingWriter : TrackingRatingWriter {
 
         val body = buildRatingBody(item, media.kind, rating)
         val endpoint = if (rating == null) "/sync/ratings/remove" else "/sync/ratings"
-        val headers = SimklAuthRepository.authorizedHeaders()
-            ?: error("SIMKL is not connected")
-        val response = httpRequestRaw(
+        if (!SimklAuthRepository.hasUsableToken()) error("SIMKL is not connected")
+        val response = simklRequest(
             method = "POST",
             url = SimklAuthRepository.appendParams("$BASE_URL$endpoint"),
-            headers = headers,
             body = body,
         )
         if (response.status !in 200..299) {
