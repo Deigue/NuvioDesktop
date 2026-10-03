@@ -247,7 +247,13 @@ internal class NativePlayerController(
                 if (tracePlaybackStart && DesktopHostOs.current == DesktopHostOs.WINDOWS) {
                     add("@nuvio-trace-id=${PlaybackStartTrace.currentId}")
                 }
-                if (isProviderPlaybackEndpoint(sourceUrl) || isExplicitProviderDiagnosticVideoUrl(sourceUrl)) {
+                // youtube-dl has nothing to add for a provider endpoint or a debrid CDN link, and
+                // when mpv cannot open one it hands the URL to ytdl_hook, whose "youtube-dl failed:
+                // not found" errors then bury the real failure in the playback log.
+                if (isProviderPlaybackEndpoint(sourceUrl) ||
+                    isExplicitProviderDiagnosticVideoUrl(sourceUrl) ||
+                    PlaybackRedirectResolver.isDirectMediaHost(sourceUrl)
+                ) {
                     add("ytdl=no")
                 }
                 // A Nuvio option like the rest: Replace lets a custom network-timeout override it,

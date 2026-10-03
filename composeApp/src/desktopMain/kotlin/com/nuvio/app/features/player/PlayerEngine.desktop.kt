@@ -549,6 +549,10 @@ private fun NativePlayerSurface(
                 if (TorBoxNodeHop.looksLikeNodeStall(message)) {
                     val stalledUrl = redirectResolutions[sourceUrl]?.playbackUrl ?: sourceUrl
                     if (TorBoxNodeHop.isTorBoxNode(stalledUrl)) {
+                        BingeAdvanceLog.i {
+                            "desktop TorBox node stalled attemptId=$playbackAttemptId" +
+                                " host=${PlaybackRedirectResolver.hostOf(stalledUrl)} after: $message"
+                        }
                         TorBoxNodeHop.markStalled(stalledUrl)
                         if (tryHopAtOpen(message.orEmpty())) return
                     }
