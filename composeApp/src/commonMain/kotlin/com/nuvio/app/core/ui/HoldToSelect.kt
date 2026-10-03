@@ -79,19 +79,22 @@ object HoldToSelect {
  * `posterCardClickable`.
  */
 internal object HighlightedCardAnchor {
-    private var current: (() -> Unit)? = null
+    // A stack, not a single slot: TV mode's row transition keeps the outgoing row composed (and
+    // its card highlighted) while the incoming one registers, and the outgoing card leaving must
+    // not take the incoming card's registration with it. The newest registration wins.
+    private val registered = ArrayList<() -> Unit>()
 
     fun register(prepare: () -> Unit) {
-        current = prepare
+        registered += prepare
     }
 
     fun unregister(prepare: () -> Unit) {
-        if (current === prepare) current = null
+        registered.removeAll { it === prepare }
     }
 
     /** Stashes the highlighted card's zoom anchor and menu position for the long-press handler. */
     fun prepareForHold() {
-        current?.invoke()
+        registered.lastOrNull()?.invoke()
     }
 }
 

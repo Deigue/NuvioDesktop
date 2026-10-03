@@ -1103,10 +1103,13 @@ internal fun Modifier.posterCardClickable(
     // While keyboard focus highlights this card, a held select key opens its actions here, beside
     // the card, as a right-click would at the cursor. The screen's key handler decides what the
     // hold does; the card only says where it is.
+    // Read through the updated state so a card whose artwork changes while it stays highlighted
+    // stashes the current art, not what it showed when it was first highlighted.
+    val currentStashZoomAnchor = rememberUpdatedState<() -> Unit>({ stashZoomAnchor() })
     if (onLongClick != null && LocalNuvioShelfItemHighlighted.current) {
         DisposableEffect(Unit) {
             val prepare: () -> Unit = {
-                stashZoomAnchor()
+                currentStashZoomAnchor.value()
                 val origin = windowOrigin.value
                 val cardBounds = bounds.value
                 if (origin != null && cardBounds != null) {
