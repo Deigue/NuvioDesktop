@@ -50,14 +50,20 @@ internal object YamtrackHistoryWriter : TrackingHistoryWriter {
         val (baseUrl, token) = YamtrackSettingsRepository.activeCredentials()
             ?: error("Floppy is not connected")
         var notFound = 0
-        // Anime episodes collapse per MAL entry: its progress is one count, so a batch only ever
-        // needs the highest episode to mark or the lowest to unmark.
-        val animeEpisodes = linkedMapOf<String, MutableList<YamtrackAnimeResolution.Entry>>()
+        // A show-level reference in an unmark is a whole-show unmark: the show is deleted outright,
+        // which also covers any of its episodes sent alongside.
+        val wholeShowUnmarks = if (watched) emptySet() else wholeShowUnmarkIds(items)
+        val animeEpisodes = mutableListOf<YamtrackAnimeResolution.Entry>()
         items.forEach { media ->
+            if (!watched && media.isShowLevelSeries()) {
+                if (!deleteWholeShow(baseUrl, token, media)) notFound += 1
+                return@forEach
+            }
+            if (media.catalog?.contentId in wholeShowUnmarks) return@forEach
             when (val anime = media.resolveFloppyAnime()) {
                 is YamtrackAnimeResolution.Entry -> {
-                    // The show-level marker of an anime action; its episodes carry the change.
-                    if (anime.episode != null) animeEpisodes.getOrPut(anime.mal) { mutableListOf() } += anime
+                    // The show-level marker of an anime mark; its episodes carry the change.
+                    if (anime.episode != null) animeEpisodes += anime
                     return@forEach
                 }
                 is YamtrackAnimeResolution.Unaddressable -> {
@@ -88,15 +94,50 @@ internal object YamtrackHistoryWriter : TrackingHistoryWriter {
             }
             if (!succeeded) notFound += 1
         }
-        animeEpisodes.values.forEach { entries ->
+        selectAnimeEpisodePerEntry(animeEpisodes, watched).forEach { entry ->
             val succeeded = if (watched) {
-                markAnimeEpisode(baseUrl, token, entries.maxBy { it.episode ?: 0 })
+                markAnimeEpisode(baseUrl, token, entry)
             } else {
-                unmarkAnimeEpisode(baseUrl, token, entries.minBy { it.episode ?: 0 })
+                unmarkAnimeEpisode(baseUrl, token, entry)
             }
-            if (!succeeded) notFound += entries.size
+            if (!succeeded) notFound += animeEpisodes.count { it.mal == entry.mal }
         }
         return TrackingMutationResult(items.size, notFoundCount = notFound)
+    }
+
+    /**
+     * Deletes a whole show from Floppy for a whole-show unmark — its anime MAL row, or its TV item.
+     *
+     * This is also the only path for a poster unmark whose episode list could not be loaded, which
+     * arrives as nothing but the show-level reference.
+     */
+    private suspend fun deleteWholeShow(baseUrl: String, token: String, media: TrackingMediaReference): Boolean {
+        val catalog = media.catalog ?: return false
+        val url = when (val anime = media.resolveFloppyAnime()) {
+            is YamtrackAnimeResolution.Entry -> "$baseUrl/api/v1/media/anime/mal/${anime.mal}/"
+            is YamtrackAnimeResolution.Unaddressable -> {
+                log.w { "Floppy skipped anime '${media.title}': ${anime.reason}" }
+                return false
+            }
+            YamtrackAnimeResolution.NotAnime -> {
+                val identity = YamtrackScrobbleRepository.buildItem(
+                    contentType = catalog.contentType,
+                    parentMetaId = catalog.contentId,
+                    videoId = null,
+                    title = media.title,
+                    episodeTitle = null,
+                    seasonNumber = null,
+                    episodeNumber = null,
+                    isAnime = media.kind == TrackingMediaKind.ANIME,
+                )?.ids?.toFloppyTvIdentity() ?: return false
+                "$baseUrl/api/v1/media/tv/${identity.source}/${identity.id}/"
+            }
+        }
+        val response = httpRequestRaw("DELETE", url, floppyHeaders(token), "")
+        require(response.status in 200..299 || response.status == 404) {
+            "Floppy show delete failed (${response.status}): ${response.body.take(200)}"
+        }
+        return true
     }
 
     private suspend fun TrackingMediaReference.resolveFloppyAnime(): YamtrackAnimeResolution {
@@ -125,7 +166,9 @@ internal object YamtrackHistoryWriter : TrackingHistoryWriter {
         entry: YamtrackAnimeResolution.Entry,
     ): Boolean {
         val episode = entry.episode ?: return true
-        if (animeRows(baseUrl, token, entry.mal).any { it.progressCount >= episode }) return true
+        if (animeEpisodeAlreadyCounted(animeRows(baseUrl, token, entry.mal).map { it.progressCount }, episode)) {
+            return true
+        }
         return YamtrackScrobbleRepository.scrobble(
             action = "stop",
             item = YamtrackScrobbleItem.Episode(
@@ -155,18 +198,20 @@ internal object YamtrackHistoryWriter : TrackingHistoryWriter {
         entry: YamtrackAnimeResolution.Entry,
     ): Boolean {
         val episode = entry.episode ?: return true
-        val rows = animeRows(baseUrl, token, entry.mal).filter { it.progressCount >= episode }
-        if (rows.isEmpty()) return true
+        val rows = animeRows(baseUrl, token, entry.mal)
         val headers = floppyHeaders(token)
-        val remaining = episode - 1
-        if (remaining <= 0) {
-            val response = httpRequestRaw("DELETE", "$baseUrl/api/v1/media/anime/mal/${entry.mal}/", headers, "")
-            require(response.status in 200..299 || response.status == 404) {
-                "Floppy anime untrack failed (${response.status}): ${response.body.take(200)}"
+        val remaining = when (val plan = animeUnmarkPlan(rows.map { it.progressCount }, episode)) {
+            AnimeUnmarkPlan.NoChange -> return true
+            AnimeUnmarkPlan.Untrack -> {
+                val response = httpRequestRaw("DELETE", "$baseUrl/api/v1/media/anime/mal/${entry.mal}/", headers, "")
+                require(response.status in 200..299 || response.status == 404) {
+                    "Floppy anime untrack failed (${response.status}): ${response.body.take(200)}"
+                }
+                return true
             }
-            return true
+            is AnimeUnmarkPlan.Lower -> plan.progress
         }
-        rows.forEach { row ->
+        rows.filter { it.progressCount >= episode }.forEach { row ->
             val response = httpRequestRaw(
                 "PATCH",
                 "$baseUrl/api/v1/media/anime/mal/${entry.mal}/history/${row.consumptionId}/",
@@ -315,6 +360,49 @@ internal object YamtrackHistoryWriter : TrackingHistoryWriter {
 private fun String.isSeriesLikeFloppyType(): Boolean =
     trim().lowercase() in setOf("series", "tv", "show", "tvshow", "anime")
 
+private fun TrackingMediaReference.isShowLevelSeries(): Boolean =
+    episode == null && catalog?.contentType?.isSeriesLikeFloppyType() == true
+
+/** Shows whose show-level reference is in an unmark batch, i.e. whole-show unmarks. */
+internal fun wholeShowUnmarkIds(items: Collection<TrackingMediaReference>): Set<String> =
+    items.filter { it.isShowLevelSeries() }.mapNotNullTo(linkedSetOf()) { it.catalog?.contentId }
+
+/**
+ * One episode per MAL entry. The entry's progress is a single count, so a batch only ever needs
+ * its highest episode to mark, or its lowest to unmark.
+ */
+internal fun selectAnimeEpisodePerEntry(
+    entries: Collection<YamtrackAnimeResolution.Entry>,
+    watched: Boolean,
+): List<YamtrackAnimeResolution.Entry> = entries
+    .filter { it.episode != null }
+    .groupBy { it.mal }
+    .values
+    .map { group -> if (watched) group.maxBy { it.episode!! } else group.minBy { it.episode!! } }
+
+/** Whether [episode] is already inside an entry's count, so scrobbling it would roll progress back. */
+internal fun animeEpisodeAlreadyCounted(progressCounts: Collection<Int>, episode: Int): Boolean =
+    progressCounts.any { it >= episode }
+
+internal sealed interface AnimeUnmarkPlan {
+    /** Untracked, or the episode is not inside the count. */
+    data object NoChange : AnimeUnmarkPlan
+    /** Nothing would be left watched; unwatched means untracked. */
+    data object Untrack : AnimeUnmarkPlan
+    data class Lower(val progress: Int) : AnimeUnmarkPlan
+}
+
+internal fun animeUnmarkPlan(progressCounts: Collection<Int>, episode: Int): AnimeUnmarkPlan = when {
+    progressCounts.none { it >= episode } -> AnimeUnmarkPlan.NoChange
+    episode <= 1 -> AnimeUnmarkPlan.Untrack
+    else -> AnimeUnmarkPlan.Lower(episode - 1)
+}
+
+/** Floppy rejects imdb for `tv` ("Cannot query `imdb` for `tv` media type"). */
+private fun YamtrackScrobbleRepository.YamtrackIds.toFloppyTvIdentity(): FloppyIdentity? =
+    tmdb?.takeIf(String::isNotBlank)?.let { FloppyIdentity("tmdb", it) }
+        ?: tvdb?.takeIf(String::isNotBlank)?.let { FloppyIdentity("tvdb", it) }
+
 private data class FloppyIdentity(val source: String, val id: String)
 
 private sealed interface FloppyHistoryTarget {
@@ -329,7 +417,7 @@ private sealed interface FloppyHistoryTarget {
         val episode: Int,
     ) : FloppyHistoryTarget {
         fun watchUrl(baseUrl: String): String =
-            "$baseUrl/api/v1/media/tv/${identity.source}/${identity.id}/$season/episodes/$episode/watch"
+            "$baseUrl/api/v1/media/tv/${identity.source}/${identity.id}/$season/episodes/$episode/watch/"
     }
 }
 

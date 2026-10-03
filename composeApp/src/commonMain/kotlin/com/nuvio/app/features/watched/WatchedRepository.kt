@@ -706,8 +706,10 @@ object WatchedRepository {
      * Mirrors an explicit mark/unmark to Floppy when it is connected and enabled but is not the
      * selected Library source (in which case the primary write already went there).
      *
-     * Only concrete movies and episodes are sent. Show-level markers have no Floppy route; the
-     * episodes that accompany a whole-show or whole-season action carry the actual change.
+     * A mark sends only concrete movies and episodes; a show-level marker has no mark route, and
+     * the episodes alongside it carry the change. An unmark keeps it: Floppy treats a show-level
+     * unmark as "delete the whole show", which is also the only signal a poster unmark sends when
+     * the show's episode list could not be loaded.
      * Playback completion never reaches here — Floppy's scrobbler already records that.
      */
     private suspend fun mirrorHistoryToFloppy(
@@ -719,7 +721,7 @@ object WatchedRepository {
         if (selectedLibraryHistoryWriter()?.providerId == floppyId) return
         if (!TrackingProviderRegistry.isAuthenticated(floppyId)) return
         val writer = TrackingProviderRegistry.historyWriter(floppyId) ?: return
-        val targets = items.filterNot { item ->
+        val targets = if (!watched) items else items.filterNot { item ->
             !item.isEpisode && item.type.isSeriesLikeWatchedType()
         }
         if (targets.isEmpty()) return

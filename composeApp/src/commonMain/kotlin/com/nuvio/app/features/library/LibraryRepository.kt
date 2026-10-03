@@ -287,7 +287,7 @@ object LibraryRepository {
                         item = item,
                         desiredMembership = desired,
                     )
-                    mirrorLibraryToFloppy(provider, item, inLibrary = desired.values.any { it })
+                    mirrorLibraryToFloppy(provider.providerId, item, inLibrary = desired.values.any { it })
                 }
                     .onFailure { e ->
                         log.e(e) { "Failed to toggle ${provider.providerId} library" }
@@ -314,26 +314,39 @@ object LibraryRepository {
         publish()
         persist()
         pushToServer()
+        mirrorLocalLibraryToFloppy(item, inLibrary = true)
     }
 
     fun remove(id: String) {
         ensureLoaded()
-        val before = itemsById.size
+        val removed = itemsById.values.filter { item -> item.id == id }
         itemsById.entries.removeAll { (_, item) -> item.id == id }
-        if (itemsById.size != before) {
+        if (removed.isNotEmpty()) {
             publish()
             persist()
             pushToServer()
+            removed.forEach { item -> mirrorLocalLibraryToFloppy(item, inLibrary = false) }
         }
     }
 
     private fun remove(id: String, type: String) {
         ensureLoaded()
-        if (itemsById.remove(libraryItemKey(id, type)) != null) {
+        val removed = itemsById.remove(libraryItemKey(id, type))
+        if (removed != null) {
             publish()
             persist()
             pushToServer()
+            mirrorLocalLibraryToFloppy(removed, inLibrary = false)
         }
+    }
+
+    /**
+     * Local saves mirror only when the local/Nuvio Sync library *is* the Library source. Alongside
+     * an active provider the local list is a secondary tab, and the provider path already mirrors.
+     */
+    private fun mirrorLocalLibraryToFloppy(item: LibraryItem, inLibrary: Boolean) {
+        if (activeLibraryProvider() != null) return
+        mirrorLibraryToFloppy(sourceProviderId = null, item = item, inLibrary = inLibrary)
     }
 
     fun isSaved(id: String, type: String? = null): Boolean {
@@ -406,7 +419,7 @@ object LibraryRepository {
                     item = item,
                     desiredMembership = providerMembership,
                 )
-                mirrorLibraryToFloppy(provider, item, inLibrary = providerMembership.values.any { it })
+                mirrorLibraryToFloppy(provider.providerId, item, inLibrary = providerMembership.values.any { it })
             }
             publish()
         } ?: run {
@@ -431,16 +444,19 @@ object LibraryRepository {
     }
 
     /**
-     * Copies a library add/remove on the active provider (e.g. SIMKL) to Floppy when it is enabled.
-     * Runs only after the provider write succeeded, and never when Floppy is itself the Library
-     * source — that write already went there. Failures are logged and never undo the provider write.
+     * Copies a library add/remove to Floppy when it is enabled, for every Library source but Floppy
+     * itself (whose own write already went there) — the same rule watched marks follow.
+     *
+     * [sourceProviderId] is the active provider (e.g. SIMKL), or null for the local/Nuvio Sync
+     * library. For a provider this runs only after its write succeeded. Failures are logged and
+     * never undo the source's change.
      */
     private fun mirrorLibraryToFloppy(
-        provider: TrackingLibraryProvider,
+        sourceProviderId: TrackingProviderId?,
         item: LibraryItem,
         inLibrary: Boolean,
     ) {
-        if (provider.providerId == TrackingProviderId.YAMTRACK) return
+        if (sourceProviderId == TrackingProviderId.YAMTRACK) return
         if (!TrackingProviderRegistry.isAuthenticated(TrackingProviderId.YAMTRACK)) return
         syncScope.launch {
             runCatching { YamtrackLibraryAdapter.mirrorMembership(item, inLibrary) }

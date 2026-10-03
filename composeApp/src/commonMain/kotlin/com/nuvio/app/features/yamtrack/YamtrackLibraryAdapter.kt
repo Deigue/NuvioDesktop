@@ -49,7 +49,7 @@ internal object YamtrackLibraryAdapter : TrackingLibraryProvider {
         while (true) {
             val response = httpRequestRaw(
                 "GET",
-                "$baseUrl/api/v1/media?limit=$PAGE_SIZE&offset=$offset",
+                "$baseUrl/api/v1/media/?limit=$PAGE_SIZE&offset=$offset",
                 floppyLibraryHeaders(token),
                 "",
             )
@@ -97,8 +97,17 @@ internal object YamtrackLibraryAdapter : TrackingLibraryProvider {
 
     override fun find(contentId: String): LibraryItem? = state.items.firstOrNull { it.id == contentId }
 
-    override suspend fun membership(item: LibraryItem): Map<String, Boolean> =
-        mapOf(TAB_KEY to contains(item.id, item.type))
+    override suspend fun membership(item: LibraryItem): Map<String, Boolean> {
+        // Anime lives on a MAL row whose id never matches the catalog id being browsed, so the
+        // snapshot cannot answer for it — ask Floppy directly.
+        val credentials = YamtrackSettingsRepository.activeCredentials()
+        val anime = credentials?.let { item.resolveFloppyAnime() }
+        if (credentials != null && anime is YamtrackAnimeResolution.Entry) {
+            val (baseUrl, token) = credentials
+            return mapOf(TAB_KEY to isTracked(animeMediaUrl(baseUrl, anime.mal), floppyLibraryHeaders(token)))
+        }
+        return mapOf(TAB_KEY to contains(item.id, item.type))
+    }
 
     override fun toggledDefaultMembership(currentMembership: Map<String, Boolean>): Map<String, Boolean> =
         mapOf(TAB_KEY to (currentMembership[TAB_KEY] != true))
@@ -111,6 +120,16 @@ internal object YamtrackLibraryAdapter : TrackingLibraryProvider {
     ): TrackingMembershipResolution? {
         if (profileId != ProfileRepository.activeProfileId) return null
         val desired = desiredMembership[TAB_KEY] ?: return null
+        // Anime goes to its MAL row, the same entry watched-history writes use. Anime that cannot
+        // be pinned to one keeps the TV route below, as before.
+        YamtrackSettingsRepository.activeCredentials()?.let { (baseUrl, token) ->
+            val anime = item.resolveFloppyAnime()
+            if (anime is YamtrackAnimeResolution.Entry) {
+                applyAnimeMembership(baseUrl, floppyLibraryHeaders(token), anime.mal, desired)
+                refresh(TrackingRefreshIntent.INVALIDATED)
+                return TrackingMembershipResolution(providerId, TAB_KEY, TAB_KEY)
+            }
+        }
         val current = contains(item.id, item.type)
         if (desired == current) return TrackingMembershipResolution(providerId, TAB_KEY, TAB_KEY)
         val (baseUrl, token) = YamtrackSettingsRepository.activeCredentials()
@@ -119,14 +138,14 @@ internal object YamtrackLibraryAdapter : TrackingLibraryProvider {
         val response = if (desired) {
             httpRequestRaw(
                 "POST",
-                "$baseUrl/api/v1/media/${target.mediaType}",
+                "$baseUrl/api/v1/media/${target.mediaType}/",
                 floppyLibraryHeaders(token),
                 json.encodeToString(FloppyTrackRequest(target.source, target.id)),
             )
         } else {
             httpRequestRaw(
                 "DELETE",
-                "$baseUrl/api/v1/media/${target.mediaType}/${target.source}/${target.id}",
+                "$baseUrl/api/v1/media/${target.mediaType}/${target.source}/${target.id}/",
                 floppyLibraryHeaders(token),
                 "",
             )
@@ -152,17 +171,8 @@ internal object YamtrackLibraryAdapter : TrackingLibraryProvider {
     suspend fun mirrorMembership(item: LibraryItem, inLibrary: Boolean) {
         val (baseUrl, token) = YamtrackSettingsRepository.activeCredentials() ?: return
         val headers = floppyLibraryHeaders(token)
-        val anime = YamtrackScrobbleRepository.resolveAnimeEntry(
-            contentType = item.type,
-            parentMetaId = item.id,
-            videoId = null,
-            title = item.name,
-            seasonNumber = null,
-            episodeNumber = null,
-            isAnime = item.type.equals("anime", ignoreCase = true),
-        )
-        when (anime) {
-            is YamtrackAnimeResolution.Entry -> return mirrorAnimeMembership(baseUrl, headers, anime.mal, inLibrary)
+        when (val anime = item.resolveFloppyAnime()) {
+            is YamtrackAnimeResolution.Entry -> return applyAnimeMembership(baseUrl, headers, anime.mal, inLibrary)
             // Anime without a MAL entry is skipped: the TV route would file it as a duplicate
             // TMDB show beside the Anime row that history writes use.
             is YamtrackAnimeResolution.Unaddressable -> error("Floppy skipped anime ${item.name}: ${anime.reason}")
@@ -170,19 +180,15 @@ internal object YamtrackLibraryAdapter : TrackingLibraryProvider {
         }
         val target = item.resolveFloppyLibraryTarget() ?: error("Floppy could not resolve ${item.name}")
         val mediaUrl = "$baseUrl/api/v1/media/${target.mediaType}/${target.source}/${target.id}/"
-        val existing = httpRequestRaw("GET", mediaUrl, headers, "")
-        val tracked = existing.status in 200..299 &&
-            json.decodeFromString<FloppyTrackedFlag>(existing.body).tracked
-        if (inLibrary == tracked) return
-        val response = if (inLibrary) {
-            httpRequestRaw(
+        val response = when (floppyMembershipChange(isTracked(mediaUrl, headers), inLibrary)) {
+            FloppyMembershipChange.NONE -> return
+            FloppyMembershipChange.ADD -> httpRequestRaw(
                 "POST",
                 "$baseUrl/api/v1/media/${target.mediaType}/",
                 headers,
                 json.encodeToString(FloppyPlanRequest(target.source, target.id, status = 0)),
             )
-        } else {
-            httpRequestRaw("DELETE", mediaUrl, headers, "")
+            FloppyMembershipChange.REMOVE -> httpRequestRaw("DELETE", mediaUrl, headers, "")
         }
         if (response.status !in 200..299 && !(response.status == 404 && !inLibrary)) {
             error("Floppy library mirror failed (${response.status}): ${response.body.take(200)}")
@@ -190,31 +196,59 @@ internal object YamtrackLibraryAdapter : TrackingLibraryProvider {
     }
 
     /** Anime lives on Floppy as a MAL row; adding needs an explicit starting `progress`. */
-    private suspend fun mirrorAnimeMembership(
+    private suspend fun applyAnimeMembership(
         baseUrl: String,
         headers: Map<String, String>,
         mal: String,
         inLibrary: Boolean,
     ) {
-        val mediaUrl = "$baseUrl/api/v1/media/anime/mal/$mal/"
-        val existing = httpRequestRaw("GET", mediaUrl, headers, "")
-        val tracked = existing.status in 200..299 &&
-            json.decodeFromString<FloppyTrackedFlag>(existing.body).tracked
-        if (inLibrary == tracked) return
-        val response = if (inLibrary) {
-            httpRequestRaw(
+        val mediaUrl = animeMediaUrl(baseUrl, mal)
+        val response = when (floppyMembershipChange(isTracked(mediaUrl, headers), inLibrary)) {
+            FloppyMembershipChange.NONE -> return
+            FloppyMembershipChange.ADD -> httpRequestRaw(
                 "POST",
                 "$baseUrl/api/v1/media/anime/",
                 headers,
                 json.encodeToString(FloppyAnimePlanRequest("mal", mal, status = 0, progress = 0)),
             )
-        } else {
-            httpRequestRaw("DELETE", mediaUrl, headers, "")
+            FloppyMembershipChange.REMOVE -> httpRequestRaw("DELETE", mediaUrl, headers, "")
         }
         if (response.status !in 200..299 && !(response.status == 404 && !inLibrary)) {
-            error("Floppy anime library mirror failed (${response.status}): ${response.body.take(200)}")
+            error("Floppy anime library update failed (${response.status}): ${response.body.take(200)}")
         }
     }
+
+    private suspend fun isTracked(mediaUrl: String, headers: Map<String, String>): Boolean {
+        val existing = httpRequestRaw("GET", mediaUrl, headers, "")
+        return existing.status in 200..299 && json.decodeFromString<FloppyTrackedFlag>(existing.body).tracked
+    }
+
+    private fun animeMediaUrl(baseUrl: String, mal: String) = "$baseUrl/api/v1/media/anime/mal/$mal/"
+
+    private suspend fun LibraryItem.resolveFloppyAnime(): YamtrackAnimeResolution =
+        YamtrackScrobbleRepository.resolveAnimeEntry(
+            contentType = type,
+            parentMetaId = id,
+            videoId = null,
+            title = name,
+            seasonNumber = null,
+            episodeNumber = null,
+            isAnime = type.equals("anime", ignoreCase = true),
+        )
+}
+
+internal enum class FloppyMembershipChange { NONE, ADD, REMOVE }
+
+/**
+ * What a library add/remove must do on Floppy given whether it already tracks the title.
+ *
+ * Adding a tracked title is a no-op rather than a POST: the collection POST always appends a new
+ * entry, so a watched title would gain a second, Planning one.
+ */
+internal fun floppyMembershipChange(tracked: Boolean, inLibrary: Boolean): FloppyMembershipChange = when {
+    tracked == inLibrary -> FloppyMembershipChange.NONE
+    inLibrary -> FloppyMembershipChange.ADD
+    else -> FloppyMembershipChange.REMOVE
 }
 
 private suspend fun LibraryItem.resolveFloppyLibraryTarget(): FloppyLibraryTarget? {
@@ -291,6 +325,8 @@ private fun FloppyTrackedMedia.toLibraryItem(): LibraryItem? {
         "imdb" -> rawId
         "tmdb" -> "tmdb:$rawId"
         "tvdb" -> "tvdb:$rawId"
+        // Anime library adds land on MAL rows; without this they were tracked but never listed.
+        "mal" -> "mal:$rawId"
         else -> return null
     }
     return LibraryItem(
@@ -300,6 +336,7 @@ private fun FloppyTrackedMedia.toLibraryItem(): LibraryItem? {
         poster = item.image,
         imdbId = id.takeIf { it.startsWith("tt") },
         tmdbId = if (id.startsWith("tmdb:")) id.substringAfter(':').toIntOrNull() else null,
+        malId = if (id.startsWith("mal:")) id.substringAfter(':').toIntOrNull() else null,
         savedAtEpochMs = createdAt?.let(::parseTraktIsoDateTimeToEpochMs) ?: 0L,
     )
 }
