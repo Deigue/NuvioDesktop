@@ -1113,7 +1113,7 @@ internal fun Modifier.posterCardClickable(
                 val origin = windowOrigin.value
                 val cardBounds = bounds.value
                 if (origin != null && cardBounds != null) {
-                    ContextMenuInvocation.recordSecondaryPress(
+                    ContextMenuInvocation.recordKeyboardInvocation(
                         IntOffset(
                             (origin.x + cardBounds.width / 2f).roundToInt(),
                             (origin.y + cardBounds.height / 2f).roundToInt(),

@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Hold Select For Actions** - holding Enter, or A on a controller, on a poster opens the same actions as right-click, next to the poster. Works on Home (including Search, Discover and Library), catalog grids, and collection folders. A tap still opens the item, but now on release instead of press, since that is the only way to tell a tap from a hold; this applies only to items that have actions. It can be turned off under Keyboard Shortcuts, which puts select back on the press.
+- **Hold Select For Actions** - holding Enter, or A on a controller, on a poster opens the same actions as right-click, next to the poster. Works on Home (including Search, Discover and Library), catalog grids, and collection folders. A tap still opens the item, but now on release instead of press, since that is the only way to tell a tap from a hold; this applies only to items that have actions. It can be turned off under Keyboard Shortcuts, which puts select back on the press. A menu opened this way starts with its first action focused, and the mouse only takes over once it actually moves.
 
 ### Changed
 
