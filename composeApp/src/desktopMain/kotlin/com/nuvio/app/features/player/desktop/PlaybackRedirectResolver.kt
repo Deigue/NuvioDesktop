@@ -75,6 +75,7 @@ internal object PlaybackRedirectResolver {
      */
     private val DIRECT_MEDIA_HOST_SUFFIXES = listOf(
         "tb-cdn.st",
+        "tb-cdn.io",
         "real-debrid.com",
         "rdeb.io",
         "debrid.it",

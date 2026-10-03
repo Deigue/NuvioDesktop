@@ -247,8 +247,19 @@ internal class NativePlayerController(
                 if (tracePlaybackStart && DesktopHostOs.current == DesktopHostOs.WINDOWS) {
                     add("@nuvio-trace-id=${PlaybackStartTrace.currentId}")
                 }
-                if (isProviderPlaybackEndpoint(sourceUrl) || isExplicitProviderDiagnosticVideoUrl(sourceUrl)) {
+                // youtube-dl has nothing to add for a provider endpoint or a debrid CDN link, and
+                // when mpv cannot open one it hands the URL to ytdl_hook, whose "youtube-dl failed:
+                // not found" errors then bury the real failure in the playback log.
+                if (isProviderPlaybackEndpoint(sourceUrl) ||
+                    isExplicitProviderDiagnosticVideoUrl(sourceUrl) ||
+                    PlaybackRedirectResolver.isDirectMediaHost(sourceUrl)
+                ) {
                     add("ytdl=no")
+                }
+                // A Nuvio option like the rest: Replace lets a custom network-timeout override it,
+                // Add keeps this one, and Full (the user's own configuration only) never gets it.
+                if (PlayerSettingsRepository.uiState.value.desktopMpvConfigMode != DesktopMpvConfigMode.Full) {
+                    directMediaNetworkTimeoutOption(sourceUrl)?.let(::add)
                 }
                 if (enableUserMpvOptions) addAll(buildDesktopUserMpvOptions(initialPlaybackSpeed))
                 // An init option rather than a runtime property: mpv filters text subtitles as it
@@ -1872,6 +1883,25 @@ private fun buildDesktopUserMpvOptions(initialPlaybackSpeed: Float): List<String
         }
     }
 }
+
+/**
+ * How long mpv waits on a silent connection to a debrid CDN before giving up, in place of mpv's
+ * 60 s default. These hosts answer a range request in well under a second (TorBox store nodes
+ * measured 0.1-0.6 s), so a minute of silence is a stalled node, not a slow one: on 2026-10-03
+ * `store-046.wnam.tb-cdn.io` held five opens for the full 60 s each. Failing in 15 s lets the
+ * TorBox node hop or failover start while the user is still waiting. Mid-playback it also brings
+ * FFmpeg's own `reconnect=1` retry forward, since a timed-out read of a partly read file
+ * reconnects at the same offset. Resolver and addon endpoints keep the default: a resolve can
+ * legitimately take 10 s or more (Debridio once took 14 s waiting on a throttled TorBox call).
+ */
+internal const val DIRECT_MEDIA_NETWORK_TIMEOUT_SECONDS = 15
+
+internal fun directMediaNetworkTimeoutOption(sourceUrl: String): String? =
+    if (PlaybackRedirectResolver.isDirectMediaHost(sourceUrl)) {
+        "network-timeout=$DIRECT_MEDIA_NETWORK_TIMEOUT_SECONDS"
+    } else {
+        null
+    }
 
 /**
  * Web (non-debrid) addon streams are served by streaming-site CDNs that reject libmpv's default

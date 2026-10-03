@@ -546,6 +546,17 @@ private fun NativePlayerSurface(
                     if (reconnect && tryStartReconnect(message.orEmpty())) return
                     if (tryHopAtOpen(message.orEmpty())) return
                 }
+                if (TorBoxNodeHop.looksLikeNodeStall(message)) {
+                    val stalledUrl = redirectResolutions[sourceUrl]?.playbackUrl ?: sourceUrl
+                    if (TorBoxNodeHop.isTorBoxNode(stalledUrl)) {
+                        BingeAdvanceLog.i {
+                            "desktop TorBox node stalled attemptId=$playbackAttemptId" +
+                                " host=${PlaybackRedirectResolver.hostOf(stalledUrl)} after: $message"
+                        }
+                        TorBoxNodeHop.markStalled(stalledUrl)
+                        if (tryHopAtOpen(message.orEmpty())) return
+                    }
+                }
                 val current = redirectResolutions[sourceUrl]
                 val refreshable = message != null &&
                     current?.pinned == true &&
@@ -628,6 +639,10 @@ private fun NativePlayerSurface(
              * exited. Reopens the same link on another node at the original start position; no
              * wait, since a node ban does not clear on any useful timescale. Off still never
              * reconnects. When no node answers, the error goes on to failover / exit as before.
+             *
+             * A node that stalls the open or the resume seek ([TorBoxNodeHop.looksLikeNodeStall])
+             * takes the same path: the addon hands back the same node on every retry, so moving
+             * the link is the only retry that can land somewhere else.
              */
             fun tryHopAtOpen(message: String): Boolean {
                 if (startedAttemptId.value == playbackAttemptId) return false

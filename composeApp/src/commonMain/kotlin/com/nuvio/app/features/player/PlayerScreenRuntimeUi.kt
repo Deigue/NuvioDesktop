@@ -836,6 +836,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
                     // Stop completion persistence/scrobbling before mpv's failed seek can expose
                     // its synthetic last-frame position to the EOF/autoplay effects.
                     playbackSourceFailureActive = true
+                    PlaybackErrorLog.error(playbackAttemptId, activeSourceUrl, message)
 
                     val isRateLimited =
                         playbackErrorFailure(message) == PlaybackSourceFailure.DebridRateLimited
@@ -857,6 +858,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
 
                     providerDiagnosticRecoveryAttemptedSourceUrl = failedUrl
                     controlsVisible = !playerControlsLocked
+                    PlaybackErrorLog.decision(playbackAttemptId, "provider diagnostic probe")
                     scope.launch {
                         val diagnostic = resolveProviderDiagnosticVideo(
                             sourceUrl = failedUrl,
@@ -871,6 +873,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
                             return@launch
                         }
 
+                        PlaybackErrorLog.decision(playbackAttemptId, "provider diagnostic video")
                         activateProviderDiagnosticVideo(diagnostic)
                     }
                 },
@@ -923,7 +926,10 @@ private fun PlayerScreenRuntime.presentUnrecoverablePlaybackError(
     val isRateLimited = playbackErrorFailure(message) == PlaybackSourceFailure.DebridRateLimited
     // A provider-side rate limit is not an expired credential. Refreshing a signed URL here can
     // silently retry the same throttled provider and leave the user on the failed player longer.
-    if (!isRateLimited && tryRefreshCredentialedSourceAfterError(message)) return
+    if (!isRateLimited && tryRefreshCredentialedSourceAfterError(message)) {
+        PlaybackErrorLog.decision(playbackAttemptId, "refresh credentialed source")
+        return
+    }
     // Failover carries the same hazard on a rate limit: any hop onto the SAME throttled provider
     // just earns another 429 and deepens the throttle (rapid episode-switching walked the whole
     // list this way). Passing rateLimited scopes the walk to the failed source's provider — it
@@ -935,8 +941,13 @@ private fun PlayerScreenRuntime.presentUnrecoverablePlaybackError(
             rateLimited = isRateLimited,
         )
     ) {
+        PlaybackErrorLog.decision(playbackAttemptId, "failover (see StreamFailover)")
         return
     }
+    PlaybackErrorLog.decision(
+        playbackAttemptId,
+        if (playerSettingsUiState.streamFailoverEnabled) "exit (failover did not apply)" else "exit (failover off)",
+    )
     exitAfterPlaybackFailure(message, playbackFailedToast)
 }
 

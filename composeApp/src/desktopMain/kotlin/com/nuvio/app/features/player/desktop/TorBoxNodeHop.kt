@@ -22,14 +22,37 @@ import java.util.concurrent.ConcurrentHashMap
  * documented TorBox feature — it is how their nodes behave today — so every hop is verified with a
  * one-byte probe before mpv is pointed at it, and when nothing answers the caller falls back to
  * failover. Nothing here outlives [BAN_MS]: a node is never written off for good.
+ *
+ * TorBox also hands out `store-NNN.<region>.tb-cdn.io` links (Cloudflare-fronted, zero-padded
+ * numbers). Their failure seen in the field (2026-10-03) is a stall rather than a 429: Cloudflare
+ * accepts the connection and `store-046.wnam` never answered, so mpv timed out after 60 s on five
+ * opens out of six while the addon kept handing back that same node. The same `/dld/` link with
+ * its token answered 206 on store-042/044/045/076/078, so the hop applies to them too; a stall
+ * keeps the node off the list for [STALL_BAN_MS] only, since it was seen to come and go.
  */
 internal object TorBoxNodeHop {
     private val log = Logger.withTag("TorBoxNodeHop")
 
-    private val NODE_HOST = Regex("""^nexus-(\d+)\.([a-z0-9-]+)\.tb-cdn\.st$""", RegexOption.IGNORE_CASE)
+    /** A node naming scheme: `<prefix>-<number>.<region>.<domain>`, numbers padded to [padWidth]. */
+    internal enum class Family(val prefix: String, val domain: String, val padWidth: Int) {
+        Nexus("nexus", "tb-cdn.st", 0),
+        Store("store", "tb-cdn.io", 3),
+        ;
+
+        val hostPattern = Regex(
+            """^""" + Regex.escape(prefix) + """-(\d+)\.([a-z0-9-]+)\.""" + Regex.escape(domain) + """$""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        fun host(number: Int, region: String): String =
+            "$prefix-${number.toString().padStart(padWidth, '0')}.$region.$domain"
+    }
 
     /** Comfortably past the ~75 min ban observed; a node older than this is trusted again. */
     const val BAN_MS: Long = 90L * 60L * 1000L
+
+    /** A stalled node recovered within a minute once, then stalled again; avoid it for a while. */
+    const val STALL_BAN_MS: Long = 15L * 60L * 1000L
 
     /** Probes per hop. Node numbers are sparse (nexus-134 did not resolve), so allow a few misses. */
     const val MAX_PROBES = 8
@@ -47,24 +70,50 @@ internal object TorBoxNodeHop {
         .followRedirects(HttpClient.Redirect.NEVER)
         .build()
 
-    internal data class Node(val number: Int, val region: String)
+    internal data class Node(val family: Family, val number: Int, val region: String)
 
     internal fun hostOf(url: String): String =
         runCatching { URI(url).host.orEmpty() }.getOrDefault("").lowercase(Locale.ROOT)
 
-    internal fun nodeOf(url: String): Node? =
-        NODE_HOST.matchEntire(hostOf(url))?.let { match ->
-            Node(match.groupValues[1].toInt(), match.groupValues[2].lowercase(Locale.ROOT))
+    internal fun nodeOf(url: String): Node? {
+        val host = hostOf(url)
+        for (family in Family.entries) {
+            val match = family.hostPattern.matchEntire(host) ?: continue
+            val number = match.groupValues[1].toIntOrNull() ?: return null
+            return Node(family, number, match.groupValues[2].lowercase(Locale.ROOT))
         }
+        return null
+    }
 
     fun isTorBoxNode(url: String): Boolean = nodeOf(url) != null
 
-    fun markBanned(url: String, nowMs: Long = System.currentTimeMillis()) {
+    fun markBanned(url: String, nowMs: Long = System.currentTimeMillis()) =
+        ban(url, BAN_MS, "rate-limited us", nowMs)
+
+    /** The node accepted the connection but never answered (see [looksLikeNodeStall]). */
+    fun markStalled(url: String, nowMs: Long = System.currentTimeMillis()) =
+        ban(url, STALL_BAN_MS, "stalled", nowMs)
+
+    private fun ban(url: String, durationMs: Long, reason: String, nowMs: Long) {
         if (!isTorBoxNode(url)) return
         val host = hostOf(url)
-        bannedUntilMs[host] = nowMs + BAN_MS
+        val until = nowMs + durationMs
+        // Never shorten a longer ban already in force (a stall report after a 429).
+        val effectiveUntil = bannedUntilMs.merge(host, until, ::maxOf) ?: until
         workingSeenAtMs.remove(host)
-        log.i { "TorBox node $host rate-limited us; avoiding it for ${BAN_MS / 60_000} min" }
+        log.i { "TorBox node $host $reason; avoiding it for ${(effectiveUntil - nowMs) / 60_000} min" }
+    }
+
+    /**
+     * A load or seek failure that carries no HTTP status: the bridge reports a failed open or a
+     * failed range seek as `Playback loading failed…` / `Playback seek failed…` only when FFmpeg
+     * logged no `HTTP error` beforehand. On a TorBox node that means the node never answered
+     * (the 60 s read timeout seen on `store-046`), not a bad link or an unplayable file.
+     */
+    fun looksLikeNodeStall(message: String?): Boolean {
+        if (message == null || message.contains("http error", ignoreCase = true)) return false
+        return message.startsWith("Playback loading failed", ignoreCase = true) ||
+            message.startsWith("Playback seek failed", ignoreCase = true)
     }
 
     fun markWorking(url: String, nowMs: Long = System.currentTimeMillis()) {
@@ -98,14 +147,16 @@ internal object TorBoxNodeHop {
         val current = hostOf(url)
         fun usable(host: String) = host != current && !isBanned("https://$host/", nowMs)
         val known = workingSeenAtMs.entries
-            .filter { (host, _) -> nodeOf("https://$host/")?.region == node.region }
+            .filter { (host, _) ->
+                nodeOf("https://$host/")?.let { it.family == node.family && it.region == node.region } == true
+            }
             .sortedByDescending { it.value }
             .map { it.key }
             .filter(::usable)
         val neighbours = (1..NEIGHBOUR_SPAN)
             .flatMap { offset -> listOf(node.number - offset, node.number + offset) }
             .filter { it > 0 }
-            .map { "nexus-$it.${node.region}.tb-cdn.st" }
+            .map { node.family.host(it, node.region) }
             .filter(::usable)
         return (known + neighbours).distinct().take(MAX_PROBES)
     }
