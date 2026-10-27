@@ -203,6 +203,7 @@ import org.jetbrains.compose.resources.stringResource
 import kotlin.random.Random
 import androidx.compose.material.icons.rounded.Search
 import com.nuvio.app.core.ui.trackTextInputFocus
+import com.nuvio.app.core.i18n.localizedString
 
 private fun dominantBackdropBlendColor(dominantColor: Color, backgroundColor: Color): Color =
     backgroundColor.blendTowards(dominantColor, fraction = 0.42f)
@@ -1089,7 +1090,7 @@ fun MetaDetailsScreen(
                     // fall through to the bare show id below: that searches streams for "any
                     // episode" and records progress no episode can ever match.
                     if (hasEpisodes && seriesAction == null) {
-                        NuvioToastController.show("No released episode to play yet")
+                        NuvioToastController.show(localizedString(Res.string.details_no_released_episode_to_play_yet))
                         return@primaryPlay
                     }
                     if (onPlay != null) {
@@ -1234,7 +1235,7 @@ fun MetaDetailsScreen(
                                 return@playSecondary
                             }
                             if (hasEpisodes && seriesAction == null) {
-                                NuvioToastController.show("No released episode to play yet")
+                                NuvioToastController.show(localizedString(Res.string.details_no_released_episode_to_play_yet))
                                 return@playSecondary
                             }
                             dropTrailerForPlaybackNavigation()
@@ -2764,7 +2765,7 @@ fun MetaDetailsScreen(
                                         PlaylistAddController.request(
                                             playlistAddTargetForEpisodes(
                                                 meta = meta,
-                                                label = selectedEpisode.season?.let { "Season $it" } ?: "Specials",
+                                                label = selectedEpisode.season?.let { localizedString(Res.string.playlist_add_season, it) } ?: localizedString(Res.string.playlist_specials),
                                                 videos = episodes,
                                             ),
                                         )
@@ -3676,7 +3677,7 @@ private fun ConfiguredMetaSections(
                             )
                         },
                         DetailSecondaryAction(
-                            label = "Add to playlist",
+                            label = stringResource(Res.string.playlist_add_to_playlist_2),
                             icon = Icons.AutoMirrored.Filled.PlaylistAdd,
                             onClick = { PlaylistAddController.request(playlistAddTargetFor(meta)) },
                         ),

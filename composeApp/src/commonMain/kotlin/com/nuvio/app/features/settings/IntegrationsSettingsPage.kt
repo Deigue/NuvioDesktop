@@ -279,7 +279,7 @@ private fun CalendarSourceRow(isTablet: Boolean) {
             CalendarSource.TRAKT -> stringResource(Res.string.settings_calendar_source_trakt)
             CalendarSource.SIMKL -> stringResource(Res.string.settings_calendar_source_simkl)
             CalendarSource.MDBLIST -> stringResource(Res.string.settings_calendar_source_mdblist)
-            CalendarSource.NUVIO -> "Nuvio (your library and watch history)"
+            CalendarSource.NUVIO -> stringResource(Res.string.settings_calendar_source_nuvio)
         }
     }
 

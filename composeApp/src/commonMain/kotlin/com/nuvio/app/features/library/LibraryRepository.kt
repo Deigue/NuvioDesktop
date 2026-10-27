@@ -66,6 +66,8 @@ import nuvio.composeapp.generated.resources.library_other
 import nuvio.composeapp.generated.resources.trakt_lists_update_failed
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.getString
+import nuvio.composeapp.generated.resources.*
+import com.nuvio.app.core.i18n.localizedString
 
 @Serializable
 private data class StoredLibraryPayload(
@@ -580,7 +582,7 @@ object LibraryRepository {
             }
             // Anything the user hasn't filed yet.
             state.itemsInCatalog(null).takeIf { it.isNotEmpty() }?.let {
-                add(LibrarySection("locallibrary_unsorted", "Local (Unsorted)", it.map(LocalMediaItem::toLibraryItem)))
+                add(LibrarySection("locallibrary_unsorted", localizedString(Res.string.library_local_unsorted), it.map(LocalMediaItem::toLibraryItem)))
             }
         }
     }
@@ -706,7 +708,7 @@ object LibraryRepository {
 }
 
 internal const val LOCAL_LIBRARY_LIST_KEY = "local"
-private const val DEFAULT_LOCAL_LIBRARY_TAB_TITLE = "Nuvio Library"
+private val DEFAULT_LOCAL_LIBRARY_TAB_TITLE: String get() = localizedString(Res.string.library_local_tab_default_title)
 private const val DEFAULT_LIBRARY_OTHER_TITLE = "Other"
 
 internal fun localLibraryListTab(): TraktListTab =

@@ -24,6 +24,8 @@ import com.nuvio.app.features.watched.WatchedItem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import nuvio.composeapp.generated.resources.*
+import com.nuvio.app.core.i18n.localizedString
 
 internal object MdbListTrackingAuthProvider : TrackingAuthProvider {
     override val descriptor: TrackingProviderDescriptor = TrackingProviderDescriptor(
@@ -170,13 +172,13 @@ internal object MdbListLibraryAdapter : TrackingLibraryProvider {
         return TrackingLibrarySnapshot(
             items = state.items,
             sections = buildList {
-                if (shows.isNotEmpty()) add(LibrarySection("mdblist_shows", "My Shows", shows))
-                if (movies.isNotEmpty()) add(LibrarySection("mdblist_movies", "My Movies", movies))
+                if (shows.isNotEmpty()) add(LibrarySection("mdblist_shows", localizedString(Res.string.tracking_library_my_shows), shows))
+                if (movies.isNotEmpty()) add(LibrarySection("mdblist_movies", localizedString(Res.string.tracking_library_my_movies), movies))
             },
             tabs = listOf(
                 TrackingLibraryTab(
                     key = WATCHLIST_KEY,
-                    title = "MDBList Watchlist",
+                    title = localizedString(Res.string.tracking_library_mdblist_watchlist),
                     providerId = providerId,
                     kind = TrackingLibraryTabKind.WATCHLIST,
                 ),

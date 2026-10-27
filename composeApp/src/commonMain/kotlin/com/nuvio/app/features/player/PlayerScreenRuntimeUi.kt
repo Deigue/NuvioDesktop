@@ -65,6 +65,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
+import com.nuvio.app.core.i18n.localizedString
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -290,9 +291,9 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
                 nextEpisodeAutoPlaySourceName.orEmpty(),
                 nextEpisodeAutoPlayCountdown ?: 0,
             )
-        playlistHandedOff -> "Starting…"
-        playlistPreparedSource != null -> "Ready · $playlistPreparedSource"
-        playlistPrepared is com.nuvio.app.features.playlist.PlaylistHandoff.Downloaded -> "Ready · downloaded"
+        playlistHandedOff -> localizedString(Res.string.playlist_player_starting)
+        playlistPreparedSource != null -> localizedString(Res.string.playlist_player_ready_source, playlistPreparedSource)
+        playlistPrepared is com.nuvio.app.features.playlist.PlaylistHandoff.Downloaded -> localizedString(Res.string.playlist_player_ready_downloaded)
         else -> ""
     }
     val nextEpisodeStatus = when {
@@ -398,8 +399,8 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         videoSettingsLabel = stringResource(Res.string.player_action_video_settings),
         pictureInPictureLabel = stringResource(Res.string.compose_player_picture_in_picture),
         pictureInPictureActive = pictureInPictureActive,
-        desktopHdrModeLabel = playerSettingsUiState.desktopHdrMode.label,
-        desktopColorProfileLabel = playerSettingsUiState.desktopColorProfile.label,
+        desktopHdrModeLabel = stringResource(playerSettingsUiState.desktopHdrMode.labelRes),
+        desktopColorProfileLabel = stringResource(playerSettingsUiState.desktopColorProfile.labelRes),
         desktopColorContrast = playerSettingsUiState.desktopColorContrast,
         desktopColorBrightness = playerSettingsUiState.desktopColorBrightness,
         desktopColorSaturation = playerSettingsUiState.desktopColorSaturation,
@@ -408,9 +409,9 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         // only counts when it would auto-apply (auto-detect on + detected anime), else "Off".
         desktopAnimeModeLabel = playerSettingsUiState.desktopAnimeSessionOverride?.label
             ?: if (playerSettingsUiState.desktopAnimeModeAutoEnabled && isAnimeContent) {
-                playerSettingsUiState.desktopAnimeMode.label
+                stringResource(playerSettingsUiState.desktopAnimeMode.labelRes)
             } else {
-                DesktopAnimeMode.Off.label
+                stringResource(DesktopAnimeMode.Off.labelRes)
             },
         desktopAnimeSvpEnabled = playerSettingsUiState.desktopAnimeSvpEnabled,
         rtxVsrEnabled = playerSettingsUiState.effectiveRtxVsrEnabled,
@@ -1655,7 +1656,7 @@ private fun PlayerScreenRuntime.submitIntroFromPlayerControls() {
     val end = submitIntroEndTimeSec
     // A null season/episode is a film, which SkipDB accepts — only the timings have to be valid.
     if (imdbId.isNullOrBlank() || start == null || end == null || end <= start) {
-        submitIntroStatusMessage = "Check the start and end times."
+        submitIntroStatusMessage = localizedString(Res.string.skip_submit_check_the_start_and_end_times)
         return
     }
     isSubmitIntroSubmitting = true
@@ -1759,7 +1760,7 @@ private fun PlayerScreenRuntime.openInExternalPlayer() {
                         SkipSubmitToastCopy(
                             visible = true,
                             phase = "submitting",
-                            title = "Opening in external player",
+                            title = localizedString(Res.string.player_external_opening),
                             detail = it,
                             key = "external-handoff:$playerNoticeSerial",
                         )

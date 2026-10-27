@@ -111,6 +111,8 @@ import java.awt.event.WindowEvent
 import java.awt.event.WindowFocusListener
 import java.awt.event.WindowStateListener
 import javax.swing.JComponent
+import nuvio.composeapp.generated.resources.*
+import com.nuvio.app.core.i18n.localizedString
 
 /** Equivalent to [KeyEvent.VK_BROWSER_BACK] (0xA6); referenced by code to avoid relying on JDK version-specific constants. */
 private const val VK_BROWSER_BACK = 0xA6
@@ -327,7 +329,7 @@ private fun installDesktopTray(
     // No PopupMenu is attached, so the right-click reaches us as a plain mouse event and the menu
     // is ours to draw. See DesktopTrayMenu for why the native one had to go.
     val menuEntries = listOf(
-        DesktopTrayMenuEntry.Action("Open Nuvio") { restoreWindow() },
+        DesktopTrayMenuEntry.Action(localizedString(Res.string.tray_open_nuvio)) { restoreWindow() },
         DesktopTrayMenuEntry.Separator,
         DesktopTrayMenuEntry.Info("Nuvio ${AppVersionPolicy.displayVersionName}"),
         DesktopTrayMenuEntry.Separator,

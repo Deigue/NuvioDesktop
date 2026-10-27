@@ -54,6 +54,7 @@ import nuvio.composeapp.generated.resources.hero_remove_from_library
 import nuvio.composeapp.generated.resources.poster_go_to_local_library
 import org.jetbrains.compose.resources.stringResource
 import dev.chrisbanes.haze.HazeState
+import nuvio.composeapp.generated.resources.*
 
 @Composable
 fun NuvioPosterActionSheet(
@@ -117,7 +118,7 @@ fun NuvioPosterActionSheet(
             add(
                 PosterZoomOverlayAction(
                     icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                    label = "Add to playlist",
+                    label = stringResource(Res.string.poster_actions_add_to_playlist),
                     onSelected = addToPlaylist,
                     group = 1,
                 ),
@@ -127,7 +128,7 @@ fun NuvioPosterActionSheet(
             add(
                 PosterZoomOverlayAction(
                     icon = Icons.Default.Block,
-                    label = "Not interested",
+                    label = stringResource(Res.string.poster_actions_not_interested),
                     onSelected = notInterested,
                     group = 2,
                 ),

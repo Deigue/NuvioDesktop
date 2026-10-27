@@ -233,7 +233,7 @@ private fun SimklConnectionCard(
                         CircularProgressIndicator()
                     } else {
                         Button(onClick = SimklAuthRepository::onConnectRequested) {
-                            Text("Reconnect")
+                            Text(stringResource(Res.string.settings_simkl_reconnect))
                         }
                     }
                 }
@@ -318,13 +318,13 @@ private fun SimklConnectionCard(
                         val minutes = remainingSeconds / 60
                         val seconds = (remainingSeconds % 60).toString().padStart(2, '0')
                         Text(
-                            text = "Code expires in $minutes:$seconds",
+                            text = stringResource(Res.string.settings_code_expires_in, minutes, seconds),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     Button(onClick = { uriHandler.openUri(verificationUrl) }) {
-                        Text("Open simkl.com")
+                        Text(stringResource(Res.string.settings_simkl_open_simkl_com))
                     }
                     Spacer(Modifier.height(4.dp))
                     CircularProgressIndicator()

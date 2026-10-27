@@ -11,6 +11,8 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import nuvio.composeapp.generated.resources.*
+import com.nuvio.app.core.i18n.localizedString
 
 data class StreamBadgeSettingsUiState(
     val rules: StreamBadgeRules = StreamBadgeRules(),
@@ -90,7 +92,7 @@ object StreamBadgeSettingsRepository {
         ensureLoaded()
         val normalizedUrl = url.trim()
         if (normalizedUrl.isBlank()) {
-            return StreamBadgeImportResult.Error("Enter a badge JSON URL.")
+            return StreamBadgeImportResult.Error(localizedString(Res.string.stream_badges_enter_a_badge_json_url))
         }
         if (!normalizedUrl.startsWith("https://", ignoreCase = true) &&
             !normalizedUrl.startsWith("http://", ignoreCase = true)
@@ -104,7 +106,7 @@ object StreamBadgeSettingsRepository {
                 import.sourceUrl.equals(normalizedUrl, ignoreCase = true)
             }
             if (!isExistingImport && currentRules.imports.size >= STREAM_BADGE_IMPORT_LIMIT) {
-                return StreamBadgeImportResult.Error("You can import up to $STREAM_BADGE_IMPORT_LIMIT badge URLs.")
+                return StreamBadgeImportResult.Error(localizedString(Res.string.stream_badges_import_limit, STREAM_BADGE_IMPORT_LIMIT))
             }
             val payload = httpGetText(normalizedUrl)
             val parsedImport = StreamBadgeRulesParser.parse(
@@ -117,7 +119,7 @@ object StreamBadgeSettingsRepository {
             StreamBadgeImportResult.Success(streamBadgeRules)
         } catch (error: Exception) {
             if (error is CancellationException) throw error
-            StreamBadgeImportResult.Error(error.message ?: "Badge import failed.")
+            StreamBadgeImportResult.Error(error.message ?: localizedString(Res.string.stream_badges_badge_import_failed))
         }
     }
 

@@ -4,6 +4,8 @@ import com.nuvio.app.core.build.AppFeaturePolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import nuvio.composeapp.generated.resources.*
+import com.nuvio.app.core.i18n.localizedString
 
 data class P2pSettingsUiState(
     val p2pEnabled: Boolean = false,
@@ -192,7 +194,7 @@ internal fun canonicalP2pInfoHash(infoHash: String): String {
         (canonical.length == 40 || canonical.length == 64) &&
             canonical.all { it in '0'..'9' || it in 'a'..'f' },
     ) {
-        "Torrent info hash must be 40 or 64 hexadecimal characters"
+        localizedString(Res.string.p2p_torrent_info_hash_must_be_40)
     }
     return canonical
 }

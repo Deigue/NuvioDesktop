@@ -34,8 +34,10 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import nuvio.composeapp.generated.resources.*
+import com.nuvio.app.core.i18n.localizedString
 
-private const val UNKNOWN_TORRENT_ERROR = "Unknown torrent error"
+private val UNKNOWN_TORRENT_ERROR: String get() = localizedString(Res.string.p2p_unknown_torrent_error)
 private const val STREAMING_SAMPLE_INTERVAL_MS = 5_000L
 private const val STARTUP_SAMPLE_INTERVAL_MS = 1_000L
 
@@ -134,7 +136,7 @@ internal object NuvioEngineP2pBackend : DesktopP2pBackend {
                 _state.value !is P2pStreamingState.Streaming &&
                     _state.value !is P2pStreamingState.Connecting,
             ) {
-                "Torrent cache cannot be cleared during active playback"
+                localizedString(Res.string.p2p_torrent_cache_cannot_be_cleared_during)
             }
             _cacheState.value = _cacheState.value.copy(isClearing = true)
             try {
@@ -446,10 +448,10 @@ internal object NuvioEngineP2pBackend : DesktopP2pBackend {
         val cacheDirectory = File(root, NUVIO_ENGINE_CACHE_DIRECTORY)
         removeLegacyCacheDirectory(root)
         check(stateDirectory.mkdirs() || stateDirectory.isDirectory) {
-            "Could not create the Nuvio Engine state directory"
+            localizedString(Res.string.p2p_could_not_create_the_nuvio_engine)
         }
         check(cacheDirectory.mkdirs() || cacheDirectory.isDirectory) {
-            "Could not create the Nuvio Engine cache directory"
+            localizedString(Res.string.p2p_could_not_create_the_nuvio_engine_2)
         }
         return NuvioEngine.create(
             buildNuvioEngineConfig(
@@ -842,12 +844,12 @@ internal fun unexpectedTorrentError(
 /** Null while it is still worth waiting for metadata; otherwise the user-facing reason to stop. */
 internal fun metadataWaitVerdict(waitedMs: Long, stalledForMs: Long, knownPeers: Long): String? = when {
     waitedMs >= METADATA_DEADLINE_MS ->
-        "Torrent metadata did not arrive within ${METADATA_DEADLINE_MS / 1000}s"
+        localizedString(Res.string.p2p_metadata_timeout, METADATA_DEADLINE_MS / 1000)
     waitedMs >= METADATA_STALL_MIN_WAIT_MS && stalledForMs >= METADATA_STALL_MS ->
         if (knownPeers == 0L) {
-            "No peers found for this torrent"
+            localizedString(Res.string.p2p_no_peers_found_for_this_torrent)
         } else {
-            "No reachable peers for this torrent ($knownPeers found, none answered)"
+            localizedString(Res.string.p2p_no_reachable_peers, knownPeers)
         }
     else -> null
 }
