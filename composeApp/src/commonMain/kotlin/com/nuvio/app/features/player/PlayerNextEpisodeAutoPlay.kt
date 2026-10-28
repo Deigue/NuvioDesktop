@@ -8,7 +8,9 @@ import com.nuvio.app.features.details.playbackEpisodeNumber
 import com.nuvio.app.features.details.playbackSeasonNumber
 import com.nuvio.app.features.downloads.DownloadItem
 import com.nuvio.app.features.downloads.DownloadsRepository
+import com.nuvio.app.features.locallibrary.LocalLibraryRepository
 import com.nuvio.app.features.player.skip.NextEpisodeInfo
+import com.nuvio.app.features.streams.BingeReleaseHint
 import com.nuvio.app.features.streams.AddonStreamGroup
 import com.nuvio.app.features.streams.StreamAutoPlayMode
 import com.nuvio.app.features.streams.StreamAutoPlayPolicy
@@ -83,6 +85,8 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
     settings: PlayerSettingsUiState,
     sourceAffinity: PlayerSourceAffinity,
     currentStreamBingeGroup: String?,
+    /** The stream playing now, whose release (filename, infohash) is picked again when it is offered. */
+    currentStream: StreamItem? = null,
     onDownloadedEpisodeSelected: (DownloadItem, MetaVideo) -> Unit,
     onEpisodeStreamSelected: (StreamItem, MetaVideo) -> Unit,
     onManualSelectionRequired: (MetaVideo) -> Unit,
@@ -94,6 +98,8 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
     emptyResultRetriesRemaining: Int = 1,
     /** False skips a completed download of the next episode (a playlist with local files off). */
     allowDownloaded: Boolean = true,
+    /** Use what Preload Next Episode Sources found; false on the empty-result retry, which must fetch. */
+    usePreloadedSources: Boolean = true,
 ): Job? {
     val nextVideoId = nextEpisodeInfo?.videoId ?: return null
     val nextVideo = allEpisodes.firstOrNull { video -> video.id == nextVideoId } ?: return null
@@ -101,7 +107,10 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
     val nextSeasonNumber = nextVideo.playbackSeasonNumber()
     val nextEpisodeNumber = nextVideo.playbackEpisodeNumber()
 
-    val downloadedNextEpisode = if (!allowDownloaded) null else DownloadsRepository.findPlayableDownload(
+    // A title set to play its best online source keeps its local copy as a backup, as on the first
+    // click (App.kt folds the same override in): the next episode streams instead of taking the file.
+    val localCopyIsBackup = LocalLibraryRepository.routingFor(parentMetaId, nextVideo.id).ignoresLocalFile
+    val downloadedNextEpisode = if (!allowDownloaded || localCopyIsBackup) null else DownloadsRepository.findPlayableDownload(
         parentMetaId = parentMetaId,
         seasonNumber = nextSeasonNumber,
         episodeNumber = nextEpisodeNumber,
@@ -193,6 +202,16 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
     } else {
         null
     }
+    val preferredRelease = if (preferredBingeGroup != null && currentStream?.behaviorHints?.bingeGroup == preferredBingeGroup) {
+        BingeReleaseHint.forEpisode(
+            lastFilename = currentStream.behaviorHints.filename,
+            lastInfoHash = currentStream.p2pInfoHash,
+            season = nextSeasonNumber,
+            episode = nextEpisodeNumber,
+        )
+    } else {
+        null
+    }
 
     return launch {
         // forceRefresh is essential here. Without it, loadEpisodeStreams dedups against the last
@@ -211,6 +230,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
             episode = nextEpisodeNumber,
             sourceAffinity = sourceAffinity,
             forceRefresh = true,
+            readPrefetchOnForceRefresh = usePreloadedSources && settings.preloadNextEpisodeSources,
         )
         // The episodes panel loads into the same state. A search running while the viewer browses
         // another episode's sources must not read those streams as this episode's — ignore any
@@ -263,6 +283,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
                 selectedAddons = effectiveSelectedAddons,
                 selectedPlugins = effectiveSelectedPlugins,
                 preferredBingeGroup = preferredBingeGroup,
+                preferredRelease = preferredRelease,
                 preferBingeGroupInSelection = shouldPreferBingeGroup,
                 bingeGroupOnly = false,
                 debridEnabled = debridSettings.canResolvePlayableLinks,
@@ -285,6 +306,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
                 selectedAddons = effectiveSelectedAddons,
                 selectedPlugins = effectiveSelectedPlugins,
                 preferredBingeGroup = preferredBingeGroup,
+                preferredRelease = preferredRelease,
                 preferBingeGroupInSelection = shouldPreferBingeGroup,
                 bingeGroupOnly = false,
                 debridEnabled = debridSettings.canResolvePlayableLinks,
@@ -303,6 +325,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
                 selectedAddons = effectiveSelectedAddons,
                 selectedPlugins = effectiveSelectedPlugins,
                 preferredBingeGroup = preferredBingeGroup,
+                preferredRelease = preferredRelease,
                 preferBingeGroupInSelection = true,
                 bingeGroupOnly = true,
                 debridEnabled = debridSettings.canResolvePlayableLinks,
@@ -470,6 +493,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
                 settings = settings,
                 sourceAffinity = sourceAffinity,
                 currentStreamBingeGroup = currentStreamBingeGroup,
+                currentStream = currentStream,
                 onDownloadedEpisodeSelected = onDownloadedEpisodeSelected,
                 onEpisodeStreamSelected = onEpisodeStreamSelected,
                 onManualSelectionRequired = onManualSelectionRequired,
@@ -480,6 +504,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
                 skipSourceCountdown = skipSourceCountdown,
                 emptyResultRetriesRemaining = emptyResultRetriesRemaining - 1,
                 allowDownloaded = allowDownloaded,
+                usePreloadedSources = false,
             )
             return@launch
         }

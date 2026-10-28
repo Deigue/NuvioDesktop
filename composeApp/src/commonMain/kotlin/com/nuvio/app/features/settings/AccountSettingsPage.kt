@@ -1,5 +1,8 @@
 package com.nuvio.app.features.settings
 
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.width
+import com.nuvio.app.core.ui.ditheredBackground
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,7 +34,6 @@ import com.nuvio.app.core.ui.NuvioActionLabel
 import com.nuvio.app.core.ui.NuvioPrimaryButton
 import com.nuvio.app.features.setup.FirstRunWizardController
 import com.nuvio.app.core.ui.NuvioStatusModal
-import com.nuvio.app.core.ui.NuvioSurfaceCard
 import com.nuvio.app.core.ui.NuvioToastController
 import com.nuvio.app.core.storage.PortableMode
 import com.nuvio.app.features.profiles.ProfileRepository
@@ -43,6 +45,8 @@ import com.nuvio.app.features.updater.updateChannelLabel
 import com.nuvio.app.isDesktop
 import kotlinx.coroutines.launch
 import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.compose_settings_root_switch_profile_description
+import nuvio.composeapp.generated.resources.compose_settings_root_switch_profile_title
 import nuvio.composeapp.generated.resources.settings_portable_mode
 import nuvio.composeapp.generated.resources.settings_portable_mode_description
 import nuvio.composeapp.generated.resources.settings_portable_mode_disable_message
@@ -108,11 +112,17 @@ import com.nuvio.app.core.ui.accentBrush
 internal fun LazyListScope.accountSettingsContent(
     isTablet: Boolean,
     rememberLastProfileEnabled: Boolean,
+    /**
+     * Opens the profile selector. Desktop only: the settings top bar's avatar opens this page, so
+     * the selector it used to open is reached from here.
+     */
+    onOpenProfileSelector: (() -> Unit)? = null,
 ) {
     item {
         AccountSettingsBody(
             isTablet = isTablet,
             rememberLastProfileEnabled = rememberLastProfileEnabled,
+            onOpenProfileSelector = onOpenProfileSelector,
         )
     }
 }
@@ -121,6 +131,7 @@ internal fun LazyListScope.accountSettingsContent(
 private fun AccountSettingsBody(
     isTablet: Boolean,
     rememberLastProfileEnabled: Boolean,
+    onOpenProfileSelector: (() -> Unit)?,
 ) {
     val authState by AuthRepository.state.collectAsStateWithLifecycle()
     SynchronizationPreferencesRepository.ensureLoaded()
@@ -138,27 +149,40 @@ private fun AccountSettingsBody(
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (isDesktop) {
-            NuvioSurfaceCard(
-                modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("setup-wizard")),
+            // The settings glass, like the section cards below it, with the button beside the
+            // text at the control column's width, as an action on any other settings row.
+            Row(
+                modifier = Modifier
+                    .settingsScrollAnchor(SettingsScrollAnchor.searchKey("setup-wizard"))
+                    .fillMaxWidth()
+                    .ditheredBackground(SettingsSectionGlassFill, SettingsSectionGlassShape)
+                    .border(1.dp, SettingsSectionGlassEdge, SettingsSectionGlassShape)
+                    .padding(20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(SettingsRowTextGap),
             ) {
-                Text(
-                    text = stringResource(Res.string.settings_account_setup),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(modifier = Modifier.height(14.dp))
-                Text(
-                    text = stringResource(Res.string.settings_account_run_wizard_description),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.height(14.dp))
-                NuvioPrimaryButton(
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = stringResource(Res.string.settings_account_setup),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = stringResource(Res.string.settings_account_run_wizard_description),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                SettingsGlassButton(
                     text = stringResource(Res.string.settings_account_run_wizard),
                     // The wizard is hosted globally, so it opens above Settings rather than being a
                     // navigation destination of its own.
                     onClick = FirstRunWizardController::openManually,
+                    accent = true,
                 )
             }
         }
@@ -187,6 +211,16 @@ private fun AccountSettingsBody(
                 isTablet = isTablet,
                 modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("account-status")),
             ) {
+                if (onOpenProfileSelector != null) {
+                    SettingsNavigationRow(
+                        title = stringResource(Res.string.compose_settings_root_switch_profile_title),
+                        description = stringResource(Res.string.compose_settings_root_switch_profile_description),
+                        isTablet = isTablet,
+                        modifier = Modifier.settingsScrollAnchor(SettingsScrollAnchor.searchKey("switch-profile")),
+                        onClick = onOpenProfileSelector,
+                    )
+                    SettingsGroupDivider(isTablet = isTablet)
+                }
                 when (val state = authState) {
                     is AuthState.Authenticated -> {
                         AccountValueRow(
@@ -221,16 +255,13 @@ private fun AccountSettingsBody(
             }
         }
 
+        // The explanation is the heading's subtitle: as a line inside the card it read as part
+        // of the first switch (Appearance) below it.
         SettingsSection(
             title = stringResource(Res.string.settings_sync_section),
             isTablet = isTablet,
+            subtitle = stringResource(Res.string.settings_sync_description),
         ) {
-            SettingsSectionNote(
-                text = stringResource(Res.string.settings_sync_description),
-                isTablet = isTablet,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
             SettingsGroup(isTablet = isTablet) {
                 SettingsSwitchRow(
                     title = stringResource(Res.string.settings_sync_appearance),
@@ -332,7 +363,8 @@ private fun AccountSettingsBody(
                     },
                 )
             }
-            Spacer(modifier = Modifier.height(8.dp))
+            // A footnote under the switches, divided off like a row of its own.
+            SettingsGroupDivider(isTablet = isTablet)
             SettingsSectionNote(
                 text = stringResource(Res.string.settings_sync_fork_local_note),
                 isTablet = isTablet,
@@ -557,3 +589,4 @@ private fun AccountValueRow(
         )
     }
 }
+

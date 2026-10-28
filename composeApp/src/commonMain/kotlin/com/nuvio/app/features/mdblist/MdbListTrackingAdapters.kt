@@ -152,7 +152,7 @@ internal object MdbListWatchedAdapter : TrackingWatchedProvider {
 }
 
 internal object MdbListLibraryAdapter : TrackingLibraryProvider {
-    private const val WATCHLIST_KEY = "mdblist:watchlist"
+    private const val WATCHLIST_KEY = MDBLIST_WATCHLIST_KEY
 
     override val providerId: TrackingProviderId = TrackingProviderId.MDBLIST
     override val changes = MdbListLibraryRepository.changes
@@ -167,13 +167,19 @@ internal object MdbListLibraryAdapter : TrackingLibraryProvider {
 
     override fun snapshot(): TrackingLibrarySnapshot {
         val state = MdbListLibraryRepository.state.value
-        val movies = state.items.filter { it.type.equals("movie", ignoreCase = true) }
-        val shows = state.items.filterNot { it.type.equals("movie", ignoreCase = true) }
+        val movies = state.watchlist.filter { it.type.equals("movie", ignoreCase = true) }
+        val shows = state.watchlist.filterNot { it.type.equals("movie", ignoreCase = true) }
+        val visibleLists = state.visibleLists
         return TrackingLibrarySnapshot(
             items = state.items,
             sections = buildList {
                 if (shows.isNotEmpty()) add(LibrarySection("mdblist_shows", localizedString(Res.string.tracking_library_my_shows), shows))
                 if (movies.isNotEmpty()) add(LibrarySection("mdblist_movies", localizedString(Res.string.tracking_library_my_movies), movies))
+                // One section per list, in the order MDBList returned them (own, liked, external).
+                visibleLists.forEach { list ->
+                    val items = state.itemsByList[list.key].orEmpty()
+                    if (items.isNotEmpty()) add(LibrarySection(list.key, list.name, items))
+                }
             },
             tabs = listOf(
                 TrackingLibraryTab(
@@ -182,7 +188,21 @@ internal object MdbListLibraryAdapter : TrackingLibraryProvider {
                     providerId = providerId,
                     kind = TrackingLibraryTabKind.WATCHLIST,
                 ),
-            ),
+            ) + visibleLists.map { list ->
+                TrackingLibraryTab(
+                    key = list.key,
+                    title = list.name,
+                    providerId = providerId,
+                    kind = TrackingLibraryTabKind.PERSONAL,
+                    supportedContentTypes = when (list.mediaType) {
+                        "movie" -> setOf("movie")
+                        "show" -> setOf("series", "show", "tv", "anime")
+                        else -> null
+                    },
+                    // Only the user's static lists take items; dynamic, liked and external are read-only.
+                    isMembershipDestination = list.acceptsItems,
+                )
+            },
             hasLoaded = state.hasLoaded,
             isLoading = state.isLoading,
             errorMessage = state.errorMessage,
@@ -194,8 +214,15 @@ internal object MdbListLibraryAdapter : TrackingLibraryProvider {
 
     override fun find(contentId: String): LibraryItem? = MdbListLibraryRepository.find(contentId)
 
-    override suspend fun membership(item: LibraryItem): Map<String, Boolean> =
-        mapOf(WATCHLIST_KEY to contains(item.id, item.type))
+    override suspend fun membership(item: LibraryItem): Map<String, Boolean> {
+        val state = MdbListLibraryRepository.state.value
+        return buildMap {
+            put(WATCHLIST_KEY, MdbListLibraryRepository.isInWatchlist(item.id, item.type))
+            state.visibleLists.filter { it.acceptsItems }.forEach { list ->
+                put(list.key, MdbListLibraryRepository.isInList(list.key, item.id))
+            }
+        }
+    }
 
     override fun toggledDefaultMembership(currentMembership: Map<String, Boolean>): Map<String, Boolean> =
         mapOf(WATCHLIST_KEY to (currentMembership[WATCHLIST_KEY] != true))
@@ -207,9 +234,14 @@ internal object MdbListLibraryAdapter : TrackingLibraryProvider {
         destructiveRemovalConfirmed: Boolean,
     ): TrackingMembershipResolution? {
         if (profileId != ProfileRepository.activeProfileId) return null
-        val desired = desiredMembership[WATCHLIST_KEY] == true
-        if (desired != contains(item.id, item.type)) {
-            MdbListLibraryRepository.setWatchlistMembership(item, desired)
+        val current = membership(item)
+        desiredMembership.forEach { (key, desired) ->
+            if (current[key] == desired) return@forEach
+            if (key == WATCHLIST_KEY) {
+                MdbListLibraryRepository.setWatchlistMembership(item, desired)
+            } else if (current.containsKey(key)) {
+                MdbListLibraryRepository.setListMembership(item, key, desired)
+            }
         }
         return TrackingMembershipResolution(providerId, WATCHLIST_KEY, WATCHLIST_KEY)
     }

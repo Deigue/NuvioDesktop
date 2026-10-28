@@ -137,10 +137,17 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
         )
     }
 
-    LaunchedEffect(currentStreamBingeGroup, parentMetaId) {
+    LaunchedEffect(currentStreamBingeGroup, activeStream, parentMetaId) {
         val bg = currentStreamBingeGroup
         if (bg != null && parentMetaId.isNotBlank()) {
-            BingeGroupCacheRepository.save(parentMetaId, bg)
+            // The release too, when the stream on screen is the one that set this group.
+            val release = activeStream?.takeIf { it.behaviorHints.bingeGroup == bg }
+            BingeGroupCacheRepository.save(
+                contentId = parentMetaId,
+                bingeGroup = bg,
+                filename = release?.behaviorHints?.filename,
+                infoHash = release?.p2pInfoHash,
+            )
         }
     }
 
@@ -808,8 +815,11 @@ private fun PlayerScreenRuntime.BindDiscordRichPresenceEffect() {
                 activityStyle = discordSettings.activityStyle,
                 activityName = discordSettings.activityName,
                 isPlaying = playbackSnapshot.isPlaying,
-                positionMs = playbackSnapshot.positionMs.coerceAtLeast(0L),
-                durationMs = playbackSnapshot.durationMs.coerceAtLeast(0L),
+                // Live TV has no timeline: mpv's duration for an endless stream grows with every
+                // tick, and since it is part of the presence's dedupe key that re-sent the activity
+                // to Discord twice a second.
+                positionMs = if (isIptvPlayback) 0L else playbackSnapshot.positionMs.coerceAtLeast(0L),
+                durationMs = if (isIptvPlayback) 0L else playbackSnapshot.durationMs.coerceAtLeast(0L),
                 refreshNonce = presenceReconcileTick * 1_000_000L + pausedAnchorTick,
             ),
         )
@@ -830,6 +840,7 @@ private fun PlayerScreenRuntime.BindDiscordRichPresenceEffect() {
  * it clears the failover tried-set so a later, unrelated mid-playback failure gets a fresh budget.
  */
 private const val STREAM_FAILOVER_WATCHDOG_STEP_MS = 500L
+private const val IPTV_STARTUP_TIMEOUT_MS = 45_000L
 private const val STREAM_FAILOVER_SUSTAINED_PLAYBACK_RESET_MS = 30_000L
 private const val INITIAL_TRACK_RESTORE_POLL_INTERVAL_MS = 250L
 private const val INITIAL_TRACK_RESTORE_POLL_ATTEMPTS = 60
@@ -847,7 +858,12 @@ private fun PlayerScreenRuntime.BindStreamFailoverWatchdogEffect() {
         if (activeSourceUrl.isBlank() || isProviderDiagnosticVideoPlayback) return@LaunchedEffect
         val watchedUrl = activeSourceUrl
         val watchedAttemptId = playbackAttemptId
-        val timeoutMs = playerSettingsUiState.streamFailoverTimeoutSeconds.coerceAtLeast(1) * 1000L
+        val settingTimeoutMs = playerSettingsUiState.streamFailoverTimeoutSeconds.coerceAtLeast(1) * 1000L
+        // Live HLS starts slowly: FFmpeg opens and probes every variant and audio rendition before
+        // the first frame, 15-30 s on Pluto TV, so the usual allowance failed working channels over
+        // to a format that does not exist. A dead live source still fails fast: mpv's network
+        // timeout and any HTTP error end it long before this.
+        val timeoutMs = if (isIptvPlayback) maxOf(settingTimeoutMs, IPTV_STARTUP_TIMEOUT_MS) else settingTimeoutMs
         // The desktop controller is created before its native Canvas has received a full-size
         // paint. Do not count that UI lifecycle wait against the source: no loadfile request exists
         // until the platform surface reports that this exact URL is being attached.
@@ -1627,6 +1643,57 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
         }
     }
 
+    // Preload Next Episode Sources (upstream 22c9ab203): search the next episode a little before
+    // its card appears, through the prefetch service, so the binge pick that follows reads the
+    // answers instead of waiting on every provider. Asks once per next episode; the prefetch cache
+    // (with its in-flight sharing) is what next-episode autoplay then reads.
+    LaunchedEffect(
+        playbackSnapshot.positionMs / NEXT_EPISODE_PRELOAD_SAMPLE_MS,
+        playbackSnapshot.durationMs,
+        nextEpisodeInfo,
+        playerSettingsUiState.preloadNextEpisodeSources,
+        playerSettingsUiState.streamAutoPlayNextEpisodeEnabled,
+    ) {
+        val next = nextEpisodeInfo ?: return@LaunchedEffect
+        val settings = playerSettingsUiState
+        if (!settings.preloadNextEpisodeSources || !settings.streamAutoPlayNextEpisodeEnabled) return@LaunchedEffect
+        if (!next.hasAired || nextEpisodePreloadRequestedFor == next.videoId) return@LaunchedEffect
+        if (sourceAffinity == PlayerSourceAffinity.Local || isProviderDiagnosticVideoPlayback) return@LaunchedEffect
+        if (playbackSnapshot.isLoading || playbackSnapshot.isEnded || playbackSnapshot.durationMs <= 0L || errorMessage != null) {
+            return@LaunchedEffect
+        }
+        if (
+            !isPlaybackPositionSupportedByRecentProgress(
+                positionMs = playbackSnapshot.positionMs,
+                lastTrustedPositionMs = lastTrustedPlaybackPositionMs,
+            )
+        ) return@LaunchedEffect
+        val leadMs = nextEpisodePreloadLeadMs(settings.streamAutoPlayTimeoutSeconds)
+        val dueSoon = PlayerNextEpisodeRules.shouldShowNextEpisodeCard(
+            positionMs = playbackSnapshot.positionMs + leadMs,
+            durationMs = playbackSnapshot.durationMs,
+            skipIntervals = skipIntervals,
+            thresholdMode = settings.nextEpisodeThresholdMode,
+            thresholdPercent = settings.nextEpisodeThresholdPercent,
+            thresholdMinutesBeforeEnd = settings.nextEpisodeThresholdMinutesBeforeEnd,
+        )
+        if (!dueSoon) return@LaunchedEffect
+        nextEpisodePreloadRequestedFor = next.videoId
+        // The same identity launchPlayerNextEpisodeAutoPlay loads, or the cache key would differ.
+        val nextVideo = playerMetaVideos.firstOrNull { it.id == next.videoId }
+        BingeAdvanceLog.i { "preloading next episode sources for ${next.videoId} lead=${leadMs}ms" }
+        StreamPrefetchService.request(
+            StreamPrefetchService.Target(
+                trigger = StreamPrefetchService.Trigger.NextEpisode,
+                type = contentType ?: parentMetaType,
+                parentMetaId = parentMetaId,
+                videoId = next.videoId,
+                season = nextVideo?.playbackSeasonNumber() ?: next.season,
+                episode = nextVideo?.playbackEpisodeNumber() ?: next.episode,
+            ),
+        )
+    }
+
     LaunchedEffect(
         playbackSnapshot.positionMs,
         playbackSnapshot.durationMs,
@@ -1883,6 +1950,15 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
 
 private const val NEXT_EPISODE_ADVANCE_LATCH_SAFETY_TIMEOUT_MS = 150_000L
 private const val NEXT_EPISODE_THRESHOLD_STABLE_SAMPLES = 3
+private const val NEXT_EPISODE_PRELOAD_SAMPLE_MS = 1_000L
+
+/**
+ * How far ahead of the next-episode card the preload starts: the autoplay timeout, so a pick at
+ * the card can use full answers, but at least 10 s (slow addons) and at most 30 s (unlimited
+ * timeout), as upstream settled on in d2cc0fb8a.
+ */
+internal fun nextEpisodePreloadLeadMs(autoPlayTimeoutSeconds: Int): Long =
+    (autoPlayTimeoutSeconds.toLong().coerceIn(0L, 30L) * 1_000L).coerceIn(10_000L, 30_000L)
 
 /** How far before the end a playlist starts searching for its next entry's source. */
 private const val PLAYLIST_PREFETCH_LEAD_MS = 4 * 60_000L

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -76,6 +77,8 @@ fun NuvioPosterActionSheet(
      * the active library provider, the secondary click opens the list picker instead.
      */
     onOpenLibraryPicker: (() -> Unit)? = null,
+    /** Adds the title to the Nuvio library and every connected provider. Null hides the row. */
+    onAddToAllLibraries: (() -> Unit)? = null,
     /** Opens the add-to-playlist dialog for this title. Null hides the row. */
     onAddToPlaylist: (() -> Unit)? = null,
     /** Discover's "Not interested": hides the title from every Discover row for good. Null hides the row. */
@@ -98,6 +101,15 @@ fun NuvioPosterActionSheet(
                 onSecondarySelected = onOpenLibraryPicker,
             ),
         )
+        onAddToAllLibraries?.let { addToAll ->
+            add(
+                PosterZoomOverlayAction(
+                    icon = Icons.Default.LibraryAdd,
+                    label = "Add to all libraries",
+                    onSelected = addToAll,
+                ),
+            )
+        }
         add(
             PosterZoomOverlayAction(
                 icon = if (isWatched) Icons.Default.CheckCircle else Icons.Default.CheckCircleOutline,

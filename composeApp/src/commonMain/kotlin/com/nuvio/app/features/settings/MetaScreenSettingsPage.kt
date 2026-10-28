@@ -140,12 +140,14 @@ import com.nuvio.app.core.i18n.localizedString
 internal fun LazyListScope.metaScreenSettingsContent(
     isTablet: Boolean,
     uiState: MetaScreenSettingsUiState,
+    /** The panel's heading. Desktop shows it inside Layout, where "Appearance" would mislead. */
+    sectionTitle: StringResource = Res.string.settings_meta_section_appearance,
 ) {
     val showHeroTrailerPlaybackSetting = AppFeaturePolicy.heroTrailerPlaybackSupported &&
         AppFeaturePolicy.trailerPlaybackMode == TrailerPlaybackMode.IN_APP
     item {
         SettingsSection(
-            title = stringResource(Res.string.settings_meta_section_appearance),
+            title = stringResource(sectionTitle),
             isTablet = isTablet,
         ) {
             SettingsGroup(isTablet = isTablet) {
@@ -269,7 +271,7 @@ internal fun LazyListScope.metaScreenSettingsContent(
                     onCheckedChange = { MetaScreenSettingsRepository.setBlurUnwatchedEpisodes(it) },
                 )
                 SettingsGroupDivider(isTablet = isTablet)
-                SettingsSegmentedChoiceRow(
+                SettingsChoiceRow(
                     title = stringResource(Res.string.settings_meta_episode_ratings),
                     description = stringResource(Res.string.settings_meta_episode_ratings_description),
                     options = listOf(
@@ -301,7 +303,7 @@ internal fun LazyListScope.metaScreenSettingsContent(
                     onCheckedChange = MetaScreenSettingsRepository::setShowOverallRatings,
                 )
                 SettingsGroupDivider(isTablet = isTablet)
-                SettingsSegmentedChoiceRow(
+                SettingsChoiceRow(
                     title = SAME_CAST_LABEL_TITLE,
                     description = SAME_CAST_LABEL_DESCRIPTION,
                     options = listOf(

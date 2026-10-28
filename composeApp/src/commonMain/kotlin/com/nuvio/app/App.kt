@@ -1,5 +1,14 @@
 package com.nuvio.app
 
+import androidx.compose.ui.draw.clip
+import com.nuvio.app.core.ui.NuvioGlass
+import com.nuvio.app.core.ui.accentFill
+import com.nuvio.app.features.settings.settingsGlassGlyph
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.border
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.runtime.key
 import com.nuvio.app.core.perf.PerfTelemetry
 import com.nuvio.app.features.settings.perfSettingsPage
@@ -82,6 +91,11 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.nuvio.app.core.ui.PosterZoomOverlayAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.material.icons.rounded.Settings
@@ -156,8 +170,6 @@ import com.nuvio.app.core.sync.SyncManager
 import com.nuvio.app.core.ui.ImageCacheSettingsRepository
 import com.nuvio.app.core.ui.KeptAliveLayer
 import com.nuvio.app.core.ui.rememberChildLifecycleOwner
-import com.nuvio.app.core.ui.nuvioLaunchBackdrop
-import com.nuvio.app.core.ui.rememberNuvioLaunchDrift
 import com.nuvio.app.core.ui.NuvioNavigationBar
 import com.nuvio.app.core.ui.NuvioContinueWatchingActionSheet
 import com.nuvio.app.core.ui.NuvioPosterActionSheet
@@ -172,6 +184,7 @@ import com.nuvio.app.core.ui.ContextMenuInvocation
 import com.nuvio.app.core.ui.unclaimedSecondaryClick
 import com.nuvio.app.core.ui.PlatformBackHandler
 import com.nuvio.app.core.ui.platformExitApp
+import com.nuvio.app.core.ui.addPlatformSvgDecoders
 import com.nuvio.app.core.ui.configurePlatformImageLoader
 import com.nuvio.app.core.ui.TransientImageErrorRetryInterceptor
 import com.nuvio.app.core.ui.NuvioToastHost
@@ -269,6 +282,7 @@ import com.nuvio.app.features.library.toMetaPreview
 import com.nuvio.app.features.locallibrary.FilenameParser
 import com.nuvio.app.features.locallibrary.LocalLibraryPlaybackPreference
 import com.nuvio.app.features.locallibrary.LocalLibraryRepository
+import com.nuvio.app.features.locallibrary.LocalTitlePlayback
 import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsRepository
 import com.nuvio.app.features.p2p.P2pConsentDialog
 import com.nuvio.app.features.p2p.P2pSettingsRepository
@@ -330,7 +344,9 @@ import com.nuvio.app.features.search.discoverCatalogDisplayLabels
 import com.nuvio.app.features.settings.ApiKeysOnboardingHost
 import com.nuvio.app.features.setup.FirstRunWizardController
 import com.nuvio.app.features.setup.FirstRunWizardHost
+import com.nuvio.app.features.setup.FirstRunWizardPanel
 import com.nuvio.app.features.settings.SettingsScreen
+import com.nuvio.app.features.settings.settingsSkyBackground
 import com.nuvio.app.features.settings.HomescreenSettingsScreen
 import com.nuvio.app.features.settings.MetaScreenSettingsScreen
 import com.nuvio.app.features.settings.ContinueWatchingSettingsScreen
@@ -358,6 +374,7 @@ import com.nuvio.app.features.streams.StreamItem
 import com.nuvio.app.features.streams.StreamLaunch
 import com.nuvio.app.features.streams.StreamLinkCacheRepository
 import com.nuvio.app.features.streams.StreamsRepository
+import com.nuvio.app.features.streams.YouTubeStreamResolver
 import com.nuvio.app.features.streams.StreamsScreen
 import com.nuvio.app.features.tmdb.TmdbService
 import com.nuvio.app.features.player.PlayerSettingsRepository
@@ -659,8 +676,8 @@ internal fun rootTabHistoryAfterNavigation(
 // two must stay identical or the panel's rounded top corners stop lining up with the bar. Sized so
 // the five nav quadrants keep the 80.dp rhythm they had when there were four. Quadrants divide the
 // bar by weight, so hiding Discover subtracts one quadrant instead of stretching the other four.
-private val FloatingTopBarQuadrantWidth = 80.dp
-private val FloatingTopBarWidth = 400.dp
+private val FloatingTopBarQuadrantWidth = 64.dp
+private val FloatingTopBarWidth = 320.dp
 
 // The sidebar's nav glyphs sit alone in a wide rail rather than in a dense pill, so they carry
 // 15% more than the standard 20.dp icon step to stop them reading as undersized.
@@ -1035,6 +1052,7 @@ fun App() {
             .diskCachePolicy(CachePolicy.ENABLED)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .components {
+                addPlatformSvgDecoders()
                 add(SvgDecoder.Factory())
                 add(TransientImageErrorRetryInterceptor())
             }
@@ -1468,6 +1486,20 @@ private fun MainAppContent(
                 // Pushed routes (notably Calendar) can retain focus during their exit transition.
                 // Tell the tab content to reclaim it once the Tabs destination becomes active.
                 navigateToContentCount++
+            } else if (
+                destinationIsTabs &&
+                previousDestinationWasTabs == false &&
+                selectedTab == AppScreenTab.Search
+            ) {
+                // Search was left out above because its text field, not the content, holds focus
+                // there - but nothing asked the field either, so back from a result's details the
+                // keyboard had nothing focused. Back on the results the user came from when there
+                // are some; otherwise the field, as on entering the tab.
+                if (SearchRepository.uiState.value.sections.isNotEmpty()) {
+                    navigateToContentCount++
+                } else {
+                    searchFocusRequestCount++
+                }
             }
             previousDestinationWasTabs = destinationIsTabs
         }
@@ -2101,7 +2133,13 @@ private fun MainAppContent(
             // Persist binge group for subsequent episode plays (same as internal player)
             val bingeGroup = launch.bingeGroup
             if (bingeGroup != null && launch.parentMetaId.isNotBlank()) {
-                BingeGroupCacheRepository.save(launch.parentMetaId, bingeGroup)
+                val release = launch.stream?.takeIf { it.behaviorHints.bingeGroup == bingeGroup }
+                BingeGroupCacheRepository.save(
+                    contentId = launch.parentMetaId,
+                    bingeGroup = bingeGroup,
+                    filename = release?.behaviorHints?.filename,
+                    infoHash = release?.p2pInfoHash,
+                )
             }
 
             val baseRequest = launch.toExternalPlayerPlaybackRequest()
@@ -2250,10 +2288,11 @@ private fun MainAppContent(
             // Read the repository at the moment of the click. A details destination can outlive the
             // composition that created its callbacks; using its captured UI snapshot meant changing
             // this setting to Source picker could still leave that destination opening local files.
+            // The title's own override (Continue Watching's "for this title" entries) is folded in.
             val configuredBehavior = if (preferLocalOverride == true) {
-                LocalLibraryPlaybackPreference.LOCAL_LIBRARY
+                LocalLibraryPlaybackPreference.LOCAL_LIBRARY.forTitle(null)
             } else {
-                LocalLibraryRepository.currentPlaybackPreference()
+                LocalLibraryRepository.routingFor(parentMetaId, videoId)
             }
             // The download lookup stats the file, and downloads live on the library drive: on a
             // spun-down HDD that first stat waits out the spin-up, which froze the UI on the click.
@@ -2278,9 +2317,10 @@ private fun MainAppContent(
                     useAlternate = useAlternateBehavior,
                     hasDownloadedFile = !localSourceUrl.isNullOrBlank(),
                     hasLocalLibraryStream = hasLocalLibraryStream,
+                    forceManualSelection = forceManualSelection,
                 )
                 val prefersLocalStreams = localRouting.preferLocalStreams
-                val manualSelection = localRouting.manualSelection || forceManualSelection
+                val manualSelection = localRouting.manualSelection
                 PlaybackStartTrace.markPending(
                     "localRoute configured=$configuredBehavior requested=${localRouting.requestedBehavior} " +
                         "downloaded=${!localSourceUrl.isNullOrBlank()} scanned=$hasLocalLibraryStream " +
@@ -2930,10 +2970,12 @@ private fun MainAppContent(
                 .fillMaxSize()
                 .background(MaterialTheme.nuvio.colors.background)
                 .onPreviewKeyEvent { event ->
+                    // Not while the setup panel is open: Tab is how a keyboard user moves through it.
                     val canOpenDiscovery =
                         discoverTabVisible &&
                             currentBackStackEntry?.destination?.hasRoute<TabsRoute>() == true &&
-                            selectedTab != AppScreenTab.Settings
+                            selectedTab != AppScreenTab.Settings &&
+                            !FirstRunWizardController.uiState.value.visible
                     if (event.key != Key.Tab || !canOpenDiscovery) return@onPreviewKeyEvent false
                     if (event.type == KeyEventType.KeyDown) {
                         // Tab used to open the search overlay parked on its catalog picker. Discover
@@ -3926,7 +3968,36 @@ private fun MainAppContent(
                                             onNavigateToContent = { navigateToContentCount++ },
                                         )
                                     }
-                                    if (isDesktop) {
+                                    val setupPanelOpen by remember {
+                                        FirstRunWizardController.uiState.map { it.visible }.distinctUntilChanged()
+                                    }.collectAsStateWithLifecycle(initialValue = false)
+                                    if (
+                                        setupPanelOpen &&
+                                        selectedTab == AppScreenTab.Home &&
+                                        !searchOverlayActive &&
+                                        !homeHeroPickerDocked
+                                    ) {
+                                        // Top right: the emptiest area of Home in every display mode.
+                                        // Level with the floating top bar's top edge: the bar is a
+                                        // narrow centred pill, so it never reaches this corner.
+                                        FirstRunWizardPanel(
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(
+                                                    top = WindowInsets.statusBars.asPaddingValues()
+                                                        .calculateTopPadding() + NavBarTopOffset,
+                                                    end = 20.dp,
+                                                    bottom = 20.dp,
+                                                )
+                                                .zIndex(NuvioTokens.Z.navigation + 2f),
+                                            onOpenKeyboardShortcuts = {
+                                                requestedSettingsPageName = "KeyboardShortcuts"
+                                                selectedTab = AppScreenTab.Settings
+                                            },
+                                        )
+                                    }
+                                    // It shares the corner the setup panel sits in.
+                                    if (isDesktop && !(setupPanelOpen && selectedTab == AppScreenTab.Home)) {
                                         DesktopFullscreenHoverButton(
                                             modifier = Modifier
                                                 .align(Alignment.TopEnd)
@@ -4043,21 +4114,30 @@ private fun MainAppContent(
                         }
                     }
                 },
+                onAddToAllLibraries = selectedPosterActionTarget
+                    ?.takeIf { LibraryRepository.hasConnectedLibraryProviders() }
+                    ?.let { target ->
+                        {
+                            LibraryRepository.addToAllLibraries(
+                                target.libraryItem ?: target.preview.toLibraryItem(savedAtEpochMs = 0L),
+                            )
+                        }
+                    },
                 onOpenLibraryPicker = selectedPosterActionTarget?.let { target ->
                     {
                         val preview = target.preview
                         val libraryItem = target.libraryItem ?: preview.toLibraryItem(savedAtEpochMs = 0L)
                         pickerItem = libraryItem
                         pickerTitle = preview.name
-                        pickerTabs = LibraryRepository.libraryListTabs()
+                        pickerTabs = LibraryRepository.connectedLibraryTabs()
                         pickerMembership = pickerTabs.associate { it.key to false }
                         pickerPending = true
                         pickerError = null
                         showLibraryListPicker = true
                         coroutineScope.launch {
                             runCatching {
-                                val snapshot = LibraryRepository.getMembershipSnapshot(libraryItem)
-                                val tabs = LibraryRepository.libraryListTabs()
+                                val snapshot = LibraryRepository.connectedMembershipSnapshot(libraryItem)
+                                val tabs = LibraryRepository.connectedLibraryTabs().filter { tab -> tab.key in snapshot }
                                 pickerTabs = tabs
                                 pickerMembership = tabs.associate { tab ->
                                     tab.key to (snapshot[tab.key] == true)
@@ -4131,7 +4211,12 @@ private fun MainAppContent(
             }
             // Which of the two `useAlternate` values reaches the source picker depends on the
             // configured preference, so it is resolved here rather than hardcoded per entry.
-            val continueWatchingAlternateOpensPicker = localLibraryUiState.playbackPreference
+            val continueWatchingRouting = remember(selectedContinueWatching, localLibraryUiState) {
+                selectedContinueWatching?.let { item ->
+                    LocalLibraryRepository.routingFor(item.parentMetaId, item.videoId)
+                } ?: localLibraryUiState.playbackPreference.forTitle(null)
+            }
+            val continueWatchingAlternateOpensPicker = continueWatchingRouting
                 .alternateOpensSourcePicker(selectedContinueWatchingHasLocalPlayback)
             val continueWatchingIsPlayable = selectedContinueWatching
                 ?.isCloudLibraryContinueWatchingItem() == false
@@ -4144,6 +4229,40 @@ private fun MainAppContent(
                         selectedContinueWatchingHasLocalPlayback &&
                         !continueWatchingAlternateOpensPicker
                 }
+
+            // "For this title" overrides. Only the routes the title is not already taking are
+            // offered, so the entries also say what a plain click does now.
+            val continueWatchingLocalTitle = remember(selectedContinueWatching, localLibraryUiState) {
+                selectedContinueWatching
+                    ?.takeIf { continueWatchingIsPlayable }
+                    ?.let { item -> LocalLibraryRepository.titleFor(item.parentMetaId, item.videoId) }
+            }
+            val titlePlaybackLocalLabel = stringResource(Res.string.local_title_playback_local)
+            val titlePlaybackOnlineLabel = stringResource(Res.string.local_title_playback_online)
+            val titlePlaybackDefaultLabel = stringResource(Res.string.local_title_playback_default)
+            val continueWatchingTitlePlaybackActions = continueWatchingLocalTitle?.let { title ->
+                val current = localLibraryUiState.titlePlayback[title.key]
+                val defaultPlaysLocal =
+                    localLibraryUiState.playbackPreference == LocalLibraryPlaybackPreference.LOCAL_LIBRARY
+                fun entry(icon: ImageVector, label: String, playback: LocalTitlePlayback?) =
+                    PosterZoomOverlayAction(
+                        icon = icon,
+                        label = label,
+                        onSelected = { LocalLibraryRepository.setTitlePlayback(title.key, playback) },
+                        group = 5,
+                    )
+                buildList {
+                    if (current != LocalTitlePlayback.LOCAL_FILE && !(current == null && defaultPlaysLocal)) {
+                        add(entry(Icons.Default.Folder, titlePlaybackLocalLabel, LocalTitlePlayback.LOCAL_FILE))
+                    }
+                    if (current != LocalTitlePlayback.ONLINE_SOURCE) {
+                        add(entry(Icons.Default.Cloud, titlePlaybackOnlineLabel, LocalTitlePlayback.ONLINE_SOURCE))
+                    }
+                    if (current != null) {
+                        add(entry(Icons.Default.Restore, titlePlaybackDefaultLabel, null))
+                    }
+                }
+            }.orEmpty()
 
             val continueWatchingUsesDetailsByDefault = selectedContinueWatching?.let { item ->
                 continueWatchingPreferencesUiState.clickAction.opensDetails(
@@ -4210,6 +4329,7 @@ private fun MainAppContent(
                     ?.let { item -> { openContinueWatching(item, true, false) } },
                 // Always offered, whatever the local-library preference is: this entry is what
                 // overrides stream auto-play, which is not a local-library concern.
+                titlePlaybackActions = continueWatchingTitlePlaybackActions,
                 onChooseSource = selectedContinueWatchingForActions
                     ?.takeIf { continueWatchingIsPlayable }
                     ?.let { item ->
@@ -4258,7 +4378,7 @@ private fun MainAppContent(
                         pickerPending = true
                         pickerError = null
                         runCatching {
-                            LibraryRepository.applyMembershipChanges(
+                            LibraryRepository.applyConnectedMembershipChanges(
                                 item = item,
                                 desiredMembership = pickerMembership,
                             )
@@ -4271,6 +4391,12 @@ private fun MainAppContent(
                         }
                         pickerPending = false
                     }
+                },
+                onAddToAll = {
+                    pickerItem?.let(LibraryRepository::addToAllLibraries)
+                    showLibraryListPicker = false
+                    pickerItem = null
+                    pickerError = null
                 },
             )
 
@@ -4877,6 +5003,30 @@ private fun MainAppContent(
                     // "Play on device…": resolve as usual, then hand the stream to the cast picker.
                     castToDevice: Boolean = false,
                 ) {
+                    if (stream.youTubeIdToResolve != null) {
+                        if (resolvingDebridStream) return
+                        streamRouteScope.launch {
+                            resolvingDebridStream = true
+                            val resolved = YouTubeStreamResolver.resolve(stream)
+                            resolvingDebridStream = false
+                            if (resolved == null) {
+                                NuvioToastController.show(getString(Res.string.youtube_resolution_failed))
+                                return@launch
+                            }
+                            openSelectedStream(
+                                stream = resolved,
+                                resolvedResumePositionMs = resolvedResumePositionMs,
+                                resolvedResumeProgressFraction = resolvedResumeProgressFraction,
+                                forceExternal = forceExternal,
+                                forceInternal = forceInternal,
+                                sourceIdentityKey = sourceIdentityKey,
+                                // The resolved URL expires after a few hours.
+                                saveForReuse = false,
+                                castToDevice = castToDevice,
+                            )
+                        }
+                        return
+                    }
                     if (DirectDebridPlaybackResolver.shouldResolveToPlayableStream(stream)) {
                         if (resolvingDebridStream) return
                         streamRouteScope.launch {
@@ -5217,15 +5367,18 @@ private fun MainAppContent(
                     .zIndex(26f),
             )
 
-            // Above the other startup overlays, though StartupOverlayCoordinator means only one of
-            // the three is ever composed at a time.
+            // Ahead of the other startup overlays in StartupOverlayCoordinator. The panel itself is
+            // drawn over Home (FirstRunWizardPanel, in the tabs scaffold), since its choices are
+            // previewed live on Home; this only decides whether setup runs and brings Home forward.
             FirstRunWizardHost(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .zIndex(27f),
-                onOpenKeyboardShortcuts = {
-                    requestedSettingsPageName = "KeyboardShortcuts"
-                    selectedTab = AppScreenTab.Settings
+                onShowHome = {
+                    if (navController.currentDestination?.hasRoute<TabsRoute>() != true) {
+                        navController.navigate(TabsRoute) {
+                            popUpTo<TabsRoute> { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    }
+                    selectedTab = AppScreenTab.Home
                 },
             )
 
@@ -5702,12 +5855,19 @@ private fun AppTabHost(
     }
 }
 
+/** Lets a screen whose own control sits under the corner hover zone keep the button away. */
+internal object DesktopFullscreenHoverButtonState {
+    var suppressed by mutableStateOf(false)
+}
+
 @Composable
 private fun DesktopFullscreenHoverButton(
     modifier: Modifier = Modifier,
 ) {
+    if (DesktopFullscreenHoverButtonState.suppressed) return
     var hovered by remember { mutableStateOf(false) }
     val fullscreen = isAppFullscreen()
+    val tokens = MaterialTheme.nuvio
 
     Box(
         modifier = modifier
@@ -5721,13 +5881,17 @@ private fun DesktopFullscreenHoverButton(
             enter = fadeIn(tween(120)),
             exit = fadeOut(tween(120)),
         ) {
+            // The floating nav bar's glass: the night tint at its opacity, the cards' one-pixel
+            // edge, and the icon drawn as glass like the settings top bar's.
             Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.nuvio.colors.surfaceCard.copy(alpha = 0.88f),
-                contentColor = MaterialTheme.nuvio.colors.textPrimary,
+                shape = NuvioGlass.Shape,
+                color = NuvioGlass.night(tokens.colors.background, tokens.colors.accent).copy(alpha = NavBarGlassOpacity),
+                contentColor = tokens.colors.textPrimary,
+                border = BorderStroke(1.dp, NuvioGlass.Edge),
             ) {
                 IconButton(onClick = ::toggleAppFullscreen) {
                     Icon(
+                        modifier = Modifier.settingsGlassGlyph(),
                         imageVector = if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
                         contentDescription = stringResource(
                             if (fullscreen) {
@@ -6170,31 +6334,33 @@ private fun TabletFloatingTopBar(
         onSearchSubmit(entry.query)
     }
 
-    val dividerColor = Color.White.copy(alpha = 0.13f)
-    val activeQuadColor = Color.White.copy(alpha = 0.18f)
+    // The settings glass: a night-blue pill with the cards' one-pixel edge. No item backgrounds:
+    // the icons themselves brighten on hover and the page you are on is lit in the accent glass,
+    // like the settings top bar's icons (see NavQuadrant).
+    val dividerColor = NuvioGlass.EdgeColor
     val activeIconTint = Color.White
     val inactiveIconTint = Color.White.copy(alpha = 0.55f)
-    val floatingSearchSurfaceColor = tokens.colors.surface.copy(alpha = tokens.opacity.strong)
+    val floatingSearchSurfaceColor = NuvioGlass.night(tokens.colors.background, tokens.colors.accent).copy(alpha = NavBarGlassOpacity)
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = statusBarPadding + NuvioTokens.Space.s10, bottom = tokens.spacing.controlGap)
+            .padding(top = statusBarPadding + NavBarTopOffset, bottom = tokens.spacing.controlGap)
             .alpha(barAlpha),
         contentAlignment = Alignment.TopCenter,
     ) {
         val pickerMaxHeight = (
-            maxHeight - statusBarPadding - NuvioTokens.Space.s10 - 44.dp - tokens.spacing.controlGap - 8.dp
+            maxHeight - statusBarPadding - NavBarTopOffset - 44.dp - tokens.spacing.controlGap - 8.dp
         ).coerceIn(120.dp, 360.dp)
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Surface(
             color = floatingSearchSurfaceColor,
             shape = if (attachedPanelVisible) androidx.compose.foundation.shape.RoundedCornerShape(topStartPercent = 50, topEndPercent = 50) else tokens.shapes.chip,
-            tonalElevation = if (attachedPanelVisible) 0.dp else tokens.elevation.playerControls,
+            tonalElevation = 0.dp,
             shadowElevation = if (attachedPanelVisible) 0.dp else tokens.elevation.overlay,
-            border = BorderStroke(0.5.dp, dividerColor),
+            border = BorderStroke(1.dp, dividerColor),
             modifier = Modifier
-                .height(44.dp)
+                .height(NavBarHeight)
                 .width(topBarWidth)
                 .onPointerEvent(PointerEventType.Enter) {
                     activationZoneHovered = true
@@ -6350,87 +6516,77 @@ private fun TabletFloatingTopBar(
                         }
                     }
                 } else {
-                    Row(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         NavQuadrant(
                             selected = selectedTab == AppScreenTab.Home,
-                            activeColor = activeQuadColor,
                             onClick = { onTabSelected(AppScreenTab.Home) },
-                        ) {
+                        ) { iconModifier, iconTint ->
                             Icon(
                                 imageVector = Icons.Filled.Home,
                                 contentDescription = stringResource(Res.string.compose_nav_home),
-                                modifier = Modifier.size(NuvioTokens.Space.s18).offset(x = 2.dp),
-                                tint = if (selectedTab == AppScreenTab.Home) activeIconTint else inactiveIconTint,
+                                modifier = iconModifier,
+                                tint = iconTint,
                             )
                         }
-                        Box(Modifier.width(0.5.dp).fillMaxHeight().background(dividerColor))
                         NavQuadrant(
                             selected = isSearchActive,
-                            activeColor = activeQuadColor,
                             onClick = onSearchOverlayOpen,
-                        ) {
+                        ) { iconModifier, iconTint ->
                             Icon(
                                 painter = painterResource(Res.drawable.sidebar_search),
                                 contentDescription = stringResource(Res.string.compose_nav_search),
-                                modifier = Modifier.size(NuvioTokens.Space.s18),
-                                tint = if (isSearchActive) activeIconTint else inactiveIconTint,
+                                modifier = iconModifier,
+                                tint = iconTint,
                             )
                         }
                         if (discoverTabVisible) {
-                            Box(Modifier.width(0.5.dp).fillMaxHeight().background(dividerColor))
                             NavQuadrant(
                                 selected = selectedTab == AppScreenTab.Discover,
-                                activeColor = activeQuadColor,
                                 onClick = { onTabSelected(AppScreenTab.Discover) },
-                            ) {
+                            ) { iconModifier, iconTint ->
                                 Icon(
                                     imageVector = Icons.Rounded.Explore,
                                     contentDescription = stringResource(Res.string.compose_nav_discover),
-                                    modifier = Modifier.size(NuvioTokens.Space.s18),
-                                    tint = if (selectedTab == AppScreenTab.Discover) {
-                                        activeIconTint
-                                    } else {
-                                        inactiveIconTint
-                                    },
+                                    modifier = iconModifier,
+                                    tint = iconTint,
                                 )
                             }
                         }
                         if (liveTvTabVisible) {
-                            Box(Modifier.width(0.5.dp).fillMaxHeight().background(dividerColor))
                             NavQuadrant(
                                 selected = selectedTab == AppScreenTab.LiveTv,
-                                activeColor = activeQuadColor,
                                 onClick = { onTabSelected(AppScreenTab.LiveTv) },
-                            ) {
+                            ) { iconModifier, iconTint ->
                                 Icon(
                                     imageVector = Icons.Rounded.LiveTv,
                                     contentDescription = stringResource(Res.string.iptv_settings_page),
-                                    modifier = Modifier.size(NuvioTokens.Space.s18),
-                                    tint = if (selectedTab == AppScreenTab.LiveTv) activeIconTint else inactiveIconTint,
+                                    modifier = iconModifier,
+                                    tint = iconTint,
                                 )
                             }
                         }
-                        Box(Modifier.width(0.5.dp).fillMaxHeight().background(dividerColor))
                         NavQuadrant(
                             selected = selectedTab == AppScreenTab.Library,
-                            activeColor = activeQuadColor,
                             onClick = { onTabSelected(AppScreenTab.Library) },
                             onSecondaryClick = { libraryMenuVisible = true },
-                        ) {
+                        ) { iconModifier, iconTint ->
                             Icon(
                                 painter = painterResource(Res.drawable.sidebar_library),
                                 contentDescription = stringResource(Res.string.compose_nav_library),
-                                modifier = Modifier.size(NuvioTokens.Space.s18),
-                                tint = if (selectedTab == AppScreenTab.Library) activeIconTint else inactiveIconTint,
+                                modifier = iconModifier,
+                                tint = iconTint,
                             )
                         }
-                        Box(Modifier.width(0.5.dp).fillMaxHeight().background(dividerColor))
                         NavQuadrant(
                             selected = selectedTab == AppScreenTab.Settings,
-                            activeColor = activeQuadColor,
                             onClick = { onTabSelected(AppScreenTab.Settings) },
-                        ) {
-                            Box(modifier = Modifier.offset(x = (-2).dp)) {
+                        ) { _, _ ->
+                            // The avatar carries its own selected ring; it is not a glyph to tint.
+                            Box {
                                 ProfileSwitcherTab(
                                     selected = selectedTab == AppScreenTab.Settings,
                                     onClick = { onTabSelected(AppScreenTab.Settings) },
@@ -6451,7 +6607,7 @@ private fun TabletFloatingTopBar(
             val density = LocalDensity.current
             Popup(
                 alignment = Alignment.TopCenter,
-                offset = IntOffset(0, with(density) { (44.dp - 0.5.dp).roundToPx() }),
+                offset = IntOffset(0, with(density) { (NavBarHeight - 0.5.dp).roundToPx() }),
                 properties = PopupProperties(focusable = true),
                 onDismissRequest = { libraryMenuVisible = false },
             ) {
@@ -6552,28 +6708,50 @@ private fun TabletFloatingTopBar(
 @Composable
 private fun RowScope.NavQuadrant(
     selected: Boolean,
-    activeColor: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onSecondaryClick: (() -> Unit)? = null,
-    content: @Composable () -> Unit,
+    content: @Composable (iconModifier: Modifier, iconTint: Color) -> Unit,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = androidx.compose.foundation.shape.CircleShape
+    // State lives in the glyph rather than a highlight behind it: dim at rest, white on hover, and
+    // the current page in the accent glass (which recolours whatever tint the icon is given).
+    val iconTint by animateColorAsState(
+        targetValue = if (hovered || selected) Color.White else Color.White.copy(alpha = 0.55f),
+        animationSpec = tween(durationMillis = 140),
+    )
+    val iconModifier = Modifier
+        .size(NavBarIconSize)
+        .then(if (selected) Modifier.settingsGlassGlyph() else Modifier)
     Box(
         modifier = modifier
             .weight(1f)
-            .fillMaxHeight()
-            .background(if (selected) activeColor else Color.Transparent)
+            .height(NavBarItemHeight)
+            .clip(shape)
             .then(if (onSecondaryClick != null) Modifier.secondaryClick(onSecondaryClick) else Modifier)
+            .hoverable(interaction)
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interaction,
                 indication = null,
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
     ) {
-        content()
+        content(iconModifier, iconTint)
     }
 }
+
+/** How much of the night-blue glass base shows; the rest is the page behind it. */
+private const val NavBarGlassOpacity = 0.84f
+private val NavBarHeight = 48.dp
+// Bar centred 41dp from the top with 22dp icons: the same line and size as the nav icons in the
+// settings top bar (82dp tall, see DesktopSettingsRootNavigation), so switching to Settings leaves
+// every icon where it was.
+private val NavBarTopOffset = 17.dp
+private val NavBarIconSize = 22.dp
+private val NavBarItemHeight = 40.dp
 
 private fun Float.isInCenteredActivationBand(widthPx: Int): Boolean {
     if (widthPx <= 0) return false
@@ -6679,11 +6857,12 @@ private fun AppLaunchOverlay(
     modifier: Modifier = Modifier,
 ) {
     val tokens = MaterialTheme.nuvio
-    val drift = rememberNuvioLaunchDrift()
     LaunchOverlayFrameGapProbe()
     Box(
         modifier = modifier
-            .nuvioLaunchBackdrop(tokens.colors.background, drift)
+            // The settings sky: the same night-blue wash and two faint glows the settings pages sit
+            // on, so the app opens on the backdrop its glass is designed against.
+            .settingsSkyBackground(tokens.colors.background, tokens.colors.accent)
             .zIndex(NuvioTokens.Z.dialog),
         contentAlignment = Alignment.Center,
     ) {
@@ -6698,21 +6877,27 @@ private fun AppLaunchOverlay(
                 contentDescription = stringResource(Res.string.app_brand_name),
                 modifier = Modifier
                     .fillMaxWidth(0.48f)
-                    .height(30.dp),
+                    .height(LaunchWordmarkHeight),
                 contentScale = ContentScale.Fit,
             )
-            Spacer(modifier = Modifier.height(NuvioTokens.Space.s12))
+            Spacer(modifier = Modifier.height(NuvioTokens.Space.s16))
             Text(
                 text = "HOME THEATRE",
-                style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 4.sp),
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontSize = 15.sp,
+                    letterSpacing = LaunchTaglineTracking,
+                ),
                 color = tokens.colors.textMuted,
                 // Tracking trails the last letter too; pad the start by the same amount so the
                 // line sits centred under the wordmark instead of half a letter to its left.
-                modifier = Modifier.padding(start = 4.dp),
+                modifier = Modifier.padding(start = 6.dp),
             )
         }
     }
 }
+
+private val LaunchWordmarkHeight = 44.dp
+private val LaunchTaglineTracking = 6.sp
 
 /** Upper bound on waiting for the outgoing player to dispose before opening the next entry. */
 private const val PLAYLIST_HANDOFF_DISPOSE_TIMEOUT_MS = 3_000L

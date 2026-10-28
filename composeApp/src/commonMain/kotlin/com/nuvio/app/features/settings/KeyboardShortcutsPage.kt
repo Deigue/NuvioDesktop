@@ -233,22 +233,24 @@ internal fun LazyListScope.keyboardShortcutsContent(isTablet: Boolean) {
                     actions = { ShortcutsResetLabel(onClick = { resetPlayerShortcuts(sectionActions) }) },
                 ) {
                     SettingsGroup(isTablet = isTablet) {
-                        specs.forEachIndexed { index, spec ->
-                            if (index > 0) SettingsGroupDivider(isTablet = isTablet)
-                            ShortcutRow(
-                                shortcut = spec.toShortcut(labels),
-                                isTablet = isTablet,
-                                onRebind = spec.action?.let { action -> { rebinding = action } },
-                            )
-                        }
+                        // First in the section, as Navigation leads with its own switches: a
+                        // setting among the key bindings was easy to scroll past.
                         if (sectionIndex == 0) {
-                            SettingsGroupDivider(isTablet = isTablet)
                             SettingsSwitchRow(
                                 title = stringResource(Res.string.settings_shortcuts_esc_windowed_first),
                                 description = stringResource(Res.string.settings_shortcuts_esc_windowed_first_description),
                                 checked = escWindowedFirst,
                                 isTablet = isTablet,
                                 onCheckedChange = ::setPlayerEscWindowedFirst,
+                            )
+                            SettingsGroupDivider(isTablet = isTablet)
+                        }
+                        specs.forEachIndexed { index, spec ->
+                            if (index > 0) SettingsGroupDivider(isTablet = isTablet)
+                            ShortcutRow(
+                                shortcut = spec.toShortcut(labels),
+                                isTablet = isTablet,
+                                onRebind = spec.action?.let { action -> { rebinding = action } },
                             )
                         }
                     }
@@ -410,11 +412,11 @@ private fun GamepadSection(isTablet: Boolean) {
             }
         }
 
-        SettingsSection(title = stringResource(Res.string.settings_shortcuts_controller_buttons), isTablet = isTablet) {
-            SettingsSectionNote(
-                text = stringResource(Res.string.settings_shortcuts_controller_buttons_note),
-                isTablet = isTablet,
-            )
+        SettingsSection(
+            title = stringResource(Res.string.settings_shortcuts_controller_buttons),
+            isTablet = isTablet,
+            subtitle = stringResource(Res.string.settings_shortcuts_controller_buttons_note),
+        ) {
             SettingsGroup(isTablet = isTablet) {
                 rows.forEachIndexed { index, row ->
                     if (index > 0) SettingsGroupDivider(isTablet = isTablet)
@@ -463,19 +465,18 @@ private fun GamepadSliderRow(
             )
             SettingsSubtext(text = description, isTablet = isTablet)
         }
-        Column(
-            modifier = Modifier.width(if (isTablet) 210.dp else 220.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+        Row(
+            modifier = Modifier.width(if (isTablet) DesktopControlWidth else 220.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            ValueBox(text = valueLabel)
             SettingsModernSlider(
                 value = draft,
                 onValueChange = { if (enabled) draft = it },
                 onValueChangeFinished = { if (enabled) onValueChange(draft) },
                 enabled = enabled,
                 valueRange = valueRange,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.weight(1f),
+                valueLabel = valueLabel,
             )
         }
     }

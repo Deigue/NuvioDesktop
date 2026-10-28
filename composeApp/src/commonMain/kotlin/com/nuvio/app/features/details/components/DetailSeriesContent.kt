@@ -1727,9 +1727,14 @@ private fun CompactMetaPreviewLandscapeCard(
                 ),
         )
 
+        // The reason takes the top-left corner, clear of the plot it used to sit over; the runtime
+        // that normally lives there joins the year on the right instead.
+        val runtime = item.runtime?.takeIf { it.isNotBlank() }
+        val year = item.releaseInfo?.takeIf { it.isNotBlank() }
         CompactLandscapeTopMetaRow(
-            startText = item.runtime?.takeIf { it.isNotBlank() },
-            endText = item.releaseInfo?.takeIf { it.isNotBlank() },
+            startText = runtime.takeIf { reason == null },
+            endText = if (reason == null) year else listOfNotNull(runtime, year).joinToString(" • ").ifBlank { null },
+            startContent = reason?.let { { CompactLandscapeReasonPill(it) } },
         )
 
         Column(
@@ -1750,7 +1755,6 @@ private fun CompactMetaPreviewLandscapeCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            reason?.let { CompactLandscapeReasonPill(it) }
             item.description?.takeIf { it.isNotBlank() }?.let { description ->
                 Text(
                     text = description,
@@ -1759,7 +1763,7 @@ private fun CompactMetaPreviewLandscapeCard(
                         lineHeight = 15.sp,
                     ),
                     color = Color.White.copy(alpha = 0.82f),
-                    maxLines = if (reason != null) 1 else 2,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -1986,16 +1990,25 @@ private fun CardOverlayText(
 private fun CompactLandscapeTopMetaRow(
     startText: String?,
     endText: String?,
+    /** Drawn in place of [startText] (the Same Cast reason pill). */
+    startContent: (@Composable () -> Unit)? = null,
 ) {
-    if (startText.isNullOrBlank() && endText.isNullOrBlank()) return
+    if (startText.isNullOrBlank() && endText.isNullOrBlank() && startContent == null) return
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        startText?.takeIf { it.isNotBlank() }?.let { text ->
+        // Weighted without filling, so a long name ellipsizes before it reaches the year. It is the
+        // only weight in the row then: a weighted spacer beside it would take its own share of the
+        // slack and leave the year short of the edge.
+        startContent?.let { content ->
+            Box(modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp)) { content() }
+        }
+        startText?.takeIf { it.isNotBlank() && startContent == null }?.let { text ->
             CardOverlayBadge(
                 text = text,
                 textSize = 10.sp,
@@ -2004,7 +2017,7 @@ private fun CompactLandscapeTopMetaRow(
                 verticalPadding = 3.dp,
             )
         }
-        Spacer(modifier = Modifier.weight(1f))
+        if (startContent == null) Spacer(modifier = Modifier.weight(1f))
         endText?.takeIf { it.isNotBlank() }?.let { text ->
             CardOverlayBadge(
                 text = text,

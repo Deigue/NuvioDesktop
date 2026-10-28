@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="controls.css?v=20261017-watch-party-1">
+  <link rel="stylesheet" href="controls.css?v=20261026-accent-night-2">
 </head>
 <body>
   <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
@@ -50,7 +50,8 @@
       <path d="M5 21V4.6c0-.38.21-.72.55-.89 2.15-1.08 4.18.32 6.12.32 1.58 0 3.1-.72 5.26-.72.55 0 1 .45 1 1v9.72c0 .41-.25.78-.63.93-2.03.8-3.79.1-5.46.1-1.94 0-3.55 1.13-5.84.38V21H5Z"/>
     </symbol>
     <symbol id="icon-close" viewBox="0 0 24 24">
-      <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.7 2.88 18.29 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.3-6.29 1.41 1.41Z"/>
+      <!-- Centred on 12,12; the previous path sat 1.4 units left of centre, visibly off in round buttons. -->
+      <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/>
     </symbol>
     <symbol id="icon-aspect" viewBox="0 0 24 24">
       <path d="M19 3c1.6 0 2.9 1.25 2.99 2.82L22 6v12c0 1.6-1.25 2.9-2.82 2.99L19 21H5c-1.6 0-2.9-1.25-2.99-2.82L2 18V6c0-1.6 1.25-2.9 2.82-2.99L5 3h14Zm0 2H5c-.51 0-.94.39-.99.88L4 6v12c0 .51.39.94.88.99L5 19h14c.51 0 .94-.39.99-.88L20 18V6c0-.51-.39-.94-.88-.99L19 5Zm-2 7c.51 0 .94.39.99.88L18 13v3c0 .51-.39.94-.88.99L17 17h-3a1 1 0 0 1-.12-1.99L14 15h2v-2c0-.55.45-1 1-1ZM10 7a1 1 0 0 1 .12 1.99L10 9H8v2a1 1 0 0 1-1.99.12L6 11V8c0-.51.39-.94.88-.99L7 7h3Z"/>
@@ -92,6 +93,9 @@
     </symbol>
     <symbol id="icon-party" viewBox="0 0 24 24">
       <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3Zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5Z"/>
+    </symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24">
+      <path d="M11 7h2v2h-2V7Zm0 4h2v6h-2v-6Zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2Zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8Z"/>
     </symbol>
     <symbol id="icon-check" viewBox="0 0 24 24">
       <path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2Z"/>
@@ -165,6 +169,12 @@
         </div>
         <div class="opening-progress-track" id="openingProgressTrack" hidden>
           <div class="opening-progress-bar" id="openingProgressBar"></div>
+        </div>
+        <!-- Live TV's channel loading screen (.opening-overlay.iptv-loading). -->
+        <div class="iptv-loading-card" aria-live="polite">
+          <span class="iptv-loading-eyebrow" id="iptvLoadingEyebrow">Loading</span>
+          <span class="iptv-loading-name" id="iptvLoadingName"></span>
+          <div class="iptv-loading-track"><div class="iptv-loading-bar" id="iptvLoadingBar"></div></div>
         </div>
       </div>
     </section>
@@ -324,6 +334,7 @@
       <button class="party-pill" id="partyPill" type="button" aria-hidden="true" tabindex="-1">
         <span class="party-avatars" id="partyPillAvatars"></span>
         <span class="party-pill-text" id="partyPillText"></span>
+        <span class="party-badge" id="partyPillBadge" hidden></span>
       </button>
 
       <div class="control-tooltip" id="controlTooltip" role="tooltip" hidden></div>
@@ -399,6 +410,7 @@
             <button class="side-control episode-skip" data-command="nextEpisode" aria-label="Next episode" data-i18n-aria-label="player_hud_next_episode"><svg><use href="#icon-next"></use></svg></button>
           </div>
           <div class="action-row">
+            <button class="action tertiary-action" data-action-priority="90" id="streamInfoButton" data-command="streamInfo" aria-label="Stream info" title="Stream info"><svg><use href="#icon-info"></use></svg><span>Info</span></button>
             <button class="action tertiary-action" data-action-priority="60" data-command="resize" aria-label="Aspect ratio" title="Aspect ratio" data-i18n-aria-label="player_hud_aspect_ratio" data-i18n-title="player_hud_aspect_ratio"><svg><use href="#icon-aspect"></use></svg><span id="resizeLabel" data-i18n="player_hud_fit">Fit</span></button>
             <button class="action tertiary-action" data-action-priority="55" id="speedButton" data-command="speed" aria-label="Playback speed" title="Playback speed" data-i18n-aria-label="player_hud_playback_speed" data-i18n-title="player_hud_playback_speed"><svg><use href="#icon-speed"></use></svg><span id="speedLabel">1x</span></button>
             <button class="action" data-action-priority="5" data-command="subtitles" aria-label="Subtitles" title="Subtitles" data-i18n-aria-label="player_hud_subtitles" data-i18n-title="player_hud_subtitles"><svg><use href="#icon-subs"></use></svg><span id="subtitlesLabel" data-i18n="player_hud_subs">Subs</span></button>
@@ -448,9 +460,13 @@
           <div class="track-list" id="subtitleTrackList"></div>
           <div class="track-list" id="addonSubtitleList" hidden></div>
           <div class="style-panel" id="subtitleStylePanel" hidden>
-            <div class="style-card">
+            <section class="style-group">
+              <div class="style-group-head"><span class="style-group-title">Timing</span></div>
               <div class="style-row">
                 <span class="style-label" id="subtitleDelayLabel" data-i18n="player_hud_subtitle_delay">Subtitle Delay</span>
+                <!-- mpv's sub-delay: positive shows each line later. Without this, "-" read as
+                     "delay them" and moved subtitles that were already early further ahead. -->
+                <span class="stream-subtitle" id="subtitleDelayHint">+ shows subtitles later</span>
                 <div class="delay-controls">
                   <div class="stepper">
                     <button class="round-step" id="subtitleDelayMinus" type="button">-</button>
@@ -471,6 +487,13 @@
                 </div>
                 <div id="autoSyncCueList"></div>
               </div>
+            </section>
+            <section class="style-group">
+              <div class="style-group-head"><span class="style-group-title">Text</span></div>
+              <div class="style-row">
+                <span class="style-label" id="fontFamilyLabel">Font</span>
+                <select class="style-select" id="fontFamilySelect"></select>
+              </div>
               <div class="style-row">
                 <span class="style-label" id="fontSizeLabel" data-i18n="player_hud_font_size">Font Size</span>
                 <div class="stepper">
@@ -480,47 +503,19 @@
                 </div>
               </div>
               <div class="style-row">
-                <span class="style-label" id="bottomOffsetLabel" data-i18n="player_hud_bottom_offset">Bottom Offset</span>
+                <span class="style-label" id="boldLabel" data-i18n="player_hud_bold">Bold</span>
+                <button class="style-switch" id="boldToggle" type="button" role="switch" aria-labelledby="boldLabel" data-i18n="compose_action_off">Off</button>
+              </div>
+              <div class="style-row">
+                <span class="style-label" id="italicLabel" data-i18n="player_hud_italic">Italic</span>
+                <button class="style-switch" id="italicToggle" type="button" role="switch" aria-labelledby="italicLabel" data-i18n="compose_action_off">Off</button>
+              </div>
+              <div class="style-row">
+                <span class="style-label" id="textOpacityLabel" data-i18n="player_hud_text_opacity">Text Opacity</span>
                 <div class="stepper">
-                  <button class="round-step" id="bottomOffsetMinus" type="button">-</button>
-                  <span class="stepper-value" id="bottomOffsetValue">20</span>
-                  <button class="round-step" id="bottomOffsetPlus" type="button">+</button>
-                </div>
-              </div>
-              <div class="style-row">
-                <span class="style-label" id="fontFamilyLabel" data-i18n="player_hud_font">Font</span>
-                <select class="style-select" id="fontFamilySelect"></select>
-              </div>
-              <div class="style-row">
-                <span class="style-label" id="outlineLabel" data-i18n="player_hud_outline">Outline</span>
-                <button class="panel-button" id="outlineToggle" type="button" data-i18n="compose_action_on">On</button>
-              </div>
-              <div class="style-row">
-                <span class="style-label" id="outlineWidthLabel" data-i18n="player_hud_outline_width">Outline Width</span>
-                <div class="stepper">
-                  <button class="round-step" id="outlineWidthMinus" type="button">-</button>
-                  <span class="stepper-value" id="outlineWidthValue">2</span>
-                  <button class="round-step" id="outlineWidthPlus" type="button">+</button>
-                </div>
-              </div>
-              <div class="style-row">
-                <span class="style-label" id="shadowLabel" data-i18n="player_hud_shadow">Shadow</span>
-                <button class="panel-button" id="shadowToggle" type="button" data-i18n="compose_action_off">Off</button>
-              </div>
-              <div class="style-row">
-                <span class="style-label" id="shadowOffsetLabel" data-i18n="player_hud_shadow_offset">Shadow Offset</span>
-                <div class="stepper">
-                  <button class="round-step" id="shadowOffsetMinus" type="button">-</button>
-                  <span class="stepper-value" id="shadowOffsetValue">1.5</span>
-                  <button class="round-step" id="shadowOffsetPlus" type="button">+</button>
-                </div>
-              </div>
-              <div class="style-row">
-                <span class="style-label" id="shadowIntensityLabel" data-i18n="player_hud_shadow_intensity">Shadow Intensity</span>
-                <div class="stepper">
-                  <button class="round-step" id="shadowIntensityMinus" type="button">-</button>
-                  <span class="stepper-value" id="shadowIntensityValue">40%</span>
-                  <button class="round-step" id="shadowIntensityPlus" type="button">+</button>
+                  <button class="round-step" id="textOpacityMinus" type="button">-</button>
+                  <span class="stepper-value" id="textOpacityValue">100%</span>
+                  <button class="round-step" id="textOpacityPlus" type="button">+</button>
                 </div>
               </div>
               <div class="style-row">
@@ -531,13 +526,74 @@
                   <button class="round-step" id="blurPlus" type="button">+</button>
                 </div>
               </div>
-              <div class="style-row">
-                <span class="style-label" id="boldLabel" data-i18n="player_hud_bold">Bold</span>
-                <button class="panel-button" id="boldToggle" type="button" data-i18n="compose_action_off">Off</button>
+              <div class="swatch-section">
+                <span class="style-label" id="subtitleColorLabel" data-i18n="player_hud_color">Color</span>
+                <div class="swatch-row" id="subtitleColorSwatches"></div>
               </div>
+            </section>
+            <section class="style-group" id="subtitleOutlineGroup">
+              <div class="style-group-head">
+                <span class="style-group-title" id="outlineLabel">Outline</span>
+                <button class="style-switch" id="outlineToggle" type="button" role="switch" aria-labelledby="outlineLabel">On</button>
+              </div>
+              <div class="style-group-body">
+                <div class="style-row">
+                  <span class="style-label" id="outlineWidthLabel">Outline Width</span>
+                  <div class="stepper">
+                    <button class="round-step" id="outlineWidthMinus" type="button">-</button>
+                    <span class="stepper-value" id="outlineWidthValue">2</span>
+                    <button class="round-step" id="outlineWidthPlus" type="button">+</button>
+                  </div>
+                </div>
+                <div class="swatch-section">
+                  <span class="style-label" id="outlineColorLabel">Outline Color</span>
+                  <div class="swatch-row" id="outlineColorSwatches"></div>
+                </div>
+              </div>
+            </section>
+            <section class="style-group" id="subtitleShadowGroup">
+              <div class="style-group-head">
+                <span class="style-group-title" id="shadowLabel">Shadow</span>
+                <button class="style-switch" id="shadowToggle" type="button" role="switch" aria-labelledby="shadowLabel">Off</button>
+              </div>
+              <div class="style-group-body">
+                <div class="style-row">
+                  <span class="style-label" id="shadowOffsetLabel">Shadow Offset</span>
+                  <div class="stepper">
+                    <button class="round-step" id="shadowOffsetMinus" type="button">-</button>
+                    <span class="stepper-value" id="shadowOffsetValue">1.5</span>
+                    <button class="round-step" id="shadowOffsetPlus" type="button">+</button>
+                  </div>
+                </div>
+                <div class="style-row">
+                  <span class="style-label" id="shadowIntensityLabel">Shadow Intensity</span>
+                  <div class="stepper">
+                    <button class="round-step" id="shadowIntensityMinus" type="button">-</button>
+                    <span class="stepper-value" id="shadowIntensityValue">40%</span>
+                    <button class="round-step" id="shadowIntensityPlus" type="button">+</button>
+                  </div>
+                </div>
+                <div class="swatch-section">
+                  <span class="style-label" id="shadowColorLabel">Shadow Color</span>
+                  <div class="swatch-row" id="shadowColorSwatches"></div>
+                </div>
+              </div>
+            </section>
+            <section class="style-group">
+              <div class="style-group-head"><span class="style-group-title" id="backgroundColorLabel">Background Color</span></div>
+              <div class="swatch-section">
+                <div class="swatch-row" id="backgroundColorSwatches"></div>
+              </div>
+            </section>
+            <section class="style-group">
+              <div class="style-group-head"><span class="style-group-title">Position &amp; ASS/SSA</span></div>
               <div class="style-row">
-                <span class="style-label" id="italicLabel" data-i18n="player_hud_italic">Italic</span>
-                <button class="panel-button" id="italicToggle" type="button" data-i18n="compose_action_off">Off</button>
+                <span class="style-label" id="bottomOffsetLabel" data-i18n="player_hud_bottom_offset">Bottom Offset</span>
+                <div class="stepper">
+                  <button class="round-step" id="bottomOffsetMinus" type="button">-</button>
+                  <span class="stepper-value" id="bottomOffsetValue">20</span>
+                  <button class="round-step" id="bottomOffsetPlus" type="button">+</button>
+                </div>
               </div>
               <div class="style-row">
                 <span class="style-label" id="assStyleModeLabel" data-i18n="player_hud_ass_ssa_styling">ASS/SSA Styling</span>
@@ -551,34 +607,9 @@
                   <button class="round-step" id="assScalePlus" type="button">+</button>
                 </div>
               </div>
-              <div class="style-row">
-                <span class="style-label" id="textOpacityLabel" data-i18n="player_hud_text_opacity">Text Opacity</span>
-                <div class="stepper">
-                  <button class="round-step" id="textOpacityMinus" type="button">-</button>
-                  <span class="stepper-value" id="textOpacityValue">100%</span>
-                  <button class="round-step" id="textOpacityPlus" type="button">+</button>
-                </div>
-              </div>
-              <div class="swatch-section">
-                <span class="style-label" id="subtitleColorLabel" data-i18n="player_hud_color">Color</span>
-                <div class="swatch-row" id="subtitleColorSwatches"></div>
-              </div>
-              <div class="swatch-section">
-                <span class="style-label" id="outlineColorLabel" data-i18n="player_hud_outline_color">Outline Color</span>
-                <div class="swatch-row" id="outlineColorSwatches"></div>
-              </div>
-              <div class="swatch-section">
-                <span class="style-label" id="backgroundColorLabel" data-i18n="player_hud_background_color">Background Color</span>
-                <div class="swatch-row" id="backgroundColorSwatches"></div>
-              </div>
-              <div class="swatch-section">
-                <span class="style-label" id="shadowColorLabel" data-i18n="player_hud_shadow_color">Shadow Color</span>
-                <div class="swatch-row" id="shadowColorSwatches"></div>
-              </div>
-              <div class="style-row">
-                <span></span>
-                <button class="panel-button" id="subtitleStyleReset" type="button" data-i18n="player_hud_reset_defaults">Reset Defaults</button>
-              </div>
+            </section>
+            <div class="style-footer">
+              <button class="panel-button" id="subtitleStyleReset" type="button" data-i18n="player_hud_reset_defaults">Reset Defaults</button>
             </div>
           </div>
         </div>
@@ -722,7 +753,35 @@
               <button class="panel-button" id="partyCloseButton" type="button" data-i18n="action_close">Close</button>
             </div>
           </div>
+          <!-- Party | Chat, only while in a party. The chat lives outside partyBody so the composer
+               keeps its text and focus when the panel is rebuilt on a state change. -->
+          <div class="party-tabs" id="partyTabs" role="tablist" hidden>
+            <button class="party-tab selected" id="partyTabParty" type="button" role="tab">Party</button>
+            <button class="party-tab" id="partyTabChat" type="button" role="tab"><span id="partyTabChatLabel">Chat</span><span class="party-badge" id="partyTabBadge" hidden></span></button>
+          </div>
           <div class="party-body" id="partyBody"></div>
+          <div class="party-chat" id="partyChat" hidden>
+            <div class="party-chat-list" id="partyChatList"></div>
+            <div class="party-chat-empty" id="partyChatEmpty" hidden>
+              <div class="party-text strong" id="partyChatEmptyTitle"></div>
+              <div class="party-note" id="partyChatEmptyMessage"></div>
+            </div>
+            <form class="party-chat-composer" id="partyChatForm" autocomplete="off">
+              <input class="party-chat-input" id="partyChatInput" type="text" maxlength="500" spellcheck="true">
+              <button class="panel-button primary" id="partyChatSend" type="submit">Send</button>
+            </form>
+          </div>
+        </div>
+      </section>
+      <section class="modal-layer" id="streamInfoModal" aria-label="Stream info" hidden>
+        <div class="track-panel stream-info-panel">
+          <div class="track-header-row">
+            <div class="track-title" id="streamInfoTitle">Stream info</div>
+            <div class="panel-actions">
+              <button class="panel-button" id="streamInfoCloseButton" type="button">Close</button>
+            </div>
+          </div>
+          <div class="stream-info-body" id="streamInfoBody"></div>
         </div>
       </section>
       <section class="modal-layer" id="p2pConsentModal" aria-label="P2P streaming consent" hidden data-i18n-aria-label="player_hud_p2p_streaming_consent">
@@ -760,6 +819,6 @@
     <div class="pip-resize-handle pip-resize-nw" data-pip-resize="8"></div>
   </div>
 
-  <script src="controls.js?v=20261027-hud-labels-1"></script>
+  <script src="controls.js?v=20261027-hud-labels-accent-night"></script>
 </body>
 </html>

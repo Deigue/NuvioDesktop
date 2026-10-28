@@ -120,6 +120,15 @@ private const val VK_BROWSER_BACK = 0xA6
 private const val VK_BROWSER_FORWARD = 0xA7
 
 /**
+ * AWT's numbers for the mouse side buttons (Back, Forward). On Windows and macOS they are 4 and 5.
+ * On X11, including XWayland, X buttons 6/7 are horizontal scroll and AWT numbers them 4 and 5,
+ * which pushes the side buttons to 6 and 7. Reading 4 as Back there turned a two-finger touchpad
+ * swipe left into Back, which on a top-level tab means "go Home".
+ */
+private val MOUSE_BACK_BUTTON = if (DesktopHostOs.current == DesktopHostOs.LINUX) 6 else 4
+private val MOUSE_FORWARD_BUTTON = if (DesktopHostOs.current == DesktopHostOs.LINUX) 7 else 5
+
+/**
  * Turns Mouse 5 into an app-local Shift key before Skiko/Compose receives the native pointer event.
  *
  * An AWT event listener is notified during dispatch, which is too late to hide the pressed mouse
@@ -128,12 +137,12 @@ private const val VK_BROWSER_FORWARD = 0xA7
  * and wheel events carry Shift without carrying the Mouse 5 button bit.
  */
 private class MouseFiveShiftEventQueue : EventQueue() {
-    private val mouseFiveMask = runCatching { InputEvent.getMaskForButton(5) }.getOrDefault(0)
+    private val mouseFiveMask = runCatching { InputEvent.getMaskForButton(MOUSE_FORWARD_BUTTON) }.getOrDefault(0)
     private val otherMouseButtonMasks =
         InputEvent.BUTTON1_DOWN_MASK or
             InputEvent.BUTTON2_DOWN_MASK or
             InputEvent.BUTTON3_DOWN_MASK or
-            runCatching { InputEvent.getMaskForButton(4) }.getOrDefault(0)
+            runCatching { InputEvent.getMaskForButton(MOUSE_BACK_BUTTON) }.getOrDefault(0)
 
     override fun dispatchEvent(event: AWTEvent) {
         if (event is MouseWheelEvent && DesktopNavigationGestureBridge.horizontalScrollModifierActive.value) {
@@ -160,7 +169,7 @@ private class MouseFiveShiftEventQueue : EventQueue() {
 
         if (event is MouseEvent) {
             if (
-                event.button == 5 &&
+                event.button == MOUSE_FORWARD_BUTTON &&
                 event.id in setOf(
                     MouseEvent.MOUSE_PRESSED,
                     MouseEvent.MOUSE_RELEASED,
@@ -819,7 +828,7 @@ fun main(args: Array<String>) {
                     if (
                         event is MouseEvent &&
                         event.id == MouseEvent.MOUSE_PRESSED &&
-                        event.button == 4
+                        event.button == MOUSE_BACK_BUTTON
                     ) {
                         DesktopNavigationGestureBridge.requestBack(DesktopBackRequestSource.Mouse)
                     }
@@ -1106,6 +1115,7 @@ fun main(args: Array<String>) {
             runCatching { MdbListMetadataService.flushPendingWrites() }
             runCatching { com.nuvio.app.features.details.LightweightMetaDiskCache.flushPendingWrites() }
             runCatching { com.nuvio.app.features.details.filler.AnimeFillerRepository.flushPendingWrites() }
+            runCatching { com.nuvio.app.features.streams.CwStreamCache.flushPendingWrites() }
         }
     }
     // Home settings are encoded off the UI thread now; a change made just before exit is written

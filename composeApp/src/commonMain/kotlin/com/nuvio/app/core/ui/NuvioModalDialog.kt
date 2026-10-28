@@ -21,7 +21,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -48,13 +47,19 @@ fun NuvioDialogSurface(
     Surface(
         modifier = modifier
             .shadow(elevation = 32.dp, shape = shape, clip = false)
-            .clip(shape)
             // A dark top-to-bottom ramp rather than one flat fill. An earlier attempt at this was
             // reverted for banding — a ~5% sheen crosses too few 8-bit levels to look continuous —
             // so the ramp is both wider and dithered now. Both halves matter: read the notes on
             // [nuvioBackdropBrush] before narrowing either.
-            .background(nuvioBackdropBrush(colors.surfaceDialog))
-            .border(width = 1.dp, color = Color.White.copy(alpha = 0.08f), shape = shape),
+            // The settings glass on the settings sky's night blue: a modal floats over busy
+            // content, so it needs an opaque base, and this one is the colour the glass cards are
+            // seen against, which the old grey ramp was not.
+            // Fill and edge each drawn in the shape, with no clip around them: a clip is not
+            // anti-aliased here, and with the edge drawn inside one the corners stair-stepped.
+            // Surface still clips the content to [shape], inside all of this.
+            .background(nuvioBackdropBrush(NuvioGlass.night(colors.background, colors.accent), NuvioBackdropDirection.Vertical), shape)
+            .ditheredBackground(NuvioGlass.Fill, shape)
+            .border(width = 1.dp, brush = NuvioGlass.Edge, shape = shape),
         shape = shape,
         // The gradient above is the fill; Surface only carries shape + content colour from here.
         color = Color.Transparent,
@@ -216,7 +221,7 @@ private fun DialogHairline() {
         modifier = Modifier
             .fillMaxWidth()
             .height(1.dp)
-            .background(Color.White.copy(alpha = 0.06f)),
+            .background(NuvioGlass.EdgeColor),
     )
 }
 

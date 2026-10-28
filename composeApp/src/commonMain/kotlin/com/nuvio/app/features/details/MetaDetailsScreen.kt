@@ -601,15 +601,15 @@ fun MetaDetailsScreen(
                 val openLibraryListPicker = remember(meta) {
                     {
                         val libraryItem = meta.toLibraryItem(savedAtEpochMs = 0L)
-                        pickerTabs = LibraryRepository.libraryListTabs()
+                        pickerTabs = LibraryRepository.connectedLibraryTabs()
                         pickerMembership = pickerTabs.associate { it.key to false }
                         pickerPending = true
                         pickerError = null
                         showLibraryListPicker = true
                         detailsScope.launch {
                             runCatching {
-                                val snapshot = LibraryRepository.getMembershipSnapshot(libraryItem)
-                                val tabs = LibraryRepository.libraryListTabs()
+                                val snapshot = LibraryRepository.connectedMembershipSnapshot(libraryItem)
+                                val tabs = LibraryRepository.connectedLibraryTabs().filter { tab -> tab.key in snapshot }
                                 pickerTabs = tabs
                                 pickerMembership = tabs.associate { tab ->
                                     tab.key to (snapshot[tab.key] == true)
@@ -1222,8 +1222,9 @@ fun MetaDetailsScreen(
                 // immediately and is indistinguishable from an ordinary Resume, so the gesture read
                 // as doing nothing at all. Which `useAlternate` value actually reaches the picker
                 // depends on the preference, so it is resolved rather than hardcoded.
-                val primaryAlternateOpensPicker = localLibraryUiState.playbackPreference
-                    .alternateOpensSourcePicker(primaryHasLocalPlayback)
+                val primaryAlternateOpensPicker = remember(meta.id, primaryPlaybackVideoId, localLibraryUiState) {
+                    LocalLibraryRepository.routingFor(meta.id, primaryPlaybackVideoId)
+                }.alternateOpensSourcePicker(primaryHasLocalPlayback)
                 val showManualPlayOption = alternatePlayHandler != null
                 val onPrimaryPlayLongClick: (() -> Unit)? = alternatePlayHandler
                     ?.let { alternatePlay ->
@@ -2643,8 +2644,9 @@ fun MetaDetailsScreen(
                             // on the configured preference, so it is resolved rather than assumed:
                             // under SOURCE_PICKER with a local file present it is the *normal*
                             // click that opens the picker, and the alternate that plays the file.
-                            val alternateOpensPicker = localLibraryUiState.playbackPreference
-                                .alternateOpensSourcePicker(selectedHasLocalPlayback)
+                            val alternateOpensPicker = remember(meta.id, selectedPlaybackVideoId, localLibraryUiState) {
+                                LocalLibraryRepository.routingFor(meta.id, selectedPlaybackVideoId)
+                            }.alternateOpensSourcePicker(selectedHasLocalPlayback)
                             // Only offered when there is a local file AND a normal tap is not
                             // already playing it — with none, or under the Local library
                             // preference, this entry would duplicate the tap.
@@ -2916,7 +2918,7 @@ fun MetaDetailsScreen(
                                     pickerPending = true
                                     pickerError = null
                                     runCatching {
-                                        LibraryRepository.applyMembershipChanges(
+                                        LibraryRepository.applyConnectedMembershipChanges(
                                             item = meta.toLibraryItem(savedAtEpochMs = 0L),
                                             desiredMembership = pickerMembership,
                                         )
@@ -2927,6 +2929,10 @@ fun MetaDetailsScreen(
                                     }
                                     pickerPending = false
                                 }
+                            },
+                            onAddToAll = {
+                                showLibraryListPicker = false
+                                LibraryRepository.addToAllLibraries(meta.toLibraryItem(savedAtEpochMs = 0L))
                             },
                         )
 
@@ -3782,6 +3788,7 @@ private fun ConfiguredMetaSections(
                     val sourceLabel = when (meta.moreLikeThisSource) {
                         MoreLikeThisSource.TMDB -> stringResource(Res.string.detail_more_like_this_powered_by_tmdb)
                         MoreLikeThisSource.TRAKT -> stringResource(Res.string.detail_more_like_this_powered_by_trakt)
+                        MoreLikeThisSource.SIMKL -> stringResource(Res.string.detail_more_like_this_powered_by_simkl)
                         null -> null
                     }
                     DetailPosterRailSection(

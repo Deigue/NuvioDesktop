@@ -56,8 +56,8 @@ internal object SettingsFavoritesRepository {
             title = localizedString(Res.string.settings_favorites_appearance),
         ),
         SettingsFavorite(
-            page = SettingsPage.Playback.name,
-            anchor = "heading:Playback:PLAYER",
+            page = SettingsPage.Player.name,
+            anchor = "heading:Player:PLAYER",
             title = localizedString(Res.string.settings_favorites_player),
         ),
         SettingsFavorite(
