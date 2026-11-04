@@ -28,8 +28,11 @@ import kotlinx.serialization.json.JsonPrimitive
 /** Stable, always-available video used only to obtain a watch config when search runs first. */
 internal const val INNERTUBE_SEED_VIDEO_ID = "jNQXAC9IVRw"
 
-/** What the extractor hands out: the session, not the video. [apiKey] is null for a keyless session. */
-internal data class InnerTubeSession(val apiKey: String?, val visitorData: String?)
+/**
+ * What the extractor hands out: the session, not the video. [apiKey] is null for a keyless session;
+ * [signatureTimestamp] is null until a watch page has been read.
+ */
+internal data class InnerTubeSession(val apiKey: String?, val visitorData: String?, val signatureTimestamp: Int?)
 
 private const val INNERTUBE_TIMEOUT_MS = 30_000L
 

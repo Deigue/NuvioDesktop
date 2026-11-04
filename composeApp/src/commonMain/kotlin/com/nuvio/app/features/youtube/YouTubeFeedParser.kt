@@ -91,6 +91,20 @@ internal fun youTubeAnsweredSignedOut(body: String): Boolean {
     return flags.isNotEmpty() && flags.all { it == "0" }
 }
 
+/**
+ * YouTube's status and reason when a `player` answer is not playable ("UNPLAYABLE: Video unavailable"),
+ * null when it is, or when it says nothing. Such an answer is still a 200, and it holds no stats URLs,
+ * subtitles or storyboard, so this is the only place the reason shows.
+ */
+internal fun youTubePlayerProblem(body: String): String? {
+    val root = runCatching { feedJson.parseToJsonElement(body) }.getOrNull() as? JsonObject ?: return null
+    val playability = root["playabilityStatus"] as? JsonObject ?: return null
+    val status = (playability["status"] as? JsonPrimitive)?.content ?: return null
+    if (status == "OK") return null
+    val reason = (playability["reason"] as? JsonPrimitive)?.content
+    return if (reason != null) "$status: $reason" else status
+}
+
 /** Keys whose subtree never holds an ordinary upload worth listing. */
 private val SKIPPED_KEYS = setOf(
     "richSectionRenderer",

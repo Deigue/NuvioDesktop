@@ -163,16 +163,29 @@ private object WebPlayerAnswers {
         }
         if (asking) {
             try {
+                // Without a recent signatureTimestamp YouTube answers 200 "Video unavailable" for every
+                // video, with no stats URLs, subtitles or storyboard (checked live, Nov 3, 2026).
+                val signatureTimestamp = runCatching { TrailerPlaybackResolver.signatureTimestamp() }.getOrNull()
                 val result = signedWebRequest(
                     "player",
                     mapOf(
                         "videoId" to videoId,
                         "contentCheckOk" to true,
                         "racyCheckOk" to true,
-                        "playbackContext" to mapOf("contentPlaybackContext" to mapOf("html5Preference" to "HTML5_PREF_WANTS")),
+                        "playbackContext" to mapOf(
+                            "contentPlaybackContext" to mapOf(
+                                "html5Preference" to "HTML5_PREF_WANTS",
+                                "signatureTimestamp" to signatureTimestamp,
+                            ),
+                        ),
                     ),
                     pageId,
                 )
+                if (result is YouTubeBrowseResult.Ok) {
+                    youTubePlayerProblem(result.body)?.let { problem ->
+                        log.w { "$videoId: player answered $problem (signatureTimestamp=$signatureTimestamp)" }
+                    }
+                }
                 // A failure is not kept: the next reader asks again.
                 if (result !is YouTubeBrowseResult.Ok) lock.withLock { answers.remove(key) }
                 answer.complete(result)

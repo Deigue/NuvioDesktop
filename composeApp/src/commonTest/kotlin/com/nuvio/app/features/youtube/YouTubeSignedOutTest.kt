@@ -1,7 +1,9 @@
 package com.nuvio.app.features.youtube
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class YouTubeSignedOutTest {
@@ -26,5 +28,21 @@ class YouTubeSignedOutTest {
         assertFalse(youTubeAnsweredSignedOut("""{"responseContext":{"serviceTrackingParams":[]},"contents":{}}"""))
         assertFalse(youTubeAnsweredSignedOut("""{"contents":{}}"""))
         assertFalse(youTubeAnsweredSignedOut("<html>Sorry...</html>"))
+    }
+
+    @Test
+    fun `a player answer that is not playable gives its status and reason`() {
+        assertEquals(
+            "UNPLAYABLE: Video unavailable",
+            youTubePlayerProblem("""{"playabilityStatus":{"status":"UNPLAYABLE","reason":"Video unavailable"}}"""),
+        )
+        assertEquals("LOGIN_REQUIRED", youTubePlayerProblem("""{"playabilityStatus":{"status":"LOGIN_REQUIRED"}}"""))
+    }
+
+    @Test
+    fun `a playable player answer or one without a status is no problem`() {
+        assertNull(youTubePlayerProblem("""{"playabilityStatus":{"status":"OK"}}"""))
+        assertNull(youTubePlayerProblem("""{"videoDetails":{}}"""))
+        assertNull(youTubePlayerProblem("<html>Sorry...</html>"))
     }
 }

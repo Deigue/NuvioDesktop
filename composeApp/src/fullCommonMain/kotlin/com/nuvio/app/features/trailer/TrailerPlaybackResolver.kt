@@ -31,6 +31,9 @@ actual object TrailerPlaybackResolver {
     /** fork:innertubex — the session's visitor data, for resolvers that make their own InnerTube requests. */
     internal suspend fun visitorData(): String? = extractor.innerTubeSession().visitorData
 
+    /** fork:youtube-mode - the player version's `signatureTimestamp`, which a WEB `player` request needs to be answered. */
+    internal suspend fun signatureTimestamp(): Int? = extractor.innerTubeSession().signatureTimestamp
+
     /** fork:youtube-mode - youtube.com's InnerTube as the WEB client, for the YouTube tab. Not part of the shared `expect` surface. */
     internal suspend fun webRequest(
         endpoint: String,

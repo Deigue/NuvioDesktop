@@ -114,6 +114,41 @@ class InAppYouTubeExtractorSessionTest {
         assertTrue(youtube.calls.filter { "youtubei/v1/player" in it }.all { "key=PAGEKEY" in it })
     }
 
+    @Test
+    fun sessionCarriesTheWatchPagesSignatureTimestamp(): Unit = runBlocking {
+        val youtube = FakeYouTube(
+            watchStatus = 200,
+            watchBody = """"INNERTUBE_API_KEY":"PAGEKEY","VISITOR_DATA":"VD2","STS":20758""",
+        )
+
+        assertEquals(20758, youtube.extractor().innerTubeSession().signatureTimestamp)
+    }
+
+    @Test
+    fun keylessSessionKeepsTheLastSignatureTimestamp(): Unit = runBlocking {
+        val youtube = FakeYouTube(
+            watchStatus = 200,
+            watchBody = """"INNERTUBE_API_KEY":"PAGEKEY","VISITOR_DATA":"VD2","STS":20758""",
+        )
+        val extractor = youtube.extractor()
+        assertEquals(20758, extractor.innerTubeSession().signatureTimestamp)
+
+        // The session ages out and the page is now a consent interstitial: the keyless one has nothing to read it from.
+        youtube.nowMs += 3L * 60L * 60L * 1000L + 1
+        youtube.watchBody = "<html>consent</html>"
+        val session = extractor.innerTubeSession()
+
+        assertEquals(null, session.apiKey)
+        assertEquals(20758, session.signatureTimestamp)
+    }
+
+    @Test
+    fun sessionWithoutAWatchPageHasNoSignatureTimestamp(): Unit = runBlocking {
+        val youtube = FakeYouTube(watchStatus = 429)
+
+        assertEquals(null, youtube.extractor().innerTubeSession().signatureTimestamp)
+    }
+
     private companion object {
         const val TRAILER_URL = "https://www.youtube.com/watch?v=GXEocd6WZog"
 

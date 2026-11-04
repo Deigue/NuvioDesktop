@@ -56,6 +56,7 @@ private val PREMIUM_ITAGS = setOf(356, 616)
 private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
 private val API_KEY_REGEX = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
 private val VISITOR_DATA_REGEX = Regex("\"VISITOR_DATA\":\"([^\"]+)\"")
+private val SIGNATURE_TIMESTAMP_REGEX = Regex("\"STS\":(\\d+)")
 private val QUALITY_LABEL_REGEX = Regex("(\\d{2,4})p")
 
 private data class YouTubeClient(
@@ -70,6 +71,7 @@ private data class YouTubeClient(
 private data class WatchConfig(
     val apiKey: String?,
     val visitorData: String?,
+    val signatureTimestamp: Int?,
 )
 
 internal data class StreamCandidate(
@@ -290,6 +292,7 @@ class InAppYouTubeExtractor internal constructor(
     private data class CachedWatchConfig(
         val apiKey: String?,
         val visitorData: String?,
+        val signatureTimestamp: Int?,
         val fetchedAtMs: Long,
     )
 
@@ -305,7 +308,9 @@ class InAppYouTubeExtractor internal constructor(
 
     /** fork:innertube - the shared session for the search / YouTube Music requests in YouTubeInnerTube.kt. */
     internal suspend fun innerTubeSession(): InnerTubeSession =
-        ensureWatchConfig(INNERTUBE_SEED_VIDEO_ID, forceRefresh = false).let { InnerTubeSession(it.apiKey, it.visitorData) }
+        ensureWatchConfig(INNERTUBE_SEED_VIDEO_ID, forceRefresh = false).let {
+            InnerTubeSession(it.apiKey, it.visitorData, it.signatureTimestamp)
+        }
 
     private suspend fun extract(youtubeUrl: String, singleUrl: Boolean): TrailerResolution = withContext(Dispatchers.Default) {
         if (youtubeUrl.isBlank()) return@withContext TrailerResolution.Unavailable(TrailerUnavailableReason.UNKNOWN)
@@ -426,10 +431,12 @@ class InAppYouTubeExtractor internal constructor(
             CachedWatchConfig(
                 apiKey = apiKey,
                 visitorData = parsed.visitorData,
+                // A page without it keeps the last one: YouTube still takes one a good while old.
+                signatureTimestamp = parsed.signatureTimestamp ?: cachedConfig?.signatureTimestamp,
                 fetchedAtMs = nowMs(),
             ).also {
                 cachedConfig = it
-                log.i { "Watch config cached (visitorData=${!it.visitorData.isNullOrBlank()})" }
+                log.i { "Watch config cached (visitorData=${!it.visitorData.isNullOrBlank()}, signatureTimestamp=${it.signatureTimestamp})" }
             }
         }
 
@@ -452,6 +459,8 @@ class InAppYouTubeExtractor internal constructor(
         return CachedWatchConfig(
             apiKey = null,
             visitorData = visitorData,
+            // Only the watch page gives one, so a keyless session keeps the last it saw.
+            signatureTimestamp = cachedConfig?.signatureTimestamp,
             fetchedAtMs = nowMs(),
         ).also {
             cachedConfig = it
@@ -915,7 +924,8 @@ class InAppYouTubeExtractor internal constructor(
     private fun getWatchConfig(html: String): WatchConfig {
         val apiKey = API_KEY_REGEX.find(html)?.groupValues?.getOrNull(1)
         val visitorData = VISITOR_DATA_REGEX.find(html)?.groupValues?.getOrNull(1)
-        return WatchConfig(apiKey = apiKey, visitorData = visitorData)
+        val signatureTimestamp = SIGNATURE_TIMESTAMP_REGEX.find(html)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        return WatchConfig(apiKey = apiKey, visitorData = visitorData, signatureTimestamp = signatureTimestamp)
     }
 
     private fun parseHlsAttributeList(line: String): Map<String, String> {
